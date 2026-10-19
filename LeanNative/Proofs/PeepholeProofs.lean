@@ -426,10 +426,150 @@ theorem evalExpr_optimizeExpr_eq (env : VarEnv) (st : HeapState) (e : LNIRExpr) 
     simp only [rewriteLNIRExpr, evalExpr, ← rewriteScalarPeephole_sound se env]
   | _ => rfl
 
+/-- Recursive verified code-level peephole optimizer on `LNIRCode`.
+    Applies `rewriteLNIRExpr` to every `.letBind` and recurses through `.rawStore`,
+    `.incRef`, `.decRef`, `.ite`, `.seqFor`, `.parFor`, `.ret`, and `.unreachable`. -/
+def rewriteCodePeephole : LNIRCode → LNIRCode
+  | .letBind dst ty val k =>
+    .letBind dst ty (rewriteLNIRExpr val) (rewriteCodePeephole k)
+  | .rawStore ptrVar idxVar valVar elemTy k =>
+    .rawStore ptrVar idxVar valVar elemTy (rewriteCodePeephole k)
+  | .incRef objVar count k =>
+    .incRef objVar count (rewriteCodePeephole k)
+  | .decRef objVar count k =>
+    .decRef objVar count (rewriteCodePeephole k)
+  | .ite condVar thenBranch elseBranch =>
+    .ite condVar (rewriteCodePeephole thenBranch) (rewriteCodePeephole elseBranch)
+  | .seqFor idxVar loVar hiVar accVar accInit accTy stepBody k =>
+    .seqFor idxVar loVar hiVar accVar accInit accTy (rewriteCodePeephole stepBody) (rewriteCodePeephole k)
+  | .parFor outVar lenVar inputs elemTy kernel k =>
+    .parFor outVar lenVar inputs elemTy kernel (rewriteCodePeephole k)
+  | .ret v => .ret v
+  | .unreachable => .unreachable
+
+/-- Exact operational evaluation equality for recursive `rewriteCodePeephole` across `LNIRCode`. -/
+theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
+    ∀ (fuel : Nat) (env : VarEnv) (st : HeapState),
+      evalCode fuel env st (rewriteCodePeephole c) = evalCode fuel env st c := by
+  induction c with
+  | letBind dst ty val k ih =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode, evalExpr_optimizeExpr_eq]
+      cases evalExpr env st val with
+      | error err => rfl
+      | ok pair => exact ih fuel' (env.bind dst pair.1) pair.2
+  | rawStore ptrVar idxVar valVar elemTy k ih =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode]
+      cases env ptrVar with
+      | none => rfl
+      | some pval =>
+        cases env idxVar with
+        | none => cases pval <;> rfl
+        | some ival =>
+          cases env valVar with
+          | none => cases pval <;> cases ival <;> rfl
+          | some vval =>
+            cases pval <;> cases ival <;> cases vval <;> try rfl
+            all_goals
+              simp only
+              cases st.writeElemExclusive _ _ _ with
+              | error err => rfl
+              | ok st1 => exact ih fuel' env st1
+  | incRef objVar count k ih =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode]
+      exact ih fuel' env st
+  | decRef objVar count k ih =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode]
+      exact ih fuel' env st
+  | ite condVar thenBranch elseBranch iht ihe =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode]
+      cases env condVar with
+      | none => rfl
+      | some cval =>
+        cases cval with
+        | bool b =>
+          cases b with
+          | true => exact iht fuel' env st
+          | false => exact ihe fuel' env st
+        | u64 n =>
+          simp only
+          by_cases hn : (n != 0) = true
+          · rw [if_pos hn, if_pos hn]; exact iht fuel' env st
+          · rw [if_neg hn, if_neg hn]; exact ihe fuel' env st
+        | _ => rfl
+  | seqFor idxVar loVar hiVar accVar accInit accTy stepBody k ihs ihk =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode]
+      have hstep : (fun stepEnv stepSt => evalCode fuel' stepEnv stepSt (rewriteCodePeephole stepBody)) =
+                   (fun stepEnv stepSt => evalCode fuel' stepEnv stepSt stepBody) := by
+        funext stepEnv stepSt
+        exact ihs fuel' stepEnv stepSt
+      rw [hstep]
+      cases env loVar with
+      | none => rfl
+      | some loval =>
+        cases env hiVar with
+        | none => cases loval <;> rfl
+        | some hival =>
+          cases env accInit with
+          | none => cases loval <;> cases hival <;> rfl
+          | some initVal =>
+            cases loval <;> cases hival <;> try rfl
+            simp only
+            cases evalSeqLoop _ _ idxVar accVar initVal env st (fun stepEnv stepSt => evalCode fuel' stepEnv stepSt stepBody) with
+            | error err => rfl
+            | ok pair => exact ihk fuel' (env.bind accVar pair.1) pair.2
+  | parFor outVar lenVar inputs elemTy kernel k ih =>
+    intro fuel env st
+    cases fuel with
+    | zero => rfl
+    | succ fuel' =>
+      simp only [rewriteCodePeephole, evalCode]
+      exact ih fuel' (env.bind outVar (.sarrayId 0)) st
+  | ret v =>
+    intro fuel env st
+    cases fuel <;> rfl
+  | unreachable =>
+    intro fuel env st
+    cases fuel <;> rfl
+
+/-- End-to-end recursive `LNIRCode` pass refinement theorem (`rewriteCodePeephole_refines`):
+    applying `rewriteCodePeephole` across an entire `LNIRCode` block refines the original code. -/
+theorem rewriteCodePeephole_refines (c : LNIRCode) :
+    CodeRefines c (rewriteCodePeephole c) := by
+  intro fuel env st v st' hsrc
+  rw [evalCode_rewriteCodePeephole_eq c fuel env st]
+  exact hsrc
+
 namespace PeepholeProofs
   abbrev rewriteScalarPeephole_sound := @LeanNative.Proofs.rewriteScalarPeephole_sound
   abbrev rewriteLNIRExpr_sound := @LeanNative.Proofs.rewriteLNIRExpr_sound
   abbrev evalExpr_optimizeExpr_eq := @LeanNative.Proofs.evalExpr_optimizeExpr_eq
+  abbrev evalCode_rewriteCodePeephole_eq := @LeanNative.Proofs.evalCode_rewriteCodePeephole_eq
+  abbrev rewriteCodePeephole_refines := @LeanNative.Proofs.rewriteCodePeephole_refines
 end PeepholeProofs
 
 end LeanNative.Proofs
+

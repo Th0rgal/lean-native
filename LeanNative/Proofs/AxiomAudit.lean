@@ -6,6 +6,7 @@ import LeanNative.Semantics.Eval
 import LeanNative.Semantics.Refinement
 import LeanNative.Proofs.PeepholeProofs
 import LeanNative.Proofs.LoopOptProofs
+import LeanNative.Proofs.SymbolicTV
 import LeanNative.Proofs.CertChecker
 
 namespace LeanNative.Proofs
@@ -28,21 +29,44 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Semantics.ExprRefines.refl
   , ``LeanNative.Semantics.ExprRefines.trans
   , ``LeanNative.Semantics.ExprRefines.of_scalar_equiv
+  , ``LeanNative.Semantics.ExprEquiv.refl
+  , ``LeanNative.Semantics.ExprEquiv.symm
+  , ``LeanNative.Semantics.ExprEquiv.trans
+  , ``LeanNative.Semantics.ExprEquiv.toRefines
   , ``LeanNative.Semantics.CodeRefines.refl
   , ``LeanNative.Semantics.CodeRefines.trans
   , ``LeanNative.Semantics.CodeRefines.letBind_congr
+  , ``LeanNative.Semantics.CodeRefines.rawStore_congr
+  , ``LeanNative.Semantics.CodeRefines.incRef_congr
+  , ``LeanNative.Semantics.CodeRefines.decRef_congr
+  , ``LeanNative.Semantics.CodeRefines.ite_congr
+  , ``LeanNative.Semantics.CodeRefines.parFor_congr
+  , ``LeanNative.Proofs.rewriteBinOpStep_sound
+  , ``LeanNative.Proofs.rewriteSelectStep_sound
   , ``LeanNative.Proofs.rewriteScalarPeepholeStep_sound
   , ``LeanNative.Proofs.rewriteScalarPeephole_sound
   , ``LeanNative.Proofs.rewriteLNIRExpr_sound
   , ``LeanNative.Proofs.evalExpr_optimizeExpr_eq
+  , ``LeanNative.Proofs.evalCode_rewriteCodePeephole_eq
+  , ``LeanNative.Proofs.rewriteCodePeephole_refines
   , ``LeanNative.Proofs.unboxTupleProj0_sound
   , ``LeanNative.Proofs.unboxTupleProj1_sound
   , ``LeanNative.Proofs.unboxTupleProj_sound
   , ``LeanNative.Proofs.eval_unboxTupleSROA_refines
+  , ``LeanNative.Proofs.unboxTupleLetChain_refines
+  , ``LeanNative.Proofs.unboxTupleLetChain1_refines
   , ``LeanNative.Proofs.hoistExclusivity_sound
   , ``LeanNative.Proofs.eval_hoistExclusivity_refines
+  , ``LeanNative.Proofs.hoistExclusivityPreheader_refines
   , ``LeanNative.Proofs.unboxedLoopStep_sound
   , ``LeanNative.Proofs.unboxedLoopAccumulator_sim
+  , ``LeanNative.Proofs.normSymExpr_constU64
+  , ``LeanNative.Proofs.normSymExpr_constBool
+  , ``LeanNative.Proofs.normSymExpr_const_sound
+  , ``LeanNative.Proofs.checkSingleSample_of_codeRefines
+  , ``LeanNative.Proofs.checkConcreteSamples_of_codeRefines
+  , ``LeanNative.Proofs.sound_of_checkSingleSample_eq_true
+  , ``LeanNative.Proofs.symbolicTV_refl_sound
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

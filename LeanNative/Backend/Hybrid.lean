@@ -145,7 +145,7 @@ def emitDeclHostGlue (minGpuElements : Nat) (actionOpt : Option TransferAction) 
         "    return 0;",
         "}"
       ]
-    | .zipMul | .dotProduct =>
+    | .zipMul =>
       String.intercalate "\n" [
         s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1) \{",
         s!"    {modeComment}",
@@ -159,6 +159,20 @@ def emitDeclHostGlue (minGpuElements : Nat) (actionOpt : Option TransferAction) 
         "    for (size_t i = 0; i < n; ++i) {",
         "        out->m_data[i] = in0->m_data[i] * in1->m_data[i];",
         "    }",
+        "    return 0;",
+        "}"
+      ]
+    | .dotProduct =>
+      String.intercalate "\n" [
+        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1) \{",
+        s!"    {modeComment}",
+        "    if (!out || !in0 || !in1 || out->m_size == 0) return -1;",
+        "    size_t n = in0->m_size;",
+        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available()) \{",
+        "        int rc = lean_native_hybrid_dot_product_u64(&out->m_data[0], in0->m_data, in1->m_data, n);",
+        "        if (rc == 0) return 0;",
+        "    }",
+        "    lean_native_cpu_dot_product_u64(&out->m_data[0], in0->m_data, in1->m_data, n);",
         "    return 0;",
         "}"
       ]

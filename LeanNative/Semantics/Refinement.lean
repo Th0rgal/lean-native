@@ -107,6 +107,92 @@ theorem letBind_congr {dst : VarId} {ty : LNIRType} {e1 e2 : LNIRExpr} {k1 k2 : 
       rw [heval2]
       exact hk fuel' (env.bind dst val) st1 v st' hsrc
 
+theorem rawStore_congr {ptrVar idxVar valVar : VarId} {elemTy : LNIRType} {k1 k2 : LNIRCode}
+    (hk : CodeRefines k1 k2) :
+    CodeRefines (.rawStore ptrVar idxVar valVar elemTy k1) (.rawStore ptrVar idxVar valVar elemTy k2) := by
+  intro fuel env st v st' hsrc
+  cases fuel with
+  | zero => exact hsrc
+  | succ fuel' =>
+    simp only [evalCode] at hsrc ⊢
+    cases hptr : env ptrVar with
+    | none => simp only [hptr] at hsrc ⊢; exact hsrc
+    | some pval =>
+      cases hidx : env idxVar with
+      | none => simp only [hptr, hidx] at hsrc ⊢; exact hsrc
+      | some ival =>
+        cases hval : env valVar with
+        | none => simp only [hptr, hidx, hval] at hsrc ⊢; exact hsrc
+        | some vval =>
+          simp only [hptr, hidx, hval] at hsrc ⊢
+          cases pval <;> cases ival <;> cases vval <;> try exact hsrc
+          all_goals
+            simp only at hsrc ⊢
+            cases hw : st.writeElemExclusive _ _ _ with
+            | error err => rw [hw] at hsrc; exact hsrc
+            | ok st1 =>
+              rw [hw] at hsrc
+              exact hk fuel' env st1 v st' hsrc
+
+theorem incRef_congr {objVar : VarId} {count : Nat} {k1 k2 : LNIRCode}
+    (hk : CodeRefines k1 k2) :
+    CodeRefines (.incRef objVar count k1) (.incRef objVar count k2) := by
+  intro fuel env st v st' hsrc
+  cases fuel with
+  | zero => exact hsrc
+  | succ fuel' =>
+    simp only [evalCode] at hsrc ⊢
+    exact hk fuel' env st v st' hsrc
+
+theorem decRef_congr {objVar : VarId} {count : Nat} {k1 k2 : LNIRCode}
+    (hk : CodeRefines k1 k2) :
+    CodeRefines (.decRef objVar count k1) (.decRef objVar count k2) := by
+  intro fuel env st v st' hsrc
+  cases fuel with
+  | zero => exact hsrc
+  | succ fuel' =>
+    simp only [evalCode] at hsrc ⊢
+    exact hk fuel' env st v st' hsrc
+
+theorem ite_congr {condVar : VarId} {t1 t2 e1 e2 : LNIRCode}
+    (ht : CodeRefines t1 t2) (he : CodeRefines e1 e2) :
+    CodeRefines (.ite condVar t1 e1) (.ite condVar t2 e2) := by
+  intro fuel env st v st' hsrc
+  cases fuel with
+  | zero => exact hsrc
+  | succ fuel' =>
+    simp only [evalCode] at hsrc ⊢
+    cases hc : env condVar with
+    | none => rw [hc] at hsrc; contradiction
+    | some cval =>
+      rw [hc] at hsrc
+      cases cval with
+      | bool b =>
+        cases b with
+        | true => exact ht fuel' env st v st' hsrc
+        | false => exact he fuel' env st v st' hsrc
+      | u64 n =>
+        simp only at hsrc ⊢
+        by_cases hn : (n != 0) = true
+        · rw [if_pos hn] at hsrc ⊢
+          exact ht fuel' env st v st' hsrc
+        · rw [if_neg hn] at hsrc ⊢
+          exact he fuel' env st v st' hsrc
+      | _ => contradiction
+
+theorem parFor_congr {outVar lenVar : VarId} {inputs : List VarId} {elemTy : LNIRType}
+    {kernel : ParallelKernelKind} {k1 k2 : LNIRCode}
+    (hk : CodeRefines k1 k2) :
+    CodeRefines (.parFor outVar lenVar inputs elemTy kernel k1)
+                (.parFor outVar lenVar inputs elemTy kernel k2) := by
+  intro fuel env st v st' hsrc
+  cases fuel with
+  | zero => exact hsrc
+  | succ fuel' =>
+    simp only [evalCode] at hsrc ⊢
+    exact hk fuel' (env.bind outVar (.sarrayId 0)) st v st' hsrc
+
 end CodeRefines
 
 end LeanNative.Semantics
+

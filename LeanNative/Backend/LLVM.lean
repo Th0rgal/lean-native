@@ -642,6 +642,24 @@ partial def loopBodyHasArrayMem : LNIRCode → Bool
   | .parFor _ _ _ _ _ _ => true
   | .ret _ | .unreachable => false
 
+/-- Try to extract a multi-way tag comparison `ite` chain on a single discriminant `VarId`:
+    `let cmp_i = (discr == tag_i); ite cmp_i branch_i rest`.
+    Returns `some (discrVar, [(cmpVar_i, tag_i, branch_i), ...], defaultBranch)`. -/
+partial def collectSwitchChain (expectedDiscr : Option VarId) (code : LNIRCode) :
+    Option (VarId × List (VarId × UInt64 × LNIRCode) × LNIRCode) :=
+  match code with
+  | .letBind cmpVar _ (.scalar (.binOp .eq (.var discrVar) (.constU64 tagVal)))
+      (.ite condVar thenBranch elseBranch) =>
+    if cmpVar == condVar && (expectedDiscr.isNone || expectedDiscr == some discrVar) then
+      match collectSwitchChain (some discrVar) elseBranch with
+      | some (_, moreCases, defBranch) =>
+        some (discrVar, (cmpVar, tagVal, thenBranch) :: moreCases, defBranch)
+      | none =>
+        some (discrVar, [(cmpVar, tagVal, thenBranch)], elseBranch)
+    else
+      none
+  | _ => none
+
 /-- Recursively lower an `LNIRCode` block into LLVM 18 instructions.
     When `loopAccTarget` is `some (accVar, latchLbl)`, `.ret v` inside a `seqFor` step body
     copies `v` into `accVar` and branches to `latchLbl` instead of returning from the function. -/
@@ -651,8 +669,33 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
   let opt := st.optimized
   match code with
   | .letBind dst ty val k =>
-    emitLetExpr dst ty val
-    emitCode k retTy loopAccTarget
+    match collectSwitchChain none code with
+    | some (discrVar, rawCases, defaultBranch) =>
+      let dedupCases := rawCases.foldl (fun acc item@(_, tagVal, _) =>
+        if acc.any (fun (_, t, _) => t == tagVal) then acc else acc ++ [item]
+      ) []
+      if dedupCases.length >= 2 then
+        let discrVal ← loadVarAsI64 discrVar
+        let defLbl ← freshLabel "sw_default"
+        let mut labeledCases : List (String × UInt64 × LNIRCode) := []
+        for (_, tagVal, brCode) in dedupCases do
+          let caseLbl ← freshLabel s!"sw_case_{tagVal}"
+          labeledCases := labeledCases ++ [(caseLbl, tagVal, brCode)]
+        emitLine s!"  switch i64 {discrVal}, label %{defLbl} ["
+        for (caseLbl, tagVal, _) in labeledCases do
+          emitLine s!"    i64 {tagVal}, label %{caseLbl}"
+        emitLine "  ]"
+        for (caseLbl, _, brCode) in labeledCases do
+          emitLine s!"{caseLbl}:"
+          emitCode brCode retTy loopAccTarget
+        emitLine s!"{defLbl}:"
+        emitCode defaultBranch retTy loopAccTarget
+      else
+        emitLetExpr dst ty val
+        emitCode k retTy loopAccTarget
+    | none =>
+      emitLetExpr dst ty val
+      emitCode k retTy loopAccTarget
   | .rawStore ptrVar idxVar valVar _ k =>
     let rawPtr ← loadVarAsPtr ptrVar
     let idxVal ← loadVarAsI64 idxVar
@@ -761,9 +804,17 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
   let paramVars := d.params.map (fun p => (p.id, p.ty))
   let allVars := dedupVars (paramVars ++ collectCodeVars d.body)
 
-  let allocaLines := allVars.map fun (vid, ty) =>
+  let allocaLines := allVars.foldl (fun acc (vid, ty) =>
     let sTy := slotLLVMType ty
-    s!"  %slot_v{vid} = alloca {sTy}, align 8"
+    let zeroVal :=
+      if sTy == "ptr" then "null"
+      else if sTy == "i64" then "0"
+      else "zeroinitializer"
+    acc ++ [
+      s!"  %slot_v{vid} = alloca {sTy}, align 8",
+      s!"  store {sTy} {zeroVal}, ptr %slot_v{vid}, align 8"
+    ]
+  ) []
 
   let storeArgLines := d.params.map fun p =>
     let sTy := slotLLVMType p.ty

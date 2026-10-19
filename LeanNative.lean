@@ -6,6 +6,7 @@ import LeanNative.Semantics.Eval
 import LeanNative.Semantics.Refinement
 import LeanNative.Proofs.PeepholeProofs
 import LeanNative.Proofs.LoopOptProofs
+import LeanNative.Proofs.SymbolicTV
 import LeanNative.Proofs.CertChecker
 import LeanNative.Proofs.AxiomAudit
 import LeanNative.Transform.Pass
@@ -20,6 +21,6 @@ import LeanNative.TurboLean.Adapter
 
 namespace LeanNative
 
-def version : String := "0.1.0"
+def version : String := "0.2.0"
 
 end LeanNative

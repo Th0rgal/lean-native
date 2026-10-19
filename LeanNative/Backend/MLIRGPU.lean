@@ -350,8 +350,217 @@ def emitMLIRModule (m : LNIRModule) : String :=
   ]
   String.intercalate "\n\n" ([header] ++ builtinKernels ++ declKernels ++ [footer]) ++ "\n"
 
+/-- Emit a shared-memory parallel tree reduction PTX 8.0 kernel for `dot_product_u64`.
+    Uses `.shared .align 8 .b8 sdata_raw[2048];` (256 x u64), grid-stride register accumulation,
+    `bar.sync 0;` tree reduction (`stride = 128, 64, 32, 16, 8, 4, 2, 1`), and thread-0
+    `atom.global.add.u64`. -/
+def emitPTXDotReduceKernel (fnSymbol : String) : String :=
+  let reduceSteps : List (Nat × Nat) := [
+    (128, 1024), (64, 512), (32, 256), (16, 128),
+    (8, 64), (4, 32), (2, 16), (1, 8)
+  ]
+  let reduceLines := reduceSteps.foldl (fun acc (stride, byteOff) =>
+    acc ++ [
+      s!"    setp.lt.u32   %p2, %r3, {stride};",
+      s!"    @!%p2 bra     $L_red_sync_{stride}_{fnSymbol};",
+      s!"    ld.shared.u64 %rd15, [%rd14+{byteOff}];",
+      "    add.u64       %rd9, %rd9, %rd15;",
+      "    st.shared.u64 [%rd14], %rd9;",
+      s!"$L_red_sync_{stride}_{fnSymbol}:",
+      "    bar.sync      0;"
+    ]
+  ) []
+  String.intercalate "\n" ([
+    s!".visible .entry {fnSymbol}(",
+    "    .param .u64 param_out,",
+    "    .param .u64 param_in0,",
+    "    .param .u64 param_in1,",
+    "    .param .u64 param_n",
+    ")",
+    "{",
+    "    .shared .align 8 .b8 sdata_raw[2048];",
+    "    .reg .pred %p<3>;",
+    "    .reg .b32  %r<5>;",
+    "    .reg .b64  %rd<16>;",
+    "",
+    "    ld.param.u64 %rd1, [param_out];",
+    "    ld.param.u64 %rd2, [param_in0];",
+    "    ld.param.u64 %rd3, [param_in1];",
+    "    ld.param.u64 %rd4, [param_n];",
+    "",
+    "    cvta.to.global.u64 %rd1, %rd1;",
+    "    cvta.to.global.u64 %rd2, %rd2;",
+    "    cvta.to.global.u64 %rd3, %rd3;",
+    "",
+    "    mov.u32      %r1, %ctaid.x;",
+    "    mov.u32      %r2, %ntid.x;",
+    "    mov.u32      %r3, %tid.x;",
+    "    mov.u32      %r4, %nctaid.x;",
+    "    mul.wide.u32 %rd5, %r1, %r2;",
+    "    cvt.u64.u32  %rd6, %r3;",
+    "    add.u64      %rd7, %rd5, %rd6;",
+    "    mul.wide.u32 %rd8, %r2, %r4;",
+    "    mov.u64      %rd9, 0;",
+    "",
+    s!"$L_grid_loop_{fnSymbol}:",
+    "    setp.ge.u64  %p1, %rd7, %rd4;",
+    s!"    @%p1 bra     $L_grid_done_{fnSymbol};",
+    "    shl.b64      %rd10, %rd7, 3;",
+    "    add.u64      %rd11, %rd2, %rd10;",
+    "    add.u64      %rd12, %rd3, %rd10;",
+    "    ld.global.u64 %rd11, [%rd11];",
+    "    ld.global.u64 %rd12, [%rd12];",
+    "    mad.lo.u64   %rd9, %rd11, %rd12, %rd9;",
+    "    add.u64      %rd7, %rd7, %rd8;",
+    s!"    bra          $L_grid_loop_{fnSymbol};",
+    "",
+    s!"$L_grid_done_{fnSymbol}:",
+    "    mov.u64      %rd13, sdata_raw;",
+    "    shl.b64      %rd14, %rd6, 3;",
+    "    add.u64      %rd14, %rd13, %rd14;",
+    "    st.shared.u64 [%rd14], %rd9;",
+    "    bar.sync     0;"
+  ] ++ reduceLines ++ [
+    "    setp.ne.u32  %p1, %r3, 0;",
+    s!"    @%p1 bra     $L_done_{fnSymbol};",
+    "    atom.global.add.u64 %rd15, [%rd1], %rd9;",
+    "",
+    s!"$L_done_{fnSymbol}:",
+    "    ret;",
+    "}"
+  ])
+
+/-- Emit a 2D thread-block shared-memory tiled matrix multiplication PTX 8.0 kernel (16x16 tiles).
+    Uses `.shared .align 8 .b8 tileA_raw[2048]; .shared .align 8 .b8 tileB_raw[2048];`,
+    2D CTA/thread coordinates (`%ctaid.x`, `%ctaid.y`, `%tid.x`, `%tid.y`), collaborative tile loads,
+    `bar.sync 0;`, unrolled 16-step `mad.lo.u64` inner product, and global store `C[row * dim + col] = acc`. -/
+def emitPTXMatMulTiledKernel (fnSymbol : String) : String :=
+  let unrolledFmaLines := (List.range 16).foldl (fun acc k =>
+    let offA := k * 8
+    let offB := k * 128
+    acc ++ [
+      s!"    ld.shared.u64 %rd18, [%rd13+{offA}];",
+      s!"    ld.shared.u64 %rd19, [%rd14+{offB}];",
+      "    mad.lo.u64    %rd9, %rd18, %rd19, %rd9;"
+    ]
+  ) []
+  String.intercalate "\n" ([
+    s!".visible .entry {fnSymbol}(",
+    "    .param .u64 param_c,",
+    "    .param .u64 param_a,",
+    "    .param .u64 param_b,",
+    "    .param .u64 param_dim",
+    ")",
+    "{",
+    "    .shared .align 8 .b8 tileA_raw[2048];",
+    "    .shared .align 8 .b8 tileB_raw[2048];",
+    "    .reg .pred %p<3>;",
+    "    .reg .b32  %r<8>;",
+    "    .reg .b64  %rd<21>;",
+    "",
+    "    ld.param.u64 %rd1, [param_c];",
+    "    ld.param.u64 %rd2, [param_a];",
+    "    ld.param.u64 %rd3, [param_b];",
+    "    ld.param.u64 %rd4, [param_dim];",
+    "",
+    "    cvta.to.global.u64 %rd1, %rd1;",
+    "    cvta.to.global.u64 %rd2, %rd2;",
+    "    cvta.to.global.u64 %rd3, %rd3;",
+    "",
+    "    mov.u32      %r1, %ctaid.x;",
+    "    mov.u32      %r2, %ctaid.y;",
+    "    mov.u32      %r3, %tid.x;",
+    "    mov.u32      %r4, %tid.y;",
+    "",
+    "    shl.b32      %r5, %r2, 4;",
+    "    add.u32      %r5, %r5, %r4;",
+    "    cvt.u64.u32  %rd5, %r5;",
+    "",
+    "    shl.b32      %r6, %r1, 4;",
+    "    add.u32      %r6, %r6, %r3;",
+    "    cvt.u64.u32  %rd6, %r6;",
+    "",
+    "    cvt.u64.u32  %rd7, %r3;",
+    "    cvt.u64.u32  %rd8, %r4;",
+    "",
+    "    shl.b32      %r7, %r4, 4;",
+    "    add.u32      %r7, %r7, %r3;",
+    "    cvt.u64.u32  %rd16, %r7;",
+    "    shl.b64      %rd16, %rd16, 3;",
+    "    mov.u64      %rd17, tileA_raw;",
+    "    add.u64      %rd11, %rd17, %rd16;",
+    "    mov.u64      %rd18, tileB_raw;",
+    "    add.u64      %rd12, %rd18, %rd16;",
+    "",
+    "    shl.b64      %rd19, %rd8, 7;",
+    "    add.u64      %rd13, %rd17, %rd19;",
+    "    shl.b64      %rd20, %rd7, 3;",
+    "    add.u64      %rd14, %rd18, %rd20;",
+    "",
+    "    add.u64      %rd15, %rd4, 15;",
+    "    shr.b64      %rd15, %rd15, 4;",
+    "    mov.u64      %rd9, 0;",
+    "    mov.u64      %rd10, 0;",
+    "",
+    s!"$L_tile_loop_{fnSymbol}:",
+    "    setp.ge.u64  %p1, %rd10, %rd15;",
+    s!"    @%p1 bra     $L_tile_done_{fnSymbol};",
+    "",
+    "    shl.b64      %rd16, %rd10, 4;",
+    "    add.u64      %rd17, %rd16, %rd7;",
+    "    mov.u64      %rd18, 0;",
+    "    setp.ge.u64  %p1, %rd5, %rd4;",
+    "    setp.ge.u64  %p2, %rd17, %rd4;",
+    "    or.pred      %p1, %p1, %p2;",
+    s!"    @%p1 bra     $L_store_tileA_{fnSymbol};",
+    "    mad.lo.u64   %rd19, %rd5, %rd4, %rd17;",
+    "    shl.b64      %rd19, %rd19, 3;",
+    "    add.u64      %rd19, %rd2, %rd19;",
+    "    ld.global.u64 %rd18, [%rd19];",
+    s!"$L_store_tileA_{fnSymbol}:",
+    "    st.shared.u64 [%rd11], %rd18;",
+    "",
+    "    add.u64      %rd17, %rd16, %rd8;",
+    "    mov.u64      %rd18, 0;",
+    "    setp.ge.u64  %p1, %rd17, %rd4;",
+    "    setp.ge.u64  %p2, %rd6, %rd4;",
+    "    or.pred      %p1, %p1, %p2;",
+    s!"    @%p1 bra     $L_store_tileB_{fnSymbol};",
+    "    mad.lo.u64   %rd19, %rd17, %rd4, %rd6;",
+    "    shl.b64      %rd19, %rd19, 3;",
+    "    add.u64      %rd19, %rd3, %rd19;",
+    "    ld.global.u64 %rd18, [%rd19];",
+    s!"$L_store_tileB_{fnSymbol}:",
+    "    st.shared.u64 [%rd12], %rd18;",
+    "",
+    "    bar.sync     0;"
+  ] ++ unrolledFmaLines ++ [
+    "    bar.sync     0;",
+    "    add.u64      %rd10, %rd10, 1;",
+    s!"    bra          $L_tile_loop_{fnSymbol};",
+    "",
+    s!"$L_tile_done_{fnSymbol}:",
+    "    setp.ge.u64  %p1, %rd5, %rd4;",
+    "    setp.ge.u64  %p2, %rd6, %rd4;",
+    "    or.pred      %p1, %p1, %p2;",
+    s!"    @%p1 bra     $L_done_{fnSymbol};",
+    "    mad.lo.u64   %rd19, %rd5, %rd4, %rd6;",
+    "    shl.b64      %rd19, %rd19, 3;",
+    "    add.u64      %rd19, %rd1, %rd19;",
+    "    st.global.u64 [%rd19], %rd9;",
+    "",
+    s!"$L_done_{fnSymbol}:",
+    "    ret;",
+    "}"
+  ])
+
 /-- Emit a specialized per-declaration PTX entry point for a `ParallelKernelKind`. -/
 def emitPTXDeclKernel (fnSymbol : String) (kernel : ParallelKernelKind) : String :=
+  if fnSymbol == "lean_native_decl_dot_product_u64" then
+    emitPTXDotReduceKernel fnSymbol
+  else if fnSymbol == "lean_native_decl_matmul_tiled_u64" then
+    emitPTXMatMulTiledKernel fnSymbol
+  else
   match kernel with
   | .mapScaleAdd scale bias =>
     String.intercalate "\n" [
@@ -436,7 +645,9 @@ def emitPTXDeclKernel (fnSymbol : String) (kernel : ParallelKernelKind) : String
       "    ret;",
       "}"
     ]
-  | .zipMul | .dotProduct =>
+  | .dotProduct =>
+    emitPTXDotReduceKernel fnSymbol
+  | .zipMul =>
     String.intercalate "\n" [
       s!".visible .entry {fnSymbol}(",
       "    .param .u64 param_out,",
@@ -869,24 +1080,183 @@ def emitPTXModule (m : LNIRModule) (smArch : String := "sm_90") : String :=
     "}"
   ]
 
-  -- 6. Per-declaration PTX entry points
-  let declPTXKernels := m.decls.foldl (fun acc d =>
+  -- 6. lean_native_kernel_dot_reduce_u64: Shared-Memory Tree Reduction Kernel
+  let kDotReduceU64 := emitPTXDotReduceKernel "lean_native_kernel_dot_reduce_u64"
+
+  -- 7. lean_native_kernel_matmul_tiled_u64: 2D Shared-Memory Tiled Matrix Multiplication Kernel
+  let kMatMulTiledU64 := emitPTXMatMulTiledKernel "lean_native_kernel_matmul_tiled_u64"
+
+  -- 8. lean_native_kernel_saxpy_f64: IEEE-754 f64 FMA SAXPY Kernel
+  let kSaxpyF64 := String.intercalate "\n" [
+    ".visible .entry lean_native_kernel_saxpy_f64(",
+    "    .param .u64 param_out,",
+    "    .param .u64 param_x,",
+    "    .param .u64 param_y,",
+    "    .param .f64 param_alpha,",
+    "    .param .u64 param_n",
+    ")",
+    "{",
+    "    .reg .pred %p<2>;",
+    "    .reg .b32  %r<4>;",
+    "    .reg .b64  %rd<12>;",
+    "    .reg .f64  %fd<5>;",
+    "",
+    "    ld.param.u64 %rd1, [param_out];",
+    "    ld.param.u64 %rd2, [param_x];",
+    "    ld.param.u64 %rd3, [param_y];",
+    "    ld.param.f64 %fd1, [param_alpha];",
+    "    ld.param.u64 %rd4, [param_n];",
+    "",
+    "    mov.u32      %r1, %ctaid.x;",
+    "    mov.u32      %r2, %ntid.x;",
+    "    mov.u32      %r3, %tid.x;",
+    "    mul.wide.u32 %rd5, %r1, %r2;",
+    "    cvt.u64.u32  %rd6, %r3;",
+    "    add.u64      %rd7, %rd5, %rd6;",
+    "",
+    "    setp.ge.u64  %p1, %rd7, %rd4;",
+    "    @%p1 bra     $L_done_saxpy_f64;",
+    "",
+    "    cvta.to.global.u64 %rd1, %rd1;",
+    "    cvta.to.global.u64 %rd2, %rd2;",
+    "    cvta.to.global.u64 %rd3, %rd3;",
+    "    shl.b64      %rd8, %rd7, 3;",
+    "    add.u64      %rd9, %rd2, %rd8;",
+    "    add.u64      %rd10, %rd3, %rd8;",
+    "    ld.global.f64 %fd2, [%rd9];",
+    "    ld.global.f64 %fd3, [%rd10];",
+    "    fma.rn.f64   %fd4, %fd2, %fd1, %fd3;",
+    "    add.u64      %rd11, %rd1, %rd8;",
+    "    st.global.f64 [%rd11], %fd4;",
+    "",
+    "$L_done_saxpy_f64:",
+    "    ret;",
+    "}"
+  ]
+
+  -- 9. lean_native_kernel_map_scale_add_f64: IEEE-754 f64 mul.rn.f64 + add.rn.f64 Kernel
+  let kMapScaleAddF64 := String.intercalate "\n" [
+    ".visible .entry lean_native_kernel_map_scale_add_f64(",
+    "    .param .u64 param_out,",
+    "    .param .u64 param_in0,",
+    "    .param .f64 param_scale,",
+    "    .param .f64 param_bias,",
+    "    .param .u64 param_n",
+    ")",
+    "{",
+    "    .reg .pred %p<2>;",
+    "    .reg .b32  %r<4>;",
+    "    .reg .b64  %rd<11>;",
+    "    .reg .f64  %fd<6>;",
+    "",
+    "    ld.param.u64 %rd1, [param_out];",
+    "    ld.param.u64 %rd2, [param_in0];",
+    "    ld.param.f64 %fd1, [param_scale];",
+    "    ld.param.f64 %fd2, [param_bias];",
+    "    ld.param.u64 %rd3, [param_n];",
+    "",
+    "    mov.u32      %r1, %ctaid.x;",
+    "    mov.u32      %r2, %ntid.x;",
+    "    mov.u32      %r3, %tid.x;",
+    "    mul.wide.u32 %rd4, %r1, %r2;",
+    "    cvt.u64.u32  %rd5, %r3;",
+    "    add.u64      %rd6, %rd4, %rd5;",
+    "",
+    "    setp.ge.u64  %p1, %rd6, %rd3;",
+    "    @%p1 bra     $L_done_map_scale_add_f64;",
+    "",
+    "    cvta.to.global.u64 %rd1, %rd1;",
+    "    cvta.to.global.u64 %rd2, %rd2;",
+    "    shl.b64      %rd7, %rd6, 3;",
+    "    add.u64      %rd8, %rd2, %rd7;",
+    "    ld.global.f64 %fd3, [%rd8];",
+    "    mul.rn.f64   %fd4, %fd3, %fd1;",
+    "    add.rn.f64   %fd5, %fd4, %fd2;",
+    "    add.u64      %rd9, %rd1, %rd7;",
+    "    st.global.f64 [%rd9], %fd5;",
+    "",
+    "$L_done_map_scale_add_f64:",
+    "    ret;",
+    "}"
+  ]
+
+  -- 10. lean_native_kernel_fma_f32: IEEE-754 f32 FMA Kernel
+  let kFmaF32 := String.intercalate "\n" [
+    ".visible .entry lean_native_kernel_fma_f32(",
+    "    .param .u64 param_out,",
+    "    .param .u64 param_a,",
+    "    .param .u64 param_b,",
+    "    .param .u64 param_c,",
+    "    .param .u64 param_n",
+    ")",
+    "{",
+    "    .reg .pred %p<2>;",
+    "    .reg .b32  %r<4>;",
+    "    .reg .b64  %rd<14>;",
+    "    .reg .f32  %f<5>;",
+    "",
+    "    ld.param.u64 %rd1, [param_out];",
+    "    ld.param.u64 %rd2, [param_a];",
+    "    ld.param.u64 %rd3, [param_b];",
+    "    ld.param.u64 %rd4, [param_c];",
+    "    ld.param.u64 %rd5, [param_n];",
+    "",
+    "    mov.u32      %r1, %ctaid.x;",
+    "    mov.u32      %r2, %ntid.x;",
+    "    mov.u32      %r3, %tid.x;",
+    "    mul.wide.u32 %rd6, %r1, %r2;",
+    "    cvt.u64.u32  %rd7, %r3;",
+    "    add.u64      %rd8, %rd6, %rd7;",
+    "",
+    "    setp.ge.u64  %p1, %rd8, %rd5;",
+    "    @%p1 bra     $L_done_fma_f32;",
+    "",
+    "    cvta.to.global.u64 %rd1, %rd1;",
+    "    cvta.to.global.u64 %rd2, %rd2;",
+    "    cvta.to.global.u64 %rd3, %rd3;",
+    "    cvta.to.global.u64 %rd4, %rd4;",
+    "    shl.b64      %rd9, %rd8, 2;",
+    "    add.u64      %rd10, %rd2, %rd9;",
+    "    add.u64      %rd11, %rd3, %rd9;",
+    "    add.u64      %rd12, %rd4, %rd9;",
+    "    ld.global.f32 %f1, [%rd10];",
+    "    ld.global.f32 %f2, [%rd11];",
+    "    ld.global.f32 %f3, [%rd12];",
+    "    fma.rn.f32   %f4, %f1, %f2, %f3;",
+    "    add.u64      %rd13, %rd1, %rd9;",
+    "    st.global.f32 [%rd13], %f4;",
+    "",
+    "$L_done_fma_f32:",
+    "    ret;",
+    "}"
+  ]
+
+  -- 11. Per-declaration PTX entry points
+  let (declPTXKernels, emittedNames) := m.decls.foldl (fun (acc, names) d =>
     let (ok, _) := analyzeGpuCompatibility d
-    if !ok then acc
+    if !ok then (acc, names)
     else
+      let sym := s!"lean_native_decl_{d.name}"
       let regions := extractParForRegions d.body
       match regions with
       | [] =>
-        acc ++ [emitPTXDeclKernel s!"lean_native_decl_{d.name}" (.mapScaleAdd 1 0)]
+        (acc ++ [emitPTXDeclKernel sym (.mapScaleAdd 1 0)], names ++ [sym])
       | (_, _, _, _, firstK) :: rest =>
-        let primary := emitPTXDeclKernel s!"lean_native_decl_{d.name}" firstK
+        let primary := emitPTXDeclKernel sym firstK
         let rec emitExtraRegions (idx : Nat) :
             List (VarId × VarId × List VarId × LNIRType × ParallelKernelKind) → List String
           | [] => []
           | (_, _, _, _, k) :: tail =>
             emitPTXDeclKernel s!"lean_native_decl_{d.name}_region_{idx}" k :: emitExtraRegions (idx + 1) tail
-        acc ++ [primary] ++ emitExtraRegions 1 rest
-  ) []
+        (acc ++ [primary] ++ emitExtraRegions 1 rest, names ++ [sym])
+  ) ([], [])
+
+  let extraDotDecl :=
+    if emittedNames.contains "lean_native_decl_dot_product_u64" then []
+    else [emitPTXDotReduceKernel "lean_native_decl_dot_product_u64"]
+  let extraMatMulDecl :=
+    if emittedNames.contains "lean_native_decl_matmul_tiled_u64" then []
+    else [emitPTXMatMulTiledKernel "lean_native_decl_matmul_tiled_u64"]
 
   String.intercalate "\n\n" ([
     header,
@@ -894,7 +1264,12 @@ def emitPTXModule (m : LNIRModule) (smArch : String := "sm_90") : String :=
     kZipAdd,
     kZipMul,
     kSaxpy,
-    kStencil1D
-  ] ++ declPTXKernels) ++ "\n"
+    kStencil1D,
+    kDotReduceU64,
+    kMatMulTiledU64,
+    kSaxpyF64,
+    kMapScaleAddF64,
+    kFmaF32
+  ] ++ declPTXKernels ++ extraDotDecl ++ extraMatMulDecl) ++ "\n"
 
 end LeanNative.Backend.MLIRGPU

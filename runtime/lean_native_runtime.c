@@ -181,6 +181,30 @@ void lean_native_cpu_stencil1d_u64(
     out[n - 1] = in0[n - 1];
 }
 
+void lean_native_cpu_dot_product_u64(
+    uint64_t* out_sum,
+    const uint64_t* in0,
+    const uint64_t* in1,
+    size_t n
+) {
+    if (!out_sum) {
+        return;
+    }
+    uint64_t s0 = 0ULL, s1 = 0ULL, s2 = 0ULL, s3 = 0ULL;
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4) {
+        s0 += in0[i]     * in1[i];
+        s1 += in0[i + 1] * in1[i + 1];
+        s2 += in0[i + 2] * in1[i + 2];
+        s3 += in0[i + 3] * in1[i + 3];
+    }
+    uint64_t acc = (s0 + s1) + (s2 + s3);
+    for (; i < n; ++i) {
+        acc += in0[i] * in1[i];
+    }
+    *out_sum = acc;
+}
+
 void lean_native_cpu_matmul_u64(
     uint64_t* c,
     const uint64_t* a,
@@ -222,6 +246,18 @@ LEAN_NATIVE_WEAK const char* lean_native_gpu_device_name(void) {
     return "CPU-Only Fallback (LLVM SIMD)";
 }
 
+LEAN_NATIVE_WEAK void lean_native_ptx_jit_stats(
+    uint64_t* out_kernels_loaded,
+    uint64_t* out_launches
+) {
+    if (out_kernels_loaded) {
+        *out_kernels_loaded = 0ULL;
+    }
+    if (out_launches) {
+        *out_launches = 0ULL;
+    }
+}
+
 LEAN_NATIVE_WEAK int lean_native_register_ptx_module(const char* ptx_source) {
     (void)ptx_source;
     return -1;
@@ -235,6 +271,23 @@ LEAN_NATIVE_WEAK int lean_native_launch_ptx_kernel(
     (void)kernel_name;
     (void)kernel_params;
     (void)num_elements;
+    return -1;
+}
+
+LEAN_NATIVE_WEAK int lean_native_launch_ptx_kernel_2d(
+    const char* kernel_name,
+    void** kernel_params,
+    unsigned int grid_x,
+    unsigned int grid_y,
+    unsigned int block_x,
+    unsigned int block_y
+) {
+    (void)kernel_name;
+    (void)kernel_params;
+    (void)grid_x;
+    (void)grid_y;
+    (void)block_x;
+    (void)block_y;
     return -1;
 }
 
@@ -291,6 +344,19 @@ LEAN_NATIVE_WEAK int lean_native_hybrid_stencil1d_u64(
         return -1;
     }
     lean_native_cpu_stencil1d_u64(out, in0, wl, wc, wr, n);
+    return 0;
+}
+
+LEAN_NATIVE_WEAK int lean_native_hybrid_dot_product_u64(
+    uint64_t* out_sum,
+    const uint64_t* in0,
+    const uint64_t* in1,
+    size_t n
+) {
+    if (!out_sum || !in0 || !in1) {
+        return -1;
+    }
+    lean_native_cpu_dot_product_u64(out_sum, in0, in1, n);
     return 0;
 }
 

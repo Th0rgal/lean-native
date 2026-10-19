@@ -104,6 +104,11 @@ int lean_native_gpu_available(void);
 const char* lean_native_gpu_device_name(void);
 
 /**
+ * Queries dynamic PTX JIT compilation & execution counters (`cuModuleLoadDataEx` / `cuLaunchKernel`).
+ */
+void lean_native_ptx_jit_stats(uint64_t* out_kernels_loaded, uint64_t* out_launches);
+
+/**
  * Registers a custom PTX 8.0 source string with the CUDA Driver (`cuModuleLoadDataEx`).
  * Returns 0 on success, non-zero on error.
  */
@@ -118,6 +123,19 @@ int lean_native_launch_ptx_kernel(
     const char* kernel_name,
     void** kernel_params,
     size_t num_elements
+);
+
+/**
+ * Launches a 2D PTX kernel by symbol name (`kernel_name`) with explicit 2D grid and block dimensions
+ * via `cuModuleGetFunction` + `cuLaunchKernel`.
+ */
+int lean_native_launch_ptx_kernel_2d(
+    const char* kernel_name,
+    void** kernel_params,
+    unsigned int grid_x,
+    unsigned int grid_y,
+    unsigned int block_x,
+    unsigned int block_y
 );
 
 /**
@@ -167,6 +185,18 @@ int lean_native_hybrid_stencil1d_u64(
 );
 
 /**
+ * Hybrid CPU/GPU Dot Product Reduction (`*out_sum = sum_i (in0[i] * in1[i])`).
+ * Executes `lean_native_kernel_dot_reduce_u64` via `cuModuleLoadDataEx` + `cuLaunchKernel`
+ * with shared-memory tree reduction and `atom.global.add.u64`.
+ */
+int lean_native_hybrid_dot_product_u64(
+    uint64_t* out_sum,
+    const uint64_t* in0,
+    const uint64_t* in1,
+    size_t n
+);
+
+/**
  * Hybrid CPU/GPU Dense Matrix Multiplication (`C[M x N] = A[M x K] * B[K x N]`).
  */
 int lean_native_hybrid_matmul_u64(
@@ -208,6 +238,13 @@ void lean_native_cpu_stencil1d_u64(
     uint64_t wl,
     uint64_t wc,
     uint64_t wr,
+    size_t n
+);
+
+void lean_native_cpu_dot_product_u64(
+    uint64_t* out_sum,
+    const uint64_t* in0,
+    const uint64_t* in1,
     size_t n
 );
 
