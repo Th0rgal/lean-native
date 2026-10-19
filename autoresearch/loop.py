@@ -1601,12 +1601,19 @@ def main() -> int:
     print(f"[OK] Wrote detailed research log to {RESEARCH_LOG_MD}", flush=True)
 
     if args.until:
-        deadline = datetime.datetime.fromisoformat(args.until)
+        if args.until == "tomorrow-06:00-lisbon":
+            from zoneinfo import ZoneInfo
+            now_lisbon = datetime.datetime.now(ZoneInfo("Europe/Lisbon"))
+            deadline = (now_lisbon + datetime.timedelta(days=1)).replace(
+                hour=6, minute=0, second=0, microsecond=0
+            )
+        else:
+            deadline = datetime.datetime.fromisoformat(args.until)
         cycle_idx = 1
         while True:
             now = datetime.datetime.now(datetime.timezone.utc)
             if now >= deadline:
-                print(f"[Overnight Campaign] Reached deadline {args.until} (now={now.isoformat()}). Finishing cleanly.", flush=True)
+                print(f"[Overnight Campaign] Reached deadline {deadline.isoformat()} (now={now.isoformat()}). Finishing cleanly.", flush=True)
                 break
             prev_hash = run_overnight_cycle(cycle_idx, prev_hash)
             cycle_idx += 1
