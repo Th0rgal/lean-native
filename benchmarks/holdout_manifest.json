@@ -1,0 +1,139 @@
+{
+  "schema_version": "lean-native-holdout-manifest-v1",
+  "description": "Immutable cross-architecture benchmark and holdout verification manifest for lean-native.",
+  "statistical_policy": {
+    "min_trials": 7,
+    "max_individual_regression_pct": 2.0,
+    "min_geomean_speedup_for_acceptance": 1.01,
+    "required_p_value": 0.05,
+    "statistical_tests": [
+      "mann_whitney_u",
+      "welch_t_test"
+    ],
+    "differential_policy": "exact_u64_checksum_match_all_backends_and_architectures"
+  },
+  "target_hosts": [
+    {
+      "id": "spark-de79",
+      "arch": "aarch64",
+      "cpu": "ARM Cortex-X925 / Cortex-A725 (20 cores)",
+      "gpu": "NVIDIA GB10 Grace-Blackwell (sm_121)",
+      "mode": "local"
+    },
+    {
+      "id": "ashur",
+      "arch": "x86_64",
+      "cpu": "Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz (8 threads)",
+      "gpu": null,
+      "mode": "ssh"
+    }
+  ],
+  "core_benchmarks": [
+    {
+      "id": "collatz_steps",
+      "category": "scalar_control_flow",
+      "input_size": 5000000,
+      "input_unit": "trajectories",
+      "expected_checksum_u64": 740438133,
+      "targeted_passes": [
+        "AlgebraicOpt"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "Total Collatz stopping steps across [1, 5,000,000]; tests scalar arithmetic, branches, parity strength reduction, and multi-step ctz/odd reduction."
+    },
+    {
+      "id": "tuple_accum_sum",
+      "category": "tuple_sroa_unboxing",
+      "input_size": 50000000,
+      "input_unit": "iterations",
+      "expected_checksum_u64": 2430072077297332099,
+      "targeted_passes": [
+        "UnboxTupleSROA",
+        "AlgebraicOpt"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": false,
+      "description": "50M coupled 2-tuple state transitions; compares Lean 4 heap-boxed Prod UInt64 UInt64 against lean-native UnboxTupleSROA register tuple."
+    },
+    {
+      "id": "sarray_scale_bias",
+      "category": "array_exclusivity_simd",
+      "input_size": 10000000,
+      "input_unit": "elements",
+      "expected_checksum_u64": 832419940395999471,
+      "targeted_passes": [
+        "HoistExclusivity",
+        "LoopVectorizeOpt",
+        "AlgebraicOpt"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "Two-pass affine transformation over 10M 64-bit array elements; compares Lean 4 per-iteration exclusivity/boxing checks against lean-native HoistExclusivity + loop fusion + SIMD/GPU."
+    },
+    {
+      "id": "dot_product_u64",
+      "category": "contiguous_reduction",
+      "input_size": 10000000,
+      "input_unit": "elements",
+      "expected_checksum_u64": 9844157271583257408,
+      "targeted_passes": [
+        "HoistExclusivity",
+        "LoopVectorizeOpt"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "Contiguous 10M-element 64-bit scalar dot product; tests unboxed sarray base-pointer hoisting, 4-way SIMD reduction, and GPU warp-shuffle reduction."
+    },
+    {
+      "id": "saxpy_kernel",
+      "category": "data_parallel_map_zip",
+      "input_size": 16777216,
+      "input_unit": "elements",
+      "expected_checksum_u64": 2559223112370776895,
+      "targeted_passes": [
+        "HoistExclusivity",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "TranslationValidated",
+      "gpu_offload_eligible": true,
+      "description": "16.77M-element 64-bit SAXPY (Y[i] = alpha * X[i] + Y[i]); evaluates CPU LLVM SIMD vectorization and NVIDIA PTX / Hybrid GPU dispatch."
+    },
+    {
+      "id": "matmul_tiled_u64",
+      "category": "dense_linear_algebra",
+      "input_size": 512,
+      "input_unit": "matrix_dim",
+      "expected_checksum_u64": 11211282456894907173,
+      "targeted_passes": [
+        "HoistExclusivity",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "TranslationValidated",
+      "gpu_offload_eligible": true,
+      "description": "Dense 512x512 64-bit matrix multiplication (134.2M multiply-adds); compares Lean 4 nested loops against lean-native cache-tiled SIMD CPU and shared-memory tiled PTX GPU."
+    }
+  ],
+  "holdout_benchmarks": [
+    {
+      "id": "holdout_bitwise",
+      "category": "holdout_verification",
+      "input_size": 10000000,
+      "input_unit": "iterations",
+      "expected_checksum_u64": 17653976101919722312,
+      "description": "Immutable holdout verification kernel testing algebraic bitwise/shift identities and loop-carried data dependencies."
+    },
+    {
+      "id": "holdout_loop_bounds",
+      "category": "holdout_verification",
+      "input_size": 10000000,
+      "input_unit": "iterations",
+      "expected_checksum_u64": 2318209942448586758,
+      "description": "Immutable holdout verification kernel testing dual-accumulator loop bounds and shift/xor recurrence."
+    }
+  ]
+}

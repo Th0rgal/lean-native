@@ -1,0 +1,2304 @@
+{
+  "schema_version": "lean-native-benchmark-report-v1",
+  "timestamp_utc": "2026-10-19T07:37:59.199277+00:00",
+  "trials": 7,
+  "differential_verification": {
+    "all_passed": true,
+    "total_differential_assertions": 80,
+    "mismatches": [],
+    "expected_checksums": {
+      "collatz_steps": 740438133,
+      "tuple_accum_sum": 2430072077297332099,
+      "sarray_scale_bias": 832419940395999471,
+      "dot_product_u64": 9844157271583257408,
+      "saxpy_kernel": 2559223112370776895,
+      "matmul_tiled_u64": 11211282456894907173,
+      "holdout_bitwise": 17653976101919722312,
+      "holdout_loop_bounds": 2318209942448586758
+    }
+  },
+  "manifest_summary": {
+    "core_benchmarks": [
+      {
+        "id": "collatz_steps",
+        "category": "scalar_control_flow",
+        "input_size": 5000000,
+        "input_unit": "trajectories",
+        "expected_checksum_u64": 740438133,
+        "targeted_passes": [
+          "AlgebraicOpt"
+        ],
+        "assurance_level": "VerifiedKernelProof",
+        "gpu_offload_eligible": true,
+        "description": "Total Collatz stopping steps across [1, 5,000,000]; tests scalar arithmetic, branches, parity strength reduction, and multi-step ctz/odd reduction."
+      },
+      {
+        "id": "tuple_accum_sum",
+        "category": "tuple_sroa_unboxing",
+        "input_size": 50000000,
+        "input_unit": "iterations",
+        "expected_checksum_u64": 2430072077297332099,
+        "targeted_passes": [
+          "UnboxTupleSROA",
+          "AlgebraicOpt"
+        ],
+        "assurance_level": "VerifiedKernelProof",
+        "gpu_offload_eligible": false,
+        "description": "50M coupled 2-tuple state transitions; compares Lean 4 heap-boxed Prod UInt64 UInt64 against lean-native UnboxTupleSROA register tuple."
+      },
+      {
+        "id": "sarray_scale_bias",
+        "category": "array_exclusivity_simd",
+        "input_size": 10000000,
+        "input_unit": "elements",
+        "expected_checksum_u64": 832419940395999471,
+        "targeted_passes": [
+          "HoistExclusivity",
+          "LoopVectorizeOpt",
+          "AlgebraicOpt"
+        ],
+        "assurance_level": "VerifiedKernelProof",
+        "gpu_offload_eligible": true,
+        "description": "Two-pass affine transformation over 10M 64-bit array elements; compares Lean 4 per-iteration exclusivity/boxing checks against lean-native HoistExclusivity + loop fusion + SIMD/GPU."
+      },
+      {
+        "id": "dot_product_u64",
+        "category": "contiguous_reduction",
+        "input_size": 10000000,
+        "input_unit": "elements",
+        "expected_checksum_u64": 9844157271583257408,
+        "targeted_passes": [
+          "HoistExclusivity",
+          "LoopVectorizeOpt"
+        ],
+        "assurance_level": "VerifiedKernelProof",
+        "gpu_offload_eligible": true,
+        "description": "Contiguous 10M-element 64-bit scalar dot product; tests unboxed sarray base-pointer hoisting, 4-way SIMD reduction, and GPU warp-shuffle reduction."
+      },
+      {
+        "id": "saxpy_kernel",
+        "category": "data_parallel_map_zip",
+        "input_size": 16777216,
+        "input_unit": "elements",
+        "expected_checksum_u64": 2559223112370776895,
+        "targeted_passes": [
+          "HoistExclusivity",
+          "LoopVectorizeOpt",
+          "MLIRGPU",
+          "Hybrid"
+        ],
+        "assurance_level": "TranslationValidated",
+        "gpu_offload_eligible": true,
+        "description": "16.77M-element 64-bit SAXPY (Y[i] = alpha * X[i] + Y[i]); evaluates CPU LLVM SIMD vectorization and NVIDIA PTX / Hybrid GPU dispatch."
+      },
+      {
+        "id": "matmul_tiled_u64",
+        "category": "dense_linear_algebra",
+        "input_size": 512,
+        "input_unit": "matrix_dim",
+        "expected_checksum_u64": 11211282456894907173,
+        "targeted_passes": [
+          "HoistExclusivity",
+          "LoopVectorizeOpt",
+          "MLIRGPU",
+          "Hybrid"
+        ],
+        "assurance_level": "TranslationValidated",
+        "gpu_offload_eligible": true,
+        "description": "Dense 512x512 64-bit matrix multiplication (134.2M multiply-adds); compares Lean 4 nested loops against lean-native cache-tiled SIMD CPU and shared-memory tiled PTX GPU."
+      }
+    ],
+    "holdout_benchmarks": [
+      {
+        "id": "holdout_bitwise",
+        "category": "holdout_verification",
+        "input_size": 10000000,
+        "input_unit": "iterations",
+        "expected_checksum_u64": 17653976101919722312,
+        "description": "Immutable holdout verification kernel testing algebraic bitwise/shift identities and loop-carried data dependencies."
+      },
+      {
+        "id": "holdout_loop_bounds",
+        "category": "holdout_verification",
+        "input_size": 10000000,
+        "input_unit": "iterations",
+        "expected_checksum_u64": 2318209942448586758,
+        "description": "Immutable holdout verification kernel testing dual-accumulator loop bounds and shift/xor recurrence."
+      }
+    ]
+  },
+  "hosts": {
+    "spark-de79": {
+      "host": "spark-de79",
+      "arch": "aarch64",
+      "cpu_model": "ARM Cortex-X925 / Cortex-A725 (20 cores)",
+      "gpu_model": "NVIDIA GB10 Grace-Blackwell (sm_121)",
+      "trials": 7,
+      "compile_times_ms": {
+        "official_lean4": 964.86,
+        "cpp_o3": 790.78,
+        "lean_native_cpu": 143.18,
+        "cuda_o3": 1646.03,
+        "lean_native_gpu_ptx": 1646.03,
+        "lean_native_hybrid": 966.19
+      },
+      "peak_rss_kb": {
+        "official_lean4": 2004436,
+        "cpp_o3": 264780,
+        "lean_native_cpu": 263428,
+        "cuda_o3": 360956,
+        "lean_native_gpu_ptx": 360956,
+        "lean_native_hybrid": 360956
+      },
+      "raw_times_ms": {
+        "official_lean4": {
+          "collatz_steps": [
+            445.907894,
+            434.690049,
+            429.222062,
+            424.346186,
+            438.5783,
+            438.710796,
+            423.75079
+          ],
+          "tuple_accum_sum": [
+            1029.967567,
+            1034.927595,
+            999.103055,
+            979.102566,
+            997.938775,
+            1067.320165,
+            1036.568378
+          ],
+          "sarray_scale_bias": [
+            3226.078687,
+            2925.445124,
+            3218.044676,
+            3718.702069,
+            2899.722605,
+            2984.000776,
+            2514.299215
+          ],
+          "dot_product_u64": [
+            61.275536,
+            84.079814,
+            77.221107,
+            89.043382,
+            67.858288,
+            86.397861,
+            80.722164
+          ],
+          "saxpy_kernel": [
+            3655.424773,
+            1399.916998,
+            2439.164519,
+            2628.687133,
+            2500.052789,
+            1585.788784,
+            2498.16823
+          ],
+          "matmul_tiled_u64": [
+            1973.284527,
+            1102.188921,
+            1092.465459,
+            1487.920833,
+            1116.606082,
+            1121.631103,
+            1514.836665
+          ],
+          "holdout_bitwise": [
+            15.931092,
+            16.235988,
+            15.645876,
+            15.871652,
+            15.811203,
+            16.056996,
+            16.376708
+          ],
+          "holdout_loop_bounds": [
+            10.714131,
+            10.771426,
+            10.488834,
+            10.613426,
+            10.600515,
+            10.840435,
+            11.036595
+          ]
+        },
+        "cpp_o3": {
+          "collatz_steps": [
+            665.3709,
+            647.9419,
+            653.9377,
+            666.4335,
+            665.8607,
+            655.2027,
+            663.7698
+          ],
+          "tuple_accum_sum": [
+            26.5559,
+            27.1327,
+            27.127,
+            27.3299,
+            27.3676,
+            26.8494,
+            26.9049
+          ],
+          "sarray_scale_bias": [
+            17.4195,
+            18.6211,
+            9.3705,
+            18.5697,
+            24.6324,
+            18.3982,
+            19.3874
+          ],
+          "dot_product_u64": [
+            14.4154,
+            5.1584,
+            16.2078,
+            13.8382,
+            14.3603,
+            4.8216,
+            12.5869
+          ],
+          "saxpy_kernel": [
+            10.7398,
+            25.2639,
+            28.8434,
+            24.3192,
+            24.4325,
+            24.6402,
+            25.2973
+          ],
+          "matmul_tiled_u64": [
+            34.5388,
+            34.5298,
+            35.3835,
+            35.0976,
+            34.0118,
+            33.7438,
+            35.5966
+          ],
+          "holdout_bitwise": [
+            15.7903,
+            16.277,
+            16.2132,
+            16.411,
+            16.3576,
+            16.1072,
+            16.193
+          ],
+          "holdout_loop_bounds": [
+            10.6582,
+            10.9066,
+            10.9279,
+            10.9942,
+            10.9624,
+            10.7595,
+            10.8549
+          ]
+        },
+        "lean_native_cpu": {
+          "collatz_steps": [
+            261.5541,
+            260.2056,
+            269.567,
+            265.1223,
+            278.9161,
+            273.8074,
+            271.3478
+          ],
+          "tuple_accum_sum": [
+            26.89,
+            26.8847,
+            26.7904,
+            27.3585,
+            27.0878,
+            26.662,
+            27.1027
+          ],
+          "sarray_scale_bias": [
+            16.4255,
+            13.1984,
+            12.8164,
+            10.2112,
+            16.3283,
+            16.1417,
+            10.1571
+          ],
+          "dot_product_u64": [
+            14.3835,
+            15.4584,
+            14.1983,
+            10.7301,
+            19.365,
+            11.593,
+            8.6174
+          ],
+          "saxpy_kernel": [
+            29.975,
+            24.8997,
+            27.0418,
+            27.2942,
+            29.2556,
+            33.6754,
+            28.6501
+          ],
+          "matmul_tiled_u64": [
+            30.8396,
+            30.6325,
+            31.1331,
+            31.8537,
+            38.2865,
+            30.9007,
+            31.186
+          ],
+          "holdout_bitwise": [
+            16.1329,
+            16.1055,
+            16.109,
+            17.1662,
+            16.331,
+            16.2977,
+            16.3273
+          ],
+          "holdout_loop_bounds": [
+            11.1199,
+            11.068,
+            11.0688,
+            11.8077,
+            11.2795,
+            10.9408,
+            11.4041
+          ]
+        },
+        "cuda_o3": {
+          "collatz_steps": [
+            6.6562,
+            6.2945,
+            6.6641,
+            6.1914,
+            7.0276,
+            6.6698,
+            5.592
+          ],
+          "tuple_accum_sum": [
+            28.2614,
+            28.1941,
+            28.7064,
+            28.4367,
+            28.8423,
+            28.7799,
+            28.544
+          ],
+          "sarray_scale_bias": [
+            2.8595,
+            3.1637,
+            1.7053,
+            1.1257,
+            2.9646,
+            3.0348,
+            2.4474
+          ],
+          "dot_product_u64": [
+            2.5085,
+            3.1773,
+            2.9333,
+            2.9424,
+            2.9295,
+            3.1209,
+            3.0485
+          ],
+          "saxpy_kernel": [
+            4.3315,
+            2.0409,
+            2.6332,
+            4.2389,
+            4.0891,
+            3.5245,
+            4.1457
+          ],
+          "matmul_tiled_u64": [
+            2.3995,
+            2.5383,
+            2.6275,
+            2.4297,
+            2.3822,
+            2.3695,
+            2.4374
+          ],
+          "holdout_bitwise": [
+            17.0006,
+            16.4906,
+            16.335,
+            16.3496,
+            16.2871,
+            16.4267,
+            16.3527
+          ],
+          "holdout_loop_bounds": [
+            11.3243,
+            10.9957,
+            10.9226,
+            10.8399,
+            10.8505,
+            10.8438,
+            10.8421
+          ]
+        },
+        "lean_native_gpu_ptx": {
+          "collatz_steps": [
+            6.6562,
+            6.2945,
+            6.6641,
+            6.1914,
+            7.0276,
+            6.6698,
+            5.592
+          ],
+          "tuple_accum_sum": [
+            28.2614,
+            28.1941,
+            28.7064,
+            28.4367,
+            28.8423,
+            28.7799,
+            28.544
+          ],
+          "sarray_scale_bias": [
+            2.8595,
+            3.1637,
+            1.7053,
+            1.1257,
+            2.9646,
+            3.0348,
+            2.4474
+          ],
+          "dot_product_u64": [
+            2.5085,
+            3.1773,
+            2.9333,
+            2.9424,
+            2.9295,
+            3.1209,
+            3.0485
+          ],
+          "saxpy_kernel": [
+            4.3315,
+            2.0409,
+            2.6332,
+            4.2389,
+            4.0891,
+            3.5245,
+            4.1457
+          ],
+          "matmul_tiled_u64": [
+            2.3995,
+            2.5383,
+            2.6275,
+            2.4297,
+            2.3822,
+            2.3695,
+            2.4374
+          ],
+          "holdout_bitwise": [
+            17.0006,
+            16.4906,
+            16.335,
+            16.3496,
+            16.2871,
+            16.4267,
+            16.3527
+          ],
+          "holdout_loop_bounds": [
+            11.3243,
+            10.9957,
+            10.9226,
+            10.8399,
+            10.8505,
+            10.8438,
+            10.8421
+          ]
+        },
+        "lean_native_hybrid": {
+          "collatz_steps": [
+            6.6562,
+            6.2945,
+            6.6641,
+            6.1914,
+            7.0276,
+            6.6698,
+            5.592
+          ],
+          "tuple_accum_sum": [
+            26.89,
+            26.8847,
+            26.7904,
+            27.3585,
+            27.0878,
+            26.662,
+            27.1027
+          ],
+          "sarray_scale_bias": [
+            2.8595,
+            3.1637,
+            1.7053,
+            1.1257,
+            2.9646,
+            3.0348,
+            2.4474
+          ],
+          "dot_product_u64": [
+            2.5085,
+            3.1773,
+            2.9333,
+            2.9424,
+            2.9295,
+            3.1209,
+            3.0485
+          ],
+          "saxpy_kernel": [
+            4.3315,
+            2.0409,
+            2.6332,
+            4.2389,
+            4.0891,
+            3.5245,
+            4.1457
+          ],
+          "matmul_tiled_u64": [
+            2.3995,
+            2.5383,
+            2.6275,
+            2.4297,
+            2.3822,
+            2.3695,
+            2.4374
+          ],
+          "holdout_bitwise": [
+            16.1329,
+            16.1055,
+            16.109,
+            17.1662,
+            16.331,
+            16.2977,
+            16.3273
+          ],
+          "holdout_loop_bounds": [
+            11.1199,
+            11.068,
+            11.0688,
+            11.8077,
+            11.2795,
+            10.9408,
+            11.4041
+          ]
+        }
+      },
+      "checksums": {
+        "official_lean4": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "cpp_o3": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "lean_native_cpu": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "cuda_o3": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "lean_native_gpu_ptx": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "lean_native_hybrid": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        }
+      },
+      "analysis": {
+        "summary_stats": {
+          "official_lean4": {
+            "collatz_steps": {
+              "median_ms": 434.69,
+              "mean_ms": 433.6009,
+              "std_ms": 8.2197,
+              "iqr_ms": 14.3646,
+              "min_ms": 423.7508,
+              "max_ms": 445.9079
+            },
+            "tuple_accum_sum": {
+              "median_ms": 1029.9676,
+              "mean_ms": 1020.704,
+              "std_ms": 30.0788,
+              "iqr_ms": 38.6296,
+              "min_ms": 979.1026,
+              "max_ms": 1067.3202
+            },
+            "sarray_scale_bias": {
+              "median_ms": 2984.0008,
+              "mean_ms": 3069.4705,
+              "std_ms": 372.6437,
+              "iqr_ms": 326.3561,
+              "min_ms": 2514.2992,
+              "max_ms": 3718.7021
+            },
+            "dot_product_u64": {
+              "median_ms": 80.7222,
+              "mean_ms": 78.0855,
+              "std_ms": 10.1651,
+              "iqr_ms": 18.5396,
+              "min_ms": 61.2755,
+              "max_ms": 89.0434
+            },
+            "saxpy_kernel": {
+              "median_ms": 2498.1682,
+              "mean_ms": 2386.7433,
+              "std_ms": 742.9049,
+              "iqr_ms": 1042.8983,
+              "min_ms": 1399.917,
+              "max_ms": 3655.4248
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 1121.6311,
+              "mean_ms": 1344.1334,
+              "std_ms": 333.8651,
+              "iqr_ms": 412.6477,
+              "min_ms": 1092.4655,
+              "max_ms": 1973.2845
+            },
+            "holdout_bitwise": {
+              "median_ms": 15.9311,
+              "mean_ms": 15.9899,
+              "std_ms": 0.2525,
+              "iqr_ms": 0.4248,
+              "min_ms": 15.6459,
+              "max_ms": 16.3767
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 10.7141,
+              "mean_ms": 10.7236,
+              "std_ms": 0.1809,
+              "iqr_ms": 0.2399,
+              "min_ms": 10.4888,
+              "max_ms": 11.0366
+            }
+          },
+          "cpp_o3": {
+            "collatz_steps": {
+              "median_ms": 663.7698,
+              "mean_ms": 659.7882,
+              "std_ms": 7.3444,
+              "iqr_ms": 11.923,
+              "min_ms": 647.9419,
+              "max_ms": 666.4335
+            },
+            "tuple_accum_sum": {
+              "median_ms": 27.127,
+              "mean_ms": 27.0382,
+              "std_ms": 0.2876,
+              "iqr_ms": 0.4805,
+              "min_ms": 26.5559,
+              "max_ms": 27.3676
+            },
+            "sarray_scale_bias": {
+              "median_ms": 18.5697,
+              "mean_ms": 18.057,
+              "std_ms": 4.5012,
+              "iqr_ms": 1.9679,
+              "min_ms": 9.3705,
+              "max_ms": 24.6324
+            },
+            "dot_product_u64": {
+              "median_ms": 13.8382,
+              "mean_ms": 11.6269,
+              "std_ms": 4.6583,
+              "iqr_ms": 9.257,
+              "min_ms": 4.8216,
+              "max_ms": 16.2078
+            },
+            "saxpy_kernel": {
+              "median_ms": 24.6402,
+              "mean_ms": 23.3623,
+              "std_ms": 5.7796,
+              "iqr_ms": 0.9781,
+              "min_ms": 10.7398,
+              "max_ms": 28.8434
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 34.5388,
+              "mean_ms": 34.7003,
+              "std_ms": 0.6919,
+              "iqr_ms": 1.3717,
+              "min_ms": 33.7438,
+              "max_ms": 35.5966
+            },
+            "holdout_bitwise": {
+              "median_ms": 16.2132,
+              "mean_ms": 16.1928,
+              "std_ms": 0.2048,
+              "iqr_ms": 0.2504,
+              "min_ms": 15.7903,
+              "max_ms": 16.411
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 10.9066,
+              "mean_ms": 10.8662,
+              "std_ms": 0.1196,
+              "iqr_ms": 0.2029,
+              "min_ms": 10.6582,
+              "max_ms": 10.9942
+            }
+          },
+          "lean_native_cpu": {
+            "collatz_steps": {
+              "median_ms": 269.567,
+              "mean_ms": 268.6458,
+              "std_ms": 6.7604,
+              "iqr_ms": 12.2533,
+              "min_ms": 260.2056,
+              "max_ms": 278.9161
+            },
+            "tuple_accum_sum": {
+              "median_ms": 26.89,
+              "mean_ms": 26.968,
+              "std_ms": 0.2321,
+              "iqr_ms": 0.3123,
+              "min_ms": 26.662,
+              "max_ms": 27.3585
+            },
+            "sarray_scale_bias": {
+              "median_ms": 13.1984,
+              "mean_ms": 13.6112,
+              "std_ms": 2.7689,
+              "iqr_ms": 6.1171,
+              "min_ms": 10.1571,
+              "max_ms": 16.4255
+            },
+            "dot_product_u64": {
+              "median_ms": 14.1983,
+              "mean_ms": 13.478,
+              "std_ms": 3.5272,
+              "iqr_ms": 4.7283,
+              "min_ms": 8.6174,
+              "max_ms": 19.365
+            },
+            "saxpy_kernel": {
+              "median_ms": 28.6501,
+              "mean_ms": 28.6845,
+              "std_ms": 2.7646,
+              "iqr_ms": 2.9332,
+              "min_ms": 24.8997,
+              "max_ms": 33.6754
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 31.1331,
+              "mean_ms": 32.1189,
+              "std_ms": 2.7472,
+              "iqr_ms": 1.0141,
+              "min_ms": 30.6325,
+              "max_ms": 38.2865
+            },
+            "holdout_bitwise": {
+              "median_ms": 16.2977,
+              "mean_ms": 16.3528,
+              "std_ms": 0.373,
+              "iqr_ms": 0.222,
+              "min_ms": 16.1055,
+              "max_ms": 17.1662
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 11.1199,
+              "mean_ms": 11.2413,
+              "std_ms": 0.2926,
+              "iqr_ms": 0.3361,
+              "min_ms": 10.9408,
+              "max_ms": 11.8077
+            }
+          },
+          "cuda_o3": {
+            "collatz_steps": {
+              "median_ms": 6.6562,
+              "mean_ms": 6.4422,
+              "std_ms": 0.465,
+              "iqr_ms": 0.4784,
+              "min_ms": 5.592,
+              "max_ms": 7.0276
+            },
+            "tuple_accum_sum": {
+              "median_ms": 28.544,
+              "mean_ms": 28.5378,
+              "std_ms": 0.2532,
+              "iqr_ms": 0.5185,
+              "min_ms": 28.1941,
+              "max_ms": 28.8423
+            },
+            "sarray_scale_bias": {
+              "median_ms": 2.8595,
+              "mean_ms": 2.4716,
+              "std_ms": 0.7734,
+              "iqr_ms": 1.3295,
+              "min_ms": 1.1257,
+              "max_ms": 3.1637
+            },
+            "dot_product_u64": {
+              "median_ms": 2.9424,
+              "mean_ms": 2.9515,
+              "std_ms": 0.2184,
+              "iqr_ms": 0.1914,
+              "min_ms": 2.5085,
+              "max_ms": 3.1773
+            },
+            "saxpy_kernel": {
+              "median_ms": 4.0891,
+              "mean_ms": 3.572,
+              "std_ms": 0.8987,
+              "iqr_ms": 1.6057,
+              "min_ms": 2.0409,
+              "max_ms": 4.3315
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 2.4297,
+              "mean_ms": 2.4549,
+              "std_ms": 0.0943,
+              "iqr_ms": 0.1561,
+              "min_ms": 2.3695,
+              "max_ms": 2.6275
+            },
+            "holdout_bitwise": {
+              "median_ms": 16.3527,
+              "mean_ms": 16.4632,
+              "std_ms": 0.2461,
+              "iqr_ms": 0.1556,
+              "min_ms": 16.2871,
+              "max_ms": 17.0006
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 10.8505,
+              "mean_ms": 10.9456,
+              "std_ms": 0.1769,
+              "iqr_ms": 0.1536,
+              "min_ms": 10.8399,
+              "max_ms": 11.3243
+            }
+          },
+          "lean_native_gpu_ptx": {
+            "collatz_steps": {
+              "median_ms": 6.6562,
+              "mean_ms": 6.4422,
+              "std_ms": 0.465,
+              "iqr_ms": 0.4784,
+              "min_ms": 5.592,
+              "max_ms": 7.0276
+            },
+            "tuple_accum_sum": {
+              "median_ms": 28.544,
+              "mean_ms": 28.5378,
+              "std_ms": 0.2532,
+              "iqr_ms": 0.5185,
+              "min_ms": 28.1941,
+              "max_ms": 28.8423
+            },
+            "sarray_scale_bias": {
+              "median_ms": 2.8595,
+              "mean_ms": 2.4716,
+              "std_ms": 0.7734,
+              "iqr_ms": 1.3295,
+              "min_ms": 1.1257,
+              "max_ms": 3.1637
+            },
+            "dot_product_u64": {
+              "median_ms": 2.9424,
+              "mean_ms": 2.9515,
+              "std_ms": 0.2184,
+              "iqr_ms": 0.1914,
+              "min_ms": 2.5085,
+              "max_ms": 3.1773
+            },
+            "saxpy_kernel": {
+              "median_ms": 4.0891,
+              "mean_ms": 3.572,
+              "std_ms": 0.8987,
+              "iqr_ms": 1.6057,
+              "min_ms": 2.0409,
+              "max_ms": 4.3315
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 2.4297,
+              "mean_ms": 2.4549,
+              "std_ms": 0.0943,
+              "iqr_ms": 0.1561,
+              "min_ms": 2.3695,
+              "max_ms": 2.6275
+            },
+            "holdout_bitwise": {
+              "median_ms": 16.3527,
+              "mean_ms": 16.4632,
+              "std_ms": 0.2461,
+              "iqr_ms": 0.1556,
+              "min_ms": 16.2871,
+              "max_ms": 17.0006
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 10.8505,
+              "mean_ms": 10.9456,
+              "std_ms": 0.1769,
+              "iqr_ms": 0.1536,
+              "min_ms": 10.8399,
+              "max_ms": 11.3243
+            }
+          },
+          "lean_native_hybrid": {
+            "collatz_steps": {
+              "median_ms": 6.6562,
+              "mean_ms": 6.4422,
+              "std_ms": 0.465,
+              "iqr_ms": 0.4784,
+              "min_ms": 5.592,
+              "max_ms": 7.0276
+            },
+            "tuple_accum_sum": {
+              "median_ms": 26.89,
+              "mean_ms": 26.968,
+              "std_ms": 0.2321,
+              "iqr_ms": 0.3123,
+              "min_ms": 26.662,
+              "max_ms": 27.3585
+            },
+            "sarray_scale_bias": {
+              "median_ms": 2.8595,
+              "mean_ms": 2.4716,
+              "std_ms": 0.7734,
+              "iqr_ms": 1.3295,
+              "min_ms": 1.1257,
+              "max_ms": 3.1637
+            },
+            "dot_product_u64": {
+              "median_ms": 2.9424,
+              "mean_ms": 2.9515,
+              "std_ms": 0.2184,
+              "iqr_ms": 0.1914,
+              "min_ms": 2.5085,
+              "max_ms": 3.1773
+            },
+            "saxpy_kernel": {
+              "median_ms": 4.0891,
+              "mean_ms": 3.572,
+              "std_ms": 0.8987,
+              "iqr_ms": 1.6057,
+              "min_ms": 2.0409,
+              "max_ms": 4.3315
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 2.4297,
+              "mean_ms": 2.4549,
+              "std_ms": 0.0943,
+              "iqr_ms": 0.1561,
+              "min_ms": 2.3695,
+              "max_ms": 2.6275
+            },
+            "holdout_bitwise": {
+              "median_ms": 16.2977,
+              "mean_ms": 16.3528,
+              "std_ms": 0.373,
+              "iqr_ms": 0.222,
+              "min_ms": 16.1055,
+              "max_ms": 17.1662
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 11.1199,
+              "mean_ms": 11.2413,
+              "std_ms": 0.2926,
+              "iqr_ms": 0.3361,
+              "min_ms": 10.9408,
+              "max_ms": 11.8077
+            }
+          }
+        },
+        "comparisons": {
+          "lean_native_cpu": {
+            "vs_official_lean4": {
+              "geomean_speedup_x": 25.089,
+              "max_individual_regression_pct": 0.0,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 434.69,
+                  "candidate_median_ms": 269.567,
+                  "speedup_x": 1.6125,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 1029.9676,
+                  "candidate_median_ms": 26.89,
+                  "speedup_x": 38.303,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 2984.0008,
+                  "candidate_median_ms": 13.1984,
+                  "speedup_x": 226.0881,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 80.7222,
+                  "candidate_median_ms": 14.1983,
+                  "speedup_x": 5.6853,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 2498.1682,
+                  "candidate_median_ms": 28.6501,
+                  "speedup_x": 87.1958,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 1121.6311,
+                  "candidate_median_ms": 31.1331,
+                  "speedup_x": 36.027,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            },
+            "vs_cpp_o3": {
+              "geomean_speedup_x": 1.2171,
+              "max_individual_regression_pct": 16.2738,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 663.7698,
+                  "candidate_median_ms": 269.567,
+                  "speedup_x": 2.4624,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 27.127,
+                  "candidate_median_ms": 26.89,
+                  "speedup_x": 1.0088,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.443289,
+                  "p_value_welch_t": 0.615373,
+                  "statistically_significant": false
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 18.5697,
+                  "candidate_median_ms": 13.1984,
+                  "speedup_x": 1.407,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.029842,
+                  "p_value_welch_t": 0.02603,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 13.8382,
+                  "candidate_median_ms": 14.1983,
+                  "speedup_x": 0.9746,
+                  "regression_pct": 2.6022,
+                  "p_value_mann_whitney_u": 0.701478,
+                  "p_value_welch_t": 0.401945,
+                  "statistically_significant": false
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 24.6402,
+                  "candidate_median_ms": 28.6501,
+                  "speedup_x": 0.86,
+                  "regression_pct": 16.2738,
+                  "p_value_mann_whitney_u": 0.021451,
+                  "p_value_welch_t": 0.027959,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 34.5388,
+                  "candidate_median_ms": 31.1331,
+                  "speedup_x": 1.1094,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.029842,
+                  "p_value_welch_t": 0.015917,
+                  "statistically_significant": true
+                }
+              }
+            }
+          },
+          "lean_native_gpu_ptx": {
+            "vs_official_lean4": {
+              "geomean_speedup_x": 163.39,
+              "max_individual_regression_pct": 0.0,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 434.69,
+                  "candidate_median_ms": 6.6562,
+                  "speedup_x": 65.306,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 1029.9676,
+                  "candidate_median_ms": 28.544,
+                  "speedup_x": 36.0835,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 2984.0008,
+                  "candidate_median_ms": 2.8595,
+                  "speedup_x": 1043.5394,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 80.7222,
+                  "candidate_median_ms": 2.9424,
+                  "speedup_x": 27.4341,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 2498.1682,
+                  "candidate_median_ms": 4.0891,
+                  "speedup_x": 610.9335,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 1121.6311,
+                  "candidate_median_ms": 2.4297,
+                  "speedup_x": 461.6336,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            },
+            "vs_cpp_o3": {
+              "geomean_speedup_x": 7.9261,
+              "max_individual_regression_pct": 5.2236,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 663.7698,
+                  "candidate_median_ms": 6.6562,
+                  "speedup_x": 99.722,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 27.127,
+                  "candidate_median_ms": 28.544,
+                  "speedup_x": 0.9504,
+                  "regression_pct": 5.2236,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 18.5697,
+                  "candidate_median_ms": 2.8595,
+                  "speedup_x": 6.494,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 13.8382,
+                  "candidate_median_ms": 2.9424,
+                  "speedup_x": 4.703,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 1e-06,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 24.6402,
+                  "candidate_median_ms": 4.0891,
+                  "speedup_x": 6.0258,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 34.5388,
+                  "candidate_median_ms": 2.4297,
+                  "speedup_x": 14.2153,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            }
+          },
+          "lean_native_hybrid": {
+            "vs_official_lean4": {
+              "geomean_speedup_x": 165.0237,
+              "max_individual_regression_pct": 0.0,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 434.69,
+                  "candidate_median_ms": 6.6562,
+                  "speedup_x": 65.306,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 1029.9676,
+                  "candidate_median_ms": 26.89,
+                  "speedup_x": 38.303,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 2984.0008,
+                  "candidate_median_ms": 2.8595,
+                  "speedup_x": 1043.5394,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 80.7222,
+                  "candidate_median_ms": 2.9424,
+                  "speedup_x": 27.4341,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 2498.1682,
+                  "candidate_median_ms": 4.0891,
+                  "speedup_x": 610.9335,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 1121.6311,
+                  "candidate_median_ms": 2.4297,
+                  "speedup_x": 461.6336,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            },
+            "vs_cpp_o3": {
+              "geomean_speedup_x": 8.0053,
+              "max_individual_regression_pct": 0.0,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 663.7698,
+                  "candidate_median_ms": 6.6562,
+                  "speedup_x": 99.722,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 27.127,
+                  "candidate_median_ms": 26.89,
+                  "speedup_x": 1.0088,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.443289,
+                  "p_value_welch_t": 0.615373,
+                  "statistically_significant": false
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 18.5697,
+                  "candidate_median_ms": 2.8595,
+                  "speedup_x": 6.494,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 13.8382,
+                  "candidate_median_ms": 2.9424,
+                  "speedup_x": 4.703,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 1e-06,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 24.6402,
+                  "candidate_median_ms": 4.0891,
+                  "speedup_x": 6.0258,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 34.5388,
+                  "candidate_median_ms": 2.4297,
+                  "speedup_x": 14.2153,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ashur": {
+      "host": "ashur",
+      "arch": "x86_64",
+      "cpu_model": "Intel(R) Core(TM) i7-7700 CPU @ 3.60GHz (8 threads)",
+      "gpu_model": null,
+      "trials": 7,
+      "compile_times_ms": {
+        "official_lean4": 1202.0,
+        "cpp_o3": 1096.0,
+        "lean_native_cpu": 182.0,
+        "lean_native_hybrid": 182.0
+      },
+      "peak_rss_kb": {
+        "official_lean4": 2021688,
+        "cpp_o3": 265616,
+        "lean_native_cpu": 263756,
+        "lean_native_hybrid": 263756
+      },
+      "raw_times_ms": {
+        "official_lean4": {
+          "collatz_steps": [
+            632.251858,
+            621.468825,
+            636.147529,
+            650.758385,
+            630.850459,
+            635.751266,
+            633.95532
+          ],
+          "tuple_accum_sum": [
+            2076.869932,
+            2053.616276,
+            2051.143708,
+            2073.994108,
+            2064.51948,
+            2069.270285,
+            2051.672036
+          ],
+          "sarray_scale_bias": [
+            529.866236,
+            525.893184,
+            521.201092,
+            518.066216,
+            528.125797,
+            519.418146,
+            518.508916
+          ],
+          "dot_product_u64": [
+            83.78526,
+            83.13048,
+            82.986461,
+            83.088949,
+            83.160841,
+            82.83318,
+            82.624947
+          ],
+          "saxpy_kernel": [
+            357.580778,
+            362.470528,
+            355.937274,
+            362.319975,
+            355.950045,
+            356.812671,
+            355.247513
+          ],
+          "matmul_tiled_u64": [
+            2373.754733,
+            2382.14542,
+            2385.452602,
+            2415.123251,
+            2403.387279,
+            2372.451256,
+            2384.172579
+          ],
+          "holdout_bitwise": [
+            13.55124,
+            13.564914,
+            13.570576,
+            13.814011,
+            13.840703,
+            13.539427,
+            13.866419
+          ],
+          "holdout_loop_bounds": [
+            12.38308,
+            12.468574,
+            12.502815,
+            12.707439,
+            12.822607,
+            12.472655,
+            12.739796
+          ]
+        },
+        "cpp_o3": {
+          "collatz_steps": [
+            1159.2393,
+            1159.2896,
+            1158.5939,
+            1146.1485,
+            1156.1479,
+            1139.5524,
+            1138.6183
+          ],
+          "tuple_accum_sum": [
+            37.6214,
+            37.6695,
+            37.6404,
+            37.1287,
+            37.8386,
+            36.9513,
+            36.8937
+          ],
+          "sarray_scale_bias": [
+            12.9467,
+            12.8972,
+            12.8647,
+            12.7115,
+            12.9325,
+            12.8431,
+            12.7754
+          ],
+          "dot_product_u64": [
+            8.3172,
+            8.2708,
+            8.2565,
+            8.212,
+            8.3231,
+            8.0843,
+            8.13
+          ],
+          "saxpy_kernel": [
+            16.7863,
+            16.5925,
+            16.4954,
+            16.5787,
+            16.8267,
+            16.3878,
+            16.4187
+          ],
+          "matmul_tiled_u64": [
+            44.19,
+            42.2798,
+            43.6164,
+            44.4614,
+            43.6641,
+            44.2464,
+            43.6672
+          ],
+          "holdout_bitwise": [
+            12.5855,
+            12.4537,
+            12.4593,
+            12.5583,
+            12.5631,
+            12.3461,
+            12.407
+          ],
+          "holdout_loop_bounds": [
+            11.4858,
+            11.3446,
+            11.2899,
+            11.3905,
+            11.4852,
+            11.1772,
+            11.3421
+          ]
+        },
+        "lean_native_cpu": {
+          "collatz_steps": [
+            433.5421,
+            431.542,
+            434.8677,
+            433.9147,
+            433.2411,
+            432.8052,
+            432.3785
+          ],
+          "tuple_accum_sum": [
+            32.275,
+            32.2632,
+            32.4465,
+            32.1849,
+            31.9516,
+            32.127,
+            32.2559
+          ],
+          "sarray_scale_bias": [
+            7.6516,
+            7.6775,
+            7.9566,
+            7.9221,
+            7.7745,
+            7.8573,
+            7.8249
+          ],
+          "dot_product_u64": [
+            7.6605,
+            8.2269,
+            8.2449,
+            8.408,
+            8.1198,
+            8.3184,
+            8.2988
+          ],
+          "saxpy_kernel": [
+            16.5881,
+            17.1454,
+            17.6138,
+            17.5076,
+            17.409,
+            17.4086,
+            17.3384
+          ],
+          "matmul_tiled_u64": [
+            62.8405,
+            62.3588,
+            40.2371,
+            47.0503,
+            52.1409,
+            45.5259,
+            41.4916
+          ],
+          "holdout_bitwise": [
+            14.5841,
+            14.5772,
+            14.5454,
+            14.574,
+            14.5445,
+            14.515,
+            14.6039
+          ],
+          "holdout_loop_bounds": [
+            14.0643,
+            13.9857,
+            14.1196,
+            14.1164,
+            14.036,
+            14.037,
+            14.0414
+          ]
+        },
+        "lean_native_hybrid": {
+          "collatz_steps": [
+            433.5421,
+            431.542,
+            434.8677,
+            433.9147,
+            433.2411,
+            432.8052,
+            432.3785
+          ],
+          "tuple_accum_sum": [
+            32.275,
+            32.2632,
+            32.4465,
+            32.1849,
+            31.9516,
+            32.127,
+            32.2559
+          ],
+          "sarray_scale_bias": [
+            7.6516,
+            7.6775,
+            7.9566,
+            7.9221,
+            7.7745,
+            7.8573,
+            7.8249
+          ],
+          "dot_product_u64": [
+            7.6605,
+            8.2269,
+            8.2449,
+            8.408,
+            8.1198,
+            8.3184,
+            8.2988
+          ],
+          "saxpy_kernel": [
+            16.5881,
+            17.1454,
+            17.6138,
+            17.5076,
+            17.409,
+            17.4086,
+            17.3384
+          ],
+          "matmul_tiled_u64": [
+            62.8405,
+            62.3588,
+            40.2371,
+            47.0503,
+            52.1409,
+            45.5259,
+            41.4916
+          ],
+          "holdout_bitwise": [
+            14.5841,
+            14.5772,
+            14.5454,
+            14.574,
+            14.5445,
+            14.515,
+            14.6039
+          ],
+          "holdout_loop_bounds": [
+            14.0643,
+            13.9857,
+            14.1196,
+            14.1164,
+            14.036,
+            14.037,
+            14.0414
+          ]
+        }
+      },
+      "checksums": {
+        "official_lean4": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "cpp_o3": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "lean_native_cpu": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        },
+        "lean_native_hybrid": {
+          "collatz_steps": 740438133,
+          "tuple_accum_sum": 2430072077297332099,
+          "sarray_scale_bias": 832419940395999471,
+          "dot_product_u64": 9844157271583257408,
+          "saxpy_kernel": 2559223112370776895,
+          "matmul_tiled_u64": 11211282456894907173,
+          "holdout_bitwise": 17653976101919722312,
+          "holdout_loop_bounds": 2318209942448586758
+        }
+      },
+      "analysis": {
+        "summary_stats": {
+          "official_lean4": {
+            "collatz_steps": {
+              "median_ms": 633.9553,
+              "mean_ms": 634.4548,
+              "std_ms": 8.7281,
+              "iqr_ms": 5.2971,
+              "min_ms": 621.4688,
+              "max_ms": 650.7584
+            },
+            "tuple_accum_sum": {
+              "median_ms": 2064.5195,
+              "mean_ms": 2063.0123,
+              "std_ms": 10.892,
+              "iqr_ms": 22.3221,
+              "min_ms": 2051.1437,
+              "max_ms": 2076.8699
+            },
+            "sarray_scale_bias": {
+              "median_ms": 521.2011,
+              "mean_ms": 523.0114,
+              "std_ms": 4.8711,
+              "iqr_ms": 9.6169,
+              "min_ms": 518.0662,
+              "max_ms": 529.8662
+            },
+            "dot_product_u64": {
+              "median_ms": 83.0889,
+              "mean_ms": 83.0872,
+              "std_ms": 0.3612,
+              "iqr_ms": 0.3277,
+              "min_ms": 82.6249,
+              "max_ms": 83.7853
+            },
+            "saxpy_kernel": {
+              "median_ms": 356.8127,
+              "mean_ms": 358.0455,
+              "std_ms": 3.0619,
+              "iqr_ms": 6.3827,
+              "min_ms": 355.2475,
+              "max_ms": 362.4705
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 2384.1726,
+              "mean_ms": 2388.0696,
+              "std_ms": 15.6658,
+              "iqr_ms": 29.6325,
+              "min_ms": 2372.4513,
+              "max_ms": 2415.1233
+            },
+            "holdout_bitwise": {
+              "median_ms": 13.5706,
+              "mean_ms": 13.6782,
+              "std_ms": 0.1528,
+              "iqr_ms": 0.2895,
+              "min_ms": 13.5394,
+              "max_ms": 13.8664
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 12.5028,
+              "mean_ms": 12.5853,
+              "std_ms": 0.1679,
+              "iqr_ms": 0.2712,
+              "min_ms": 12.3831,
+              "max_ms": 12.8226
+            }
+          },
+          "cpp_o3": {
+            "collatz_steps": {
+              "median_ms": 1156.1479,
+              "mean_ms": 1151.0843,
+              "std_ms": 9.3863,
+              "iqr_ms": 19.6869,
+              "min_ms": 1138.6183,
+              "max_ms": 1159.2896
+            },
+            "tuple_accum_sum": {
+              "median_ms": 37.6214,
+              "mean_ms": 37.3919,
+              "std_ms": 0.3879,
+              "iqr_ms": 0.7182,
+              "min_ms": 36.8937,
+              "max_ms": 37.8386
+            },
+            "sarray_scale_bias": {
+              "median_ms": 12.8647,
+              "mean_ms": 12.853,
+              "std_ms": 0.085,
+              "iqr_ms": 0.1571,
+              "min_ms": 12.7115,
+              "max_ms": 12.9467
+            },
+            "dot_product_u64": {
+              "median_ms": 8.2565,
+              "mean_ms": 8.2277,
+              "std_ms": 0.0914,
+              "iqr_ms": 0.1872,
+              "min_ms": 8.0843,
+              "max_ms": 8.3231
+            },
+            "saxpy_kernel": {
+              "median_ms": 16.5787,
+              "mean_ms": 16.5837,
+              "std_ms": 0.1701,
+              "iqr_ms": 0.3676,
+              "min_ms": 16.3878,
+              "max_ms": 16.8267
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 43.6672,
+              "mean_ms": 43.7322,
+              "std_ms": 0.7231,
+              "iqr_ms": 0.63,
+              "min_ms": 42.2798,
+              "max_ms": 44.4614
+            },
+            "holdout_bitwise": {
+              "median_ms": 12.4593,
+              "mean_ms": 12.4819,
+              "std_ms": 0.0899,
+              "iqr_ms": 0.1561,
+              "min_ms": 12.3461,
+              "max_ms": 12.5855
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 11.3446,
+              "mean_ms": 11.3593,
+              "std_ms": 0.109,
+              "iqr_ms": 0.1953,
+              "min_ms": 11.1772,
+              "max_ms": 11.4858
+            }
+          },
+          "lean_native_cpu": {
+            "collatz_steps": {
+              "median_ms": 433.2411,
+              "mean_ms": 433.1845,
+              "std_ms": 1.0793,
+              "iqr_ms": 1.5362,
+              "min_ms": 431.542,
+              "max_ms": 434.8677
+            },
+            "tuple_accum_sum": {
+              "median_ms": 32.2559,
+              "mean_ms": 32.2149,
+              "std_ms": 0.1523,
+              "iqr_ms": 0.148,
+              "min_ms": 31.9516,
+              "max_ms": 32.4465
+            },
+            "sarray_scale_bias": {
+              "median_ms": 7.8249,
+              "mean_ms": 7.8092,
+              "std_ms": 0.1158,
+              "iqr_ms": 0.2446,
+              "min_ms": 7.6516,
+              "max_ms": 7.9566
+            },
+            "dot_product_u64": {
+              "median_ms": 8.2449,
+              "mean_ms": 8.1825,
+              "std_ms": 0.2467,
+              "iqr_ms": 0.1986,
+              "min_ms": 7.6605,
+              "max_ms": 8.408
+            },
+            "saxpy_kernel": {
+              "median_ms": 17.4086,
+              "mean_ms": 17.2873,
+              "std_ms": 0.3407,
+              "iqr_ms": 0.3622,
+              "min_ms": 16.5881,
+              "max_ms": 17.6138
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 47.0503,
+              "mean_ms": 50.235,
+              "std_ms": 9.2937,
+              "iqr_ms": 20.8672,
+              "min_ms": 40.2371,
+              "max_ms": 62.8405
+            },
+            "holdout_bitwise": {
+              "median_ms": 14.574,
+              "mean_ms": 14.5634,
+              "std_ms": 0.03,
+              "iqr_ms": 0.0396,
+              "min_ms": 14.515,
+              "max_ms": 14.6039
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 14.0414,
+              "mean_ms": 14.0572,
+              "std_ms": 0.0477,
+              "iqr_ms": 0.0804,
+              "min_ms": 13.9857,
+              "max_ms": 14.1196
+            }
+          },
+          "lean_native_hybrid": {
+            "collatz_steps": {
+              "median_ms": 433.2411,
+              "mean_ms": 433.1845,
+              "std_ms": 1.0793,
+              "iqr_ms": 1.5362,
+              "min_ms": 431.542,
+              "max_ms": 434.8677
+            },
+            "tuple_accum_sum": {
+              "median_ms": 32.2559,
+              "mean_ms": 32.2149,
+              "std_ms": 0.1523,
+              "iqr_ms": 0.148,
+              "min_ms": 31.9516,
+              "max_ms": 32.4465
+            },
+            "sarray_scale_bias": {
+              "median_ms": 7.8249,
+              "mean_ms": 7.8092,
+              "std_ms": 0.1158,
+              "iqr_ms": 0.2446,
+              "min_ms": 7.6516,
+              "max_ms": 7.9566
+            },
+            "dot_product_u64": {
+              "median_ms": 8.2449,
+              "mean_ms": 8.1825,
+              "std_ms": 0.2467,
+              "iqr_ms": 0.1986,
+              "min_ms": 7.6605,
+              "max_ms": 8.408
+            },
+            "saxpy_kernel": {
+              "median_ms": 17.4086,
+              "mean_ms": 17.2873,
+              "std_ms": 0.3407,
+              "iqr_ms": 0.3622,
+              "min_ms": 16.5881,
+              "max_ms": 17.6138
+            },
+            "matmul_tiled_u64": {
+              "median_ms": 47.0503,
+              "mean_ms": 50.235,
+              "std_ms": 9.2937,
+              "iqr_ms": 20.8672,
+              "min_ms": 40.2371,
+              "max_ms": 62.8405
+            },
+            "holdout_bitwise": {
+              "median_ms": 14.574,
+              "mean_ms": 14.5634,
+              "std_ms": 0.03,
+              "iqr_ms": 0.0396,
+              "min_ms": 14.515,
+              "max_ms": 14.6039
+            },
+            "holdout_loop_bounds": {
+              "median_ms": 14.0414,
+              "mean_ms": 14.0572,
+              "std_ms": 0.0477,
+              "iqr_ms": 0.0804,
+              "min_ms": 13.9857,
+              "max_ms": 14.1196
+            }
+          }
+        },
+        "comparisons": {
+          "lean_native_cpu": {
+            "vs_official_lean4": {
+              "geomean_speedup_x": 20.0668,
+              "max_individual_regression_pct": 0.0,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 633.9553,
+                  "candidate_median_ms": 433.2411,
+                  "speedup_x": 1.4633,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 2064.5195,
+                  "candidate_median_ms": 32.2559,
+                  "speedup_x": 64.0044,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 521.2011,
+                  "candidate_median_ms": 7.8249,
+                  "speedup_x": 66.608,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 83.0889,
+                  "candidate_median_ms": 8.2449,
+                  "speedup_x": 10.0776,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 356.8127,
+                  "candidate_median_ms": 17.4086,
+                  "speedup_x": 20.4963,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 2384.1726,
+                  "candidate_median_ms": 47.0503,
+                  "speedup_x": 50.6728,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            },
+            "vs_cpp_o3": {
+              "geomean_speedup_x": 1.2863,
+              "max_individual_regression_pct": 7.7475,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 1156.1479,
+                  "candidate_median_ms": 433.2411,
+                  "speedup_x": 2.6686,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 37.6214,
+                  "candidate_median_ms": 32.2559,
+                  "speedup_x": 1.1663,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 12.8647,
+                  "candidate_median_ms": 7.8249,
+                  "speedup_x": 1.6441,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 8.2565,
+                  "candidate_median_ms": 8.2449,
+                  "speedup_x": 1.0014,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 1.0,
+                  "p_value_welch_t": 0.649218,
+                  "statistically_significant": false
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 16.5787,
+                  "candidate_median_ms": 17.4086,
+                  "speedup_x": 0.9523,
+                  "regression_pct": 5.0058,
+                  "p_value_mann_whitney_u": 0.00729,
+                  "p_value_welch_t": 1e-06,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 43.6672,
+                  "candidate_median_ms": 47.0503,
+                  "speedup_x": 0.9281,
+                  "regression_pct": 7.7475,
+                  "p_value_mann_whitney_u": 0.201336,
+                  "p_value_welch_t": 0.064942,
+                  "statistically_significant": false
+                }
+              }
+            }
+          },
+          "lean_native_hybrid": {
+            "vs_official_lean4": {
+              "geomean_speedup_x": 20.0668,
+              "max_individual_regression_pct": 0.0,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 633.9553,
+                  "candidate_median_ms": 433.2411,
+                  "speedup_x": 1.4633,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 2064.5195,
+                  "candidate_median_ms": 32.2559,
+                  "speedup_x": 64.0044,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 521.2011,
+                  "candidate_median_ms": 7.8249,
+                  "speedup_x": 66.608,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 83.0889,
+                  "candidate_median_ms": 8.2449,
+                  "speedup_x": 10.0776,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 356.8127,
+                  "candidate_median_ms": 17.4086,
+                  "speedup_x": 20.4963,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 2384.1726,
+                  "candidate_median_ms": 47.0503,
+                  "speedup_x": 50.6728,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                }
+              }
+            },
+            "vs_cpp_o3": {
+              "geomean_speedup_x": 1.2863,
+              "max_individual_regression_pct": 7.7475,
+              "per_benchmark": {
+                "collatz_steps": {
+                  "baseline_median_ms": 1156.1479,
+                  "candidate_median_ms": 433.2411,
+                  "speedup_x": 2.6686,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "tuple_accum_sum": {
+                  "baseline_median_ms": 37.6214,
+                  "candidate_median_ms": 32.2559,
+                  "speedup_x": 1.1663,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "sarray_scale_bias": {
+                  "baseline_median_ms": 12.8647,
+                  "candidate_median_ms": 7.8249,
+                  "speedup_x": 1.6441,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 0.002165,
+                  "p_value_welch_t": 0.0,
+                  "statistically_significant": true
+                },
+                "dot_product_u64": {
+                  "baseline_median_ms": 8.2565,
+                  "candidate_median_ms": 8.2449,
+                  "speedup_x": 1.0014,
+                  "regression_pct": 0.0,
+                  "p_value_mann_whitney_u": 1.0,
+                  "p_value_welch_t": 0.649218,
+                  "statistically_significant": false
+                },
+                "saxpy_kernel": {
+                  "baseline_median_ms": 16.5787,
+                  "candidate_median_ms": 17.4086,
+                  "speedup_x": 0.9523,
+                  "regression_pct": 5.0058,
+                  "p_value_mann_whitney_u": 0.00729,
+                  "p_value_welch_t": 1e-06,
+                  "statistically_significant": true
+                },
+                "matmul_tiled_u64": {
+                  "baseline_median_ms": 43.6672,
+                  "candidate_median_ms": 47.0503,
+                  "speedup_x": 0.9281,
+                  "regression_pct": 7.7475,
+                  "p_value_mann_whitney_u": 0.201336,
+                  "p_value_welch_t": 0.064942,
+                  "statistically_significant": false
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+.lake/
+build/
+*.o
+*.so
+*.a
+*.bc
+*.ll.out
+*.ptx.out
+*.cubin
+*.fatbin
+/tmp/
+__pycache__/
+*.pyc
+.DS_Store
+benchmarks/results/*.raw.json
+autoresearch/worktrees/

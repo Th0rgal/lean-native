@@ -1,0 +1,254 @@
+/*
+ * bench_cpp.cpp
+ * Reference C++20 (-O3) baseline for the lean-native Cross-Architecture Benchmark Suite.
+ *
+ * Implements the 6 core benchmarks with exact deterministic 64-bit outputs:
+ *   1. collatz_steps     (N = 5,000,000)
+ *   2. tuple_accum_sum   (N = 50,000,000)
+ *   3. sarray_scale_bias (N = 10,000,000)
+ *   4. dot_product_u64   (N = 10,000,000)
+ *   5. saxpy_kernel      (N = 16,777,216)
+ *   6. matmul_tiled_u64  (M = N = K = 512)
+ *   7. holdout_VerifyBitwiseFold (N = 10,000,000)
+ *   8. holdout_VerifyLoopBounds  (N = 10,000,000)
+ */
+
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+static inline uint64_t fnv1a_u64(uint64_t h, uint64_t val) {
+    return (h ^ val) * 1099511628211ULL;
+}
+
+static constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+
+// 1. collatz_steps (N = 5,000,000)
+// Scalar arithmetic, branches, strength reduction (n / 2 -> n >> 1, n % 2 -> n & 1)
+uint64_t bench_collatz_steps(uint64_t N) {
+    uint64_t total_steps = 0;
+    for (uint64_t i = 1; i <= N; ++i) {
+        uint64_t x = i;
+        uint64_t steps = 0;
+        while (x > 1) {
+            if ((x & 1ULL) == 0ULL) {
+                x >>= 1;
+            } else {
+                x = 3ULL * x + 1ULL;
+            }
+            steps++;
+        }
+        total_steps += steps;
+    }
+    return total_steps;
+}
+
+// 2. tuple_accum_sum (N = 50,000,000)
+// Unboxed register tuple state transition (a, b) -> (a + (i ^ b), b + (i * 3 + 1))
+uint64_t bench_tuple_accum_sum(uint64_t N) {
+    uint64_t a = 1ULL;
+    uint64_t b = 2ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t next_a = a + (i ^ b);
+        uint64_t next_b = b + (i * 3ULL + 1ULL);
+        a = next_a;
+        b = next_b;
+    }
+    return a ^ b;
+}
+
+// 3. sarray_scale_bias (N = 10,000,000)
+// Contiguous array mutation: arr[i] = arr[i] * 3 + 7 (2 passes)
+uint64_t bench_sarray_scale_bias(uint64_t N, uint64_t* arr) {
+    for (uint64_t pass = 0; pass < 2; ++pass) {
+        for (uint64_t i = 0; i < N; ++i) {
+            arr[i] = arr[i] * 3ULL + 7ULL;
+        }
+    }
+    uint64_t h = FNV_OFFSET;
+    for (uint64_t i = 0; i < N; i += 64) {
+        h = fnv1a_u64(h, arr[i]);
+    }
+    h = fnv1a_u64(h, arr[N - 1]);
+    return h;
+}
+
+// 4. dot_product_u64 (N = 10,000,000)
+// Contiguous scalar dot product
+uint64_t bench_dot_product_u64(uint64_t N, const uint64_t* __restrict__ A, const uint64_t* __restrict__ B) {
+    uint64_t sum = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        sum += A[i] * B[i];
+    }
+    return sum;
+}
+
+// 5. saxpy_kernel (N = 16,777,216)
+// Y[i] = alpha * X[i] + Y[i] in deterministic 64-bit integer / fixed-point arithmetic
+uint64_t bench_saxpy_kernel(uint64_t N, uint64_t alpha, const uint64_t* __restrict__ X, uint64_t* __restrict__ Y) {
+    for (uint64_t i = 0; i < N; ++i) {
+        Y[i] = alpha * X[i] + Y[i];
+    }
+    uint64_t h = FNV_OFFSET;
+    for (uint64_t i = 0; i < N; i += 256) {
+        h = fnv1a_u64(h, Y[i]);
+    }
+    h = fnv1a_u64(h, Y[N - 1]);
+    return h;
+}
+
+// 6. matmul_tiled_u64 (M = N = K = 512)
+// Dense 512x512 matrix multiplication with 32x32 cache tiling
+uint64_t bench_matmul_tiled_u64(uint64_t M, const uint64_t* __restrict__ A, const uint64_t* __restrict__ B, uint64_t* __restrict__ C) {
+    std::memset(C, 0, M * M * sizeof(uint64_t));
+    constexpr uint64_t TILE = 32;
+    for (uint64_t i0 = 0; i0 < M; i0 += TILE) {
+        for (uint64_t k0 = 0; k0 < M; k0 += TILE) {
+            for (uint64_t j0 = 0; j0 < M; j0 += TILE) {
+                for (uint64_t i = i0; i < i0 + TILE && i < M; ++i) {
+                    for (uint64_t k = k0; k < k0 + TILE && k < M; ++k) {
+                        uint64_t a_ik = A[i * M + k];
+                        for (uint64_t j = j0; j < j0 + TILE && j < M; ++j) {
+                            C[i * M + j] += a_ik * B[k * M + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    uint64_t h = FNV_OFFSET;
+    for (uint64_t idx = 0; idx < M * M; ++idx) {
+        h = fnv1a_u64(h, C[idx]);
+    }
+    return h;
+}
+
+// Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
+uint64_t bench_holdout_bitwise(uint64_t N) {
+    uint64_t acc = 0x123456789ABCDEF0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t x = i + acc;
+        // Tests algebraic identity & strength reduction: (x * 8) + (x & x) - (x ^ x) + (x / 4)
+        uint64_t v = (x << 3) + x + (x >> 2);
+        acc ^= v + (i * 17ULL);
+    }
+    return acc;
+}
+
+// Holdout 2: holdout_VerifyLoopBounds (N = 10,000,000)
+uint64_t bench_holdout_loop_bounds(uint64_t N) {
+    uint64_t sum1 = 0ULL;
+    uint64_t sum2 = 1ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        sum1 += (i * 5ULL + 3ULL) ^ (sum2 & 0xFFULL);
+        sum2 = (sum2 * 13ULL + i) ^ (sum1 >> 3);
+    }
+    return sum1 ^ sum2;
+}
+
+static double now_ms() {
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    return std::chrono::duration<double, std::milli>(now).count();
+}
+
+int main(int argc, char** argv) {
+    std::string filter = (argc > 1) ? argv[1] : "all";
+
+    if (filter == "all" || filter == "collatz_steps") {
+        uint64_t N = 5000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_collatz_steps(N);
+        double t1 = now_ms();
+        std::printf("BENCH collatz_steps checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "tuple_accum_sum") {
+        uint64_t N = 50000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_tuple_accum_sum(N);
+        double t1 = now_ms();
+        std::printf("BENCH tuple_accum_sum checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "sarray_scale_bias") {
+        uint64_t N = 10000000ULL;
+        std::vector<uint64_t> arr(N);
+        for (uint64_t i = 0; i < N; ++i) {
+            arr[i] = (i * 6364136223846793005ULL + 1442695040888963407ULL);
+        }
+        double t0 = now_ms();
+        uint64_t c = bench_sarray_scale_bias(N, arr.data());
+        double t1 = now_ms();
+        std::printf("BENCH sarray_scale_bias checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "dot_product_u64") {
+        uint64_t N = 10000000ULL;
+        std::vector<uint64_t> A(N), B(N);
+        for (uint64_t i = 0; i < N; ++i) {
+            A[i] = (i * 11400714819323198485ULL + 1ULL) & 0xFFFFFFFFULL;
+            B[i] = (i * 14029467366897019727ULL + 3ULL) & 0xFFFFFFFFULL;
+        }
+        double t0 = now_ms();
+        uint64_t c = bench_dot_product_u64(N, A.data(), B.data());
+        double t1 = now_ms();
+        std::printf("BENCH dot_product_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "saxpy_kernel") {
+        uint64_t N = 16777216ULL;
+        uint64_t alpha = 314159ULL;
+        std::vector<uint64_t> X(N), Y(N);
+        for (uint64_t i = 0; i < N; ++i) {
+            X[i] = i * 2654435761ULL + 7ULL;
+            Y[i] = i * 2246822519ULL + 13ULL;
+        }
+        double t0 = now_ms();
+        uint64_t c = bench_saxpy_kernel(N, alpha, X.data(), Y.data());
+        double t1 = now_ms();
+        std::printf("BENCH saxpy_kernel checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "matmul_tiled_u64") {
+        uint64_t M = 512ULL;
+        std::vector<uint64_t> A(M * M), B(M * M), C(M * M);
+        for (uint64_t i = 0; i < M * M; ++i) {
+            A[i] = (i * 6364136223846793005ULL + 1ULL) & 0xFFFFULL;
+            B[i] = (i * 2862933555777941757ULL + 3ULL) & 0xFFFFULL;
+        }
+        double t0 = now_ms();
+        uint64_t c = bench_matmul_tiled_u64(M, A.data(), B.data(), C.data());
+        double t1 = now_ms();
+        std::printf("BENCH matmul_tiled_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "holdout_bitwise") {
+        uint64_t N = 10000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_holdout_bitwise(N);
+        double t1 = now_ms();
+        std::printf("BENCH holdout_bitwise checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "holdout_loop_bounds") {
+        uint64_t N = 10000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_holdout_loop_bounds(N);
+        double t1 = now_ms();
+        std::printf("BENCH holdout_loop_bounds checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    return 0;
+}
