@@ -29,12 +29,13 @@ def cpuTriple : TargetArch → String
   | _      => "x86_64-unknown-linux-gnu"
 
 /-- Canonical LLVM storage type used for SSA variable slots inside function bodies.
-    All scalar values are stored as `i64` in variable slots, and pointers/arrays/tuples as `ptr` or `i64`
-    to guarantee uniform type safety across arbitrary ANF control flow. -/
+    Scalar 64-bit values are stored as `i64`, 256-bit EVM values (`.u256`, `.i256`) as `i256`,
+    and pointers/arrays/storageMaps as `ptr` to guarantee uniform type safety across ANF control flow. -/
 def slotLLVMType : LNIRType → String
-  | .objPtr | .taggedPtr | .sarray _ | .rawPtr _ => "ptr"
+  | .objPtr | .taggedPtr | .sarray _ | .rawPtr _ | .storageMap => "ptr"
+  | .u256 | .i256 => "i256"
   | .tuple fs =>
-    let inner := String.intercalate ", " (fs.map fun _ => "i64")
+    let inner := String.intercalate ", " (fs.map fun f => if f.is256Bit then "i256" else "i64")
     "{ " ++ inner ++ " }"
   | _ => "i64"
 
@@ -53,6 +54,11 @@ partial def collectScalarVars : ScalarExpr → List (VarId × LNIRType)
 
 def collectExprVars : LNIRExpr → List (VarId × LNIRType)
   | .scalar e => collectScalarVars e
+  | .constU256 _ => []
+  | .mulDivDown a b d => [(a, .u256), (b, .u256), (d, .u256)]
+  | .mulDivUp a b d => [(a, .u256), (b, .u256), (d, .u256)]
+  | .storageLoad m s => [(m, .storageMap), (s, .u256)]
+  | .storageStore m s v => [(m, .storageMap), (s, .u256), (v, .u256)]
   | .mkTuple fs => fs.map (fun v => (v, .i64))
   | .projTuple tv _ => [(tv, .tuple [.i64, .i64])]
   | .allocCtor _ ofs sfs => ofs.map (fun v => (v, .objPtr)) ++ sfs.map (fun v => (v, .i64))
@@ -126,7 +132,7 @@ def getVarSlotType (vid : VarId) : EmitM LNIRType := do
   let st ← get
   return (st.varTypes.lookup vid).getD .i64
 
-/-- Load a `VarId` as an `i64` SSA value (converting `ptr` via `ptrtoint` if necessary). -/
+/-- Load a `VarId` as an `i64` SSA value (converting `ptr` via `ptrtoint` or `i256` via `trunc` if necessary). -/
 def loadVarAsI64 (vid : VarId) : EmitM String := do
   let ty ← getVarSlotType vid
   let llvmTy := slotLLVMType ty
@@ -134,6 +140,10 @@ def loadVarAsI64 (vid : VarId) : EmitM String := do
   emitLine s!"  {raw} = load {llvmTy}, ptr %slot_v{vid}, align 8"
   if llvmTy == "i64" then
     return raw
+  else if llvmTy == "i256" then
+    let c ← freshTmp "tr64"
+    emitLine s!"  {c} = trunc i256 {raw} to i64"
+    return c
   else if llvmTy == "ptr" then
     let c ← freshTmp "p2i"
     emitLine s!"  {c} = ptrtoint ptr {raw} to i64"
@@ -141,6 +151,31 @@ def loadVarAsI64 (vid : VarId) : EmitM String := do
   else
     let c ← freshTmp "extr"
     emitLine s!"  {c} = extractvalue {llvmTy} {raw}, 0"
+    return c
+
+/-- Load a `VarId` as an `i256` SSA value (converting `i64` via `zext` if necessary). -/
+def loadVarAsI256 (vid : VarId) : EmitM String := do
+  let ty ← getVarSlotType vid
+  let llvmTy := slotLLVMType ty
+  let raw ← freshTmp "ld256"
+  emitLine s!"  {raw} = load {llvmTy}, ptr %slot_v{vid}, align 8"
+  if llvmTy == "i256" then
+    return raw
+  else if llvmTy == "i64" then
+    let c ← freshTmp "zext256"
+    emitLine s!"  {c} = zext i64 {raw} to i256"
+    return c
+  else if llvmTy == "ptr" then
+    let p2i ← freshTmp "p2i"
+    let c ← freshTmp "zext256"
+    emitLine s!"  {p2i} = ptrtoint ptr {raw} to i64"
+    emitLine s!"  {c} = zext i64 {p2i} to i256"
+    return c
+  else
+    let extr ← freshTmp "extr"
+    let c ← freshTmp "zext256"
+    emitLine s!"  {extr} = extractvalue {llvmTy} {raw}, 0"
+    emitLine s!"  {c} = zext i64 {extr} to i256"
     return c
 
 /-- Load a `VarId` as an LLVM `ptr` SSA value (converting `i64` via `inttoptr` if necessary). -/
@@ -155,6 +190,12 @@ def loadVarAsPtr (vid : VarId) : EmitM String := do
     let c ← freshTmp "i2p"
     emitLine s!"  {c} = inttoptr i64 {raw} to ptr"
     return c
+  else if llvmTy == "i256" then
+    let tr ← freshTmp "tr64"
+    let c ← freshTmp "i2p"
+    emitLine s!"  {tr} = trunc i256 {raw} to i64"
+    emitLine s!"  {c} = inttoptr i64 {tr} to ptr"
+    return c
   else
     return "null"
 
@@ -164,12 +205,35 @@ def storeI64ToVar (dst : VarId) (valI64 : String) : EmitM Unit := do
   let llvmTy := slotLLVMType ty
   if llvmTy == "i64" then
     emitLine s!"  store i64 {valI64}, ptr %slot_v{dst}, align 8"
+  else if llvmTy == "i256" then
+    let z ← freshTmp "zext256"
+    emitLine s!"  {z} = zext i64 {valI64} to i256"
+    emitLine s!"  store i256 {z}, ptr %slot_v{dst}, align 8"
   else if llvmTy == "ptr" then
     let p ← freshTmp "i2p"
     emitLine s!"  {p} = inttoptr i64 {valI64} to ptr"
     emitLine s!"  store ptr {p}, ptr %slot_v{dst}, align 8"
   else
     emitLine s!"  ; tuple slot %slot_v{dst} skipped scalar store"
+
+/-- Store an `i256` SSA value into `%slot_v{dst}`, coercing to the slot's type if needed. -/
+def storeI256ToVar (dst : VarId) (valI256 : String) : EmitM Unit := do
+  let ty ← getVarSlotType dst
+  let llvmTy := slotLLVMType ty
+  if llvmTy == "i256" then
+    emitLine s!"  store i256 {valI256}, ptr %slot_v{dst}, align 8"
+  else if llvmTy == "i64" then
+    let tr ← freshTmp "tr64"
+    emitLine s!"  {tr} = trunc i256 {valI256} to i64"
+    emitLine s!"  store i64 {tr}, ptr %slot_v{dst}, align 8"
+  else if llvmTy == "ptr" then
+    let tr ← freshTmp "tr64"
+    let p ← freshTmp "i2p"
+    emitLine s!"  {tr} = trunc i256 {valI256} to i64"
+    emitLine s!"  {p} = inttoptr i64 {tr} to ptr"
+    emitLine s!"  store ptr {p}, ptr %slot_v{dst}, align 8"
+  else
+    emitLine s!"  ; tuple slot %slot_v{dst} skipped i256 store"
 
 /-- Store a `ptr` SSA value into `%slot_v{dst}`, coercing to the slot's type if needed. -/
 def storePtrToVar (dst : VarId) (valPtr : String) : EmitM Unit := do
@@ -181,6 +245,12 @@ def storePtrToVar (dst : VarId) (valPtr : String) : EmitM Unit := do
     let i ← freshTmp "p2i"
     emitLine s!"  {i} = ptrtoint ptr {valPtr} to i64"
     emitLine s!"  store i64 {i}, ptr %slot_v{dst}, align 8"
+  else if llvmTy == "i256" then
+    let i ← freshTmp "p2i"
+    let z ← freshTmp "zext256"
+    emitLine s!"  {i} = ptrtoint ptr {valPtr} to i64"
+    emitLine s!"  {z} = zext i64 {i} to i256"
+    emitLine s!"  store i256 {z}, ptr %slot_v{dst}, align 8"
   else
     emitLine s!"  ; tuple slot %slot_v{dst} skipped ptr store"
 
@@ -191,6 +261,9 @@ def copyVarSlot (dst src : VarId) : EmitM Unit := do
   if llvmDst == "ptr" then
     let p ← loadVarAsPtr src
     storePtrToVar dst p
+  else if llvmDst == "i256" then
+    let v ← loadVarAsI256 src
+    storeI256ToVar dst v
   else if llvmDst == "i64" then
     let v ← loadVarAsI64 src
     storeI64ToVar dst v
@@ -204,6 +277,161 @@ def copyVarSlot (dst src : VarId) : EmitM Unit := do
     else
       let v ← loadVarAsI64 src
       storeI64ToVar dst v
+
+/-- Check whether a `ScalarExpr` references any 256-bit variable or 256-bit operator. -/
+partial def scalarExprIs256Bit : ScalarExpr → EmitM Bool
+  | .constU64 _ | .constBool _ => return false
+  | .var id => do
+    let ty ← getVarSlotType id
+    return ty.is256Bit
+  | .binOp op l r => do
+    match op with
+    | .addChecked256 | .subChecked256 | .mulChecked256 => return true
+    | _ =>
+      let bl ← scalarExprIs256Bit l
+      if bl then return true else scalarExprIs256Bit r
+  | .unaryOp op a => do
+    match op with
+    | .clz256 => return true
+    | _ => scalarExprIs256Bit a
+  | .select c t e => do
+    let bc ← scalarExprIs256Bit c
+    let bt ← scalarExprIs256Bit t
+    let be ← scalarExprIs256Bit e
+    return bc || bt || be
+  | .fma a b c => do
+    let ba ← scalarExprIs256Bit a
+    let bb ← scalarExprIs256Bit b
+    let bc ← scalarExprIs256Bit c
+    return ba || bb || bc
+
+/-- Lower a `ScalarExpr` into `i256` SSA instructions, returning the resulting `i256` SSA value string. -/
+partial def emitScalarExpr256 (e : ScalarExpr) : EmitM String := do
+  match e with
+  | .constU64 v =>
+    let res ← freshTmp "c256"
+    emitLine s!"  {res} = add i256 0, {v}"
+    return res
+  | .constBool b =>
+    let bit := if b then "1" else "0"
+    let res ← freshTmp "b256"
+    emitLine s!"  {res} = add i256 0, {bit}"
+    return res
+  | .var id =>
+    loadVarAsI256 id
+  | .binOp op lhs rhs =>
+    let lVal ← emitScalarExpr256 lhs
+    let rVal ← emitScalarExpr256 rhs
+    let res ← freshTmp "alu256"
+    match op with
+    | .add =>
+      emitLine s!"  {res} = add i256 {lVal}, {rVal}"
+      return res
+    | .sub =>
+      emitLine s!"  {res} = sub i256 {lVal}, {rVal}"
+      return res
+    | .mul =>
+      emitLine s!"  {res} = mul i256 {lVal}, {rVal}"
+      return res
+    | .div =>
+      let safeR ← freshTmp "div256_rhs"
+      let isZero ← freshTmp "div256_z"
+      emitLine s!"  {isZero} = icmp eq i256 {rVal}, 0"
+      emitLine s!"  {safeR} = select i1 {isZero}, i256 1, i256 {rVal}"
+      emitLine s!"  {res} = udiv i256 {lVal}, {safeR}"
+      return res
+    | .mod =>
+      let safeR ← freshTmp "mod256_rhs"
+      let isZero ← freshTmp "mod256_z"
+      emitLine s!"  {isZero} = icmp eq i256 {rVal}, 0"
+      emitLine s!"  {safeR} = select i1 {isZero}, i256 1, i256 {rVal}"
+      emitLine s!"  {res} = urem i256 {lVal}, {safeR}"
+      return res
+    | .bitAnd =>
+      emitLine s!"  {res} = and i256 {lVal}, {rVal}"
+      return res
+    | .bitOr =>
+      emitLine s!"  {res} = or i256 {lVal}, {rVal}"
+      return res
+    | .bitXor =>
+      emitLine s!"  {res} = xor i256 {lVal}, {rVal}"
+      return res
+    | .shl =>
+      let masked ← freshTmp "sh256_amt"
+      emitLine s!"  {masked} = and i256 {rVal}, 255"
+      emitLine s!"  {res} = shl i256 {lVal}, {masked}"
+      return res
+    | .shr =>
+      let masked ← freshTmp "sh256_amt"
+      emitLine s!"  {masked} = and i256 {rVal}, 255"
+      emitLine s!"  {res} = lshr i256 {lVal}, {masked}"
+      return res
+    | .sar =>
+      let masked ← freshTmp "sar256_amt"
+      emitLine s!"  {masked} = and i256 {rVal}, 255"
+      emitLine s!"  {res} = ashr i256 {lVal}, {masked}"
+      return res
+    | .eq =>
+      let cmp ← freshTmp "cmp256_eq"
+      emitLine s!"  {cmp} = icmp eq i256 {lVal}, {rVal}"
+      emitLine s!"  {res} = zext i1 {cmp} to i256"
+      return res
+    | .lt =>
+      let cmp ← freshTmp "cmp256_lt"
+      emitLine s!"  {cmp} = icmp ult i256 {lVal}, {rVal}"
+      emitLine s!"  {res} = zext i1 {cmp} to i256"
+      return res
+    | .le =>
+      let cmp ← freshTmp "cmp256_le"
+      emitLine s!"  {cmp} = icmp ule i256 {lVal}, {rVal}"
+      emitLine s!"  {res} = zext i1 {cmp} to i256"
+      return res
+    | .addChecked256 =>
+      let ov ← freshTmp "uadd_ov"
+      emitLine s!"  {ov} = call \{ i256, i1 } @llvm.uadd.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+      emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
+      return res
+    | .subChecked256 =>
+      let ov ← freshTmp "usub_ov"
+      emitLine s!"  {ov} = call \{ i256, i1 } @llvm.usub.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+      emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
+      return res
+    | .mulChecked256 =>
+      let ov ← freshTmp "umul_ov"
+      emitLine s!"  {ov} = call \{ i256, i1 } @llvm.umul.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+      emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
+      return res
+  | .unaryOp op arg =>
+    let aVal ← emitScalarExpr256 arg
+    let res ← freshTmp "un256"
+    match op with
+    | .not =>
+      emitLine s!"  {res} = xor i256 {aVal}, -1"
+      return res
+    | .neg =>
+      emitLine s!"  {res} = sub i256 0, {aVal}"
+      return res
+    | .clz256 =>
+      emitLine s!"  {res} = call i256 @llvm.ctlz.i256(i256 {aVal}, i1 false)"
+      return res
+  | .select cond thenVal elseVal =>
+    let cVal ← emitScalarExpr256 cond
+    let tVal ← emitScalarExpr256 thenVal
+    let eVal ← emitScalarExpr256 elseVal
+    let cBool ← freshTmp "sel256_cond"
+    let res ← freshTmp "sel256"
+    emitLine s!"  {cBool} = icmp ne i256 {cVal}, 0"
+    emitLine s!"  {res} = select i1 {cBool}, i256 {tVal}, i256 {eVal}"
+    return res
+  | .fma a b c =>
+    let aVal ← emitScalarExpr256 a
+    let bVal ← emitScalarExpr256 b
+    let cVal ← emitScalarExpr256 c
+    let mulTmp ← freshTmp "fma256_mul"
+    let res ← freshTmp "fma256_add"
+    emitLine s!"  {mulTmp} = mul i256 {aVal}, {bVal}"
+    emitLine s!"  {res} = add i256 {mulTmp}, {cVal}"
+    return res
 
 /-- Lower a `ScalarExpr` into `i64` SSA instructions, returning the resulting `i64` SSA value string. -/
 partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
@@ -263,6 +491,11 @@ partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
       emitLine s!"  {masked} = and i64 {rVal}, 63"
       emitLine s!"  {res} = lshr i64 {lVal}, {masked}"
       return res
+    | .sar =>
+      let masked ← freshTmp "sar_amt"
+      emitLine s!"  {masked} = and i64 {rVal}, 63"
+      emitLine s!"  {res} = ashr i64 {lVal}, {masked}"
+      return res
     | .eq =>
       let cmp ← freshTmp "cmp_eq"
       emitLine s!"  {cmp} = icmp eq i64 {lVal}, {rVal}"
@@ -278,15 +511,26 @@ partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
       emitLine s!"  {cmp} = icmp ule i64 {lVal}, {rVal}"
       emitLine s!"  {res} = zext i1 {cmp} to i64"
       return res
+    | .addChecked256 | .subChecked256 | .mulChecked256 =>
+      let v256 ← emitScalarExpr256 e
+      emitLine s!"  {res} = trunc i256 {v256} to i64"
+      return res
   | .unaryOp op arg =>
-    let aVal ← emitScalarExpr arg
-    let res ← freshTmp "un"
     match op with
     | .not =>
+      let aVal ← emitScalarExpr arg
+      let res ← freshTmp "un"
       emitLine s!"  {res} = xor i64 {aVal}, 1"
       return res
     | .neg =>
+      let aVal ← emitScalarExpr arg
+      let res ← freshTmp "un"
       emitLine s!"  {res} = sub i64 0, {aVal}"
+      return res
+    | .clz256 =>
+      let v256 ← emitScalarExpr256 e
+      let res ← freshTmp "un"
+      emitLine s!"  {res} = trunc i256 {v256} to i64"
       return res
   | .select cond thenVal elseVal =>
     let cVal ← emitScalarExpr cond
@@ -314,8 +558,88 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
   let opt := st.optimized
   match expr with
   | .scalar e =>
-    let val ← emitScalarExpr e
-    storeI64ToVar dst val
+    let is256 ← scalarExprIs256Bit e
+    if ty.is256Bit || is256 then
+      let val256 ← emitScalarExpr256 e
+      storeI256ToVar dst val256
+    else
+      let val ← emitScalarExpr e
+      storeI64ToVar dst val
+  | .constU256 w =>
+    let cVal ← freshTmp "c256"
+    emitLine s!"  {cVal} = add i256 0, {w.toNat}"
+    storeI256ToVar dst cVal
+  | .mulDivDown aVar bVar denomVar =>
+    let aVal ← loadVarAsI256 aVar
+    let bVal ← loadVarAsI256 bVar
+    let dVal ← loadVarAsI256 denomVar
+    let a512 ← freshTmp "zext512_a"
+    let b512 ← freshTmp "zext512_b"
+    let d512 ← freshTmp "zext512_d"
+    let prod512 ← freshTmp "mul512"
+    let isZero ← freshTmp "d512_z"
+    let safeD512 ← freshTmp "safe_d512"
+    let quot512 ← freshTmp "udiv512"
+    let res256 ← freshTmp "trunc256"
+    emitLine s!"  {a512} = zext i256 {aVal} to i512"
+    emitLine s!"  {b512} = zext i256 {bVal} to i512"
+    emitLine s!"  {d512} = zext i256 {dVal} to i512"
+    emitLine s!"  {prod512} = mul nuw i512 {a512}, {b512}"
+    emitLine s!"  {isZero} = icmp eq i512 {d512}, 0"
+    emitLine s!"  {safeD512} = select i1 {isZero}, i512 1, i512 {d512}"
+    emitLine s!"  {quot512} = udiv i512 {prod512}, {safeD512}"
+    emitLine s!"  {res256} = trunc i512 {quot512} to i256"
+    storeI256ToVar dst res256
+  | .mulDivUp aVar bVar denomVar =>
+    let aVal ← loadVarAsI256 aVar
+    let bVal ← loadVarAsI256 bVar
+    let dVal ← loadVarAsI256 denomVar
+    let a512 ← freshTmp "zext512_a"
+    let b512 ← freshTmp "zext512_b"
+    let d512 ← freshTmp "zext512_d"
+    let prod512 ← freshTmp "mul512"
+    let isZero ← freshTmp "d512_z"
+    let safeD512 ← freshTmp "safe_d512"
+    let dMinus1 ← freshTmp "dm1_512"
+    let num512 ← freshTmp "num512"
+    let quot512 ← freshTmp "udiv512"
+    let res256 ← freshTmp "trunc256"
+    emitLine s!"  {a512} = zext i256 {aVal} to i512"
+    emitLine s!"  {b512} = zext i256 {bVal} to i512"
+    emitLine s!"  {d512} = zext i256 {dVal} to i512"
+    emitLine s!"  {prod512} = mul nuw i512 {a512}, {b512}"
+    emitLine s!"  {isZero} = icmp eq i512 {d512}, 0"
+    emitLine s!"  {safeD512} = select i1 {isZero}, i512 1, i512 {d512}"
+    emitLine s!"  {dMinus1} = sub i512 {safeD512}, 1"
+    emitLine s!"  {num512} = add i512 {prod512}, {dMinus1}"
+    emitLine s!"  {quot512} = udiv i512 {num512}, {safeD512}"
+    emitLine s!"  {res256} = trunc i512 {quot512} to i256"
+    storeI256ToVar dst res256
+  | .storageLoad mapVar slotVar =>
+    let mapPtr ← loadVarAsPtr mapVar
+    let slotVal ← loadVarAsI256 slotVar
+    let slotBuf ← freshTmp "sload_slot"
+    let outBuf ← freshTmp "sload_out"
+    let loadedVal ← freshTmp "sload_val"
+    emitLine s!"  {slotBuf} = alloca i256, align 8"
+    emitLine s!"  {outBuf} = alloca i256, align 8"
+    emitLine s!"  store i256 {slotVal}, ptr {slotBuf}, align 8"
+    emitLine s!"  store i256 0, ptr {outBuf}, align 8"
+    emitLine s!"  call void @lean_native_evm_sload(ptr {mapPtr}, ptr {slotBuf}, ptr {outBuf})"
+    emitLine s!"  {loadedVal} = load i256, ptr {outBuf}, align 8"
+    storeI256ToVar dst loadedVal
+  | .storageStore mapVar slotVar valVar =>
+    let mapPtr ← loadVarAsPtr mapVar
+    let slotVal ← loadVarAsI256 slotVar
+    let val256 ← loadVarAsI256 valVar
+    let slotBuf ← freshTmp "sstore_slot"
+    let valBuf ← freshTmp "sstore_val"
+    emitLine s!"  {slotBuf} = alloca i256, align 8"
+    emitLine s!"  {valBuf} = alloca i256, align 8"
+    emitLine s!"  store i256 {slotVal}, ptr {slotBuf}, align 8"
+    emitLine s!"  store i256 {val256}, ptr {valBuf}, align 8"
+    emitLine s!"  call void @lean_native_evm_sstore(ptr {mapPtr}, ptr {slotBuf}, ptr {valBuf})"
+    storePtrToVar dst mapPtr
   | .mkTuple fields =>
     let dstSlotTy ← getVarSlotType dst
     let llvmTy := slotLLVMType dstSlotTy
@@ -488,12 +812,17 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
       if slotLLVMType ty == "ptr" then
         let p ← loadVarAsPtr a0
         storePtrToVar dst p
+      else if slotLLVMType ty == "i256" then
+        let v ← loadVarAsI256 a0
+        storeI256ToVar dst v
       else
         let v ← loadVarAsI64 a0
         storeI64ToVar dst v
     | none =>
       if slotLLVMType ty == "ptr" then
         storePtrToVar dst "null"
+      else if slotLLVMType ty == "i256" then
+        storeI256ToVar dst "0"
       else
         storeI64ToVar dst "0"
 
@@ -711,11 +1040,16 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
     emitRefCountOp false objVar count
     emitCode k retTy loopAccTarget
   | .ite condVar thenBranch elseBranch =>
-    let cVal ← loadVarAsI64 condVar
+    let condTy ← getVarSlotType condVar
     let cBool ← freshTmp "ite_cond"
     let thenLbl ← freshLabel "ite_then"
     let elseLbl ← freshLabel "ite_else"
-    emitLine s!"  {cBool} = icmp ne i64 {cVal}, 0"
+    if slotLLVMType condTy == "i256" then
+      let cVal ← loadVarAsI256 condVar
+      emitLine s!"  {cBool} = icmp ne i256 {cVal}, 0"
+    else
+      let cVal ← loadVarAsI64 condVar
+      emitLine s!"  {cBool} = icmp ne i64 {cVal}, 0"
     emitLine s!"  br i1 {cBool}, label %{thenLbl}, label %{elseLbl}"
     emitLine s!"{thenLbl}:"
     emitCode thenBranch retTy loopAccTarget
@@ -767,6 +1101,9 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
       else if llvmRet == "ptr" then
         let p ← loadVarAsPtr v
         emitLine s!"  ret ptr {p}"
+      else if llvmRet == "i256" then
+        let val ← loadVarAsI256 v
+        emitLine s!"  ret i256 {val}"
       else if llvmRet == "i64" then
         let val ← loadVarAsI64 v
         emitLine s!"  ret i64 {val}"
@@ -784,6 +1121,8 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
         emitLine "  ret void"
       else if llvmRet == "ptr" then
         emitLine "  ret ptr null"
+      else if llvmRet == "i256" then
+        emitLine "  ret i256 0"
       else
         emitLine "  ret i64 0"
 
@@ -795,7 +1134,7 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
     let pTy := slotLLVMType p.ty
     let attrs :=
       if optimized && pTy == "ptr" then " noalias noundef"
-      else if optimized && pTy == "i64" then " noundef"
+      else if optimized && (pTy == "i64" || pTy == "i256") then " noundef"
       else ""
     s!"{pTy}{attrs} %arg_v{p.id}"
   let paramSigStr := String.intercalate ", " paramSigs
@@ -808,7 +1147,7 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
     let sTy := slotLLVMType ty
     let zeroVal :=
       if sTy == "ptr" then "null"
-      else if sTy == "i64" then "0"
+      else if sTy == "i64" || sTy == "i256" then "0"
       else "zeroinitializer"
     acc ++ [
       s!"  %slot_v{vid} = alloca {sTy}, align 8",
@@ -843,6 +1182,13 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
   String.intercalate "\n\n" [
     "; --- LeanNative Runtime Intrinsics & C ABI Entrypoints ---",
     "declare i1 @llvm.expect.i1(i1, i1) #2",
+    "declare { i256, i1 } @llvm.uadd.with.overflow.i256(i256, i256) #2",
+    "declare { i256, i1 } @llvm.usub.with.overflow.i256(i256, i256) #2",
+    "declare { i256, i1 } @llvm.umul.with.overflow.i256(i256, i256) #2",
+    "declare i256 @llvm.ctlz.i256(i256, i1 immarg) #2",
+    "declare void @llvm.trap()",
+    "declare void @lean_native_evm_sload(ptr, ptr, ptr)",
+    "declare void @lean_native_evm_sstore(ptr, ptr, ptr)",
     "declare noalias ptr @malloc(i64 noundef)",
     "declare void @free(ptr noundef)",
     "declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)",

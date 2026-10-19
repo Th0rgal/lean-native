@@ -35,6 +35,12 @@ def contractFmaScalar : ScalarExpr → ScalarExpr
 def isSimdVectorizableBody : LNIRCode → Bool
   | .letBind _ ty (.scalar _) k =>
     ty.isUnboxedScalar && isSimdVectorizableBody k
+  | .letBind _ ty (.constU256 _) k =>
+    ty.isUnboxedScalar && isSimdVectorizableBody k
+  | .letBind _ ty (.mulDivDown _ _ _) k =>
+    ty.isUnboxedScalar && isSimdVectorizableBody k
+  | .letBind _ ty (.mulDivUp _ _ _) k =>
+    ty.isUnboxedScalar && isSimdVectorizableBody k
   | .letBind _ ty (.rawLoad _ _ elemTy) k =>
     ty.isUnboxedScalar && elemTy.isUnboxedScalar && isSimdVectorizableBody k
   | .rawStore _ _ _ elemTy k =>
@@ -60,6 +66,8 @@ def hasRawMemoryAccess : LNIRCode → Bool
 def isBorrowedReadOnlyIn (objVar : VarId) : LNIRCode → Bool
   | .letBind _ _ (.sarrayEnsureExclusive a _) _ => a != objVar
   | .letBind _ _ (.sarraySet a _ v _) _ => a != objVar && v != objVar
+  | .letBind _ _ (.storageStore m _ v) k =>
+    m != objVar && v != objVar && isBorrowedReadOnlyIn objVar k
   | .letBind _ _ (.allocCtor _ os ss) k =>
     !(os.contains objVar) && !(ss.contains objVar) && isBorrowedReadOnlyIn objVar k
   | .letBind _ _ (.call _ args _ _) k =>

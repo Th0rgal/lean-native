@@ -178,6 +178,13 @@ theorem ite_congr {condVar : VarId} {t1 t2 e1 e2 : LNIRCode}
           exact ht fuel' env st v st' hsrc
         · rw [if_neg hn] at hsrc ⊢
           exact he fuel' env st v st' hsrc
+      | u256 w =>
+        simp only at hsrc ⊢
+        by_cases hw : (w != UInt256.zero) = true
+        · rw [if_pos hw] at hsrc ⊢
+          exact ht fuel' env st v st' hsrc
+        · rw [if_neg hw] at hsrc ⊢
+          exact he fuel' env st v st' hsrc
       | _ => contradiction
 
 theorem parFor_congr {outVar lenVar : VarId} {inputs : List VarId} {elemTy : LNIRType}

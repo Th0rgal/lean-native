@@ -18,6 +18,11 @@ def maxVarScalar : ScalarExpr → VarId
 /-- Compute the maximum `VarId` referenced in an `LNIRExpr`. -/
 def maxVarExpr : LNIRExpr → VarId
   | .scalar e => maxVarScalar e
+  | .constU256 _ => 0
+  | .mulDivDown a b d => Nat.max a (Nat.max b d)
+  | .mulDivUp a b d => Nat.max a (Nat.max b d)
+  | .storageLoad m s => Nat.max m s
+  | .storageStore m s v => Nat.max m (Nat.max s v)
   | .mkTuple fs => fs.foldl Nat.max 0
   | .projTuple v _ => v
   | .allocCtor _ os ss => Nat.max (os.foldl Nat.max 0) (ss.foldl Nat.max 0)
@@ -174,6 +179,18 @@ def rewriteLoopBodyForHoistedArray
         (rewriteLoopBodyForHoistedArray canonicalArrVar rawPtrVar arrAliases varMap k)
   | .letBind dst ty (.scalar e) k =>
     .letBind dst ty (.scalar (substVarScalar varMap e))
+      (rewriteLoopBodyForHoistedArray canonicalArrVar rawPtrVar arrAliases varMap k)
+  | .letBind dst ty (.mulDivDown a b d) k =>
+    .letBind dst ty (.mulDivDown (resolve a) (resolve b) (resolve d))
+      (rewriteLoopBodyForHoistedArray canonicalArrVar rawPtrVar arrAliases varMap k)
+  | .letBind dst ty (.mulDivUp a b d) k =>
+    .letBind dst ty (.mulDivUp (resolve a) (resolve b) (resolve d))
+      (rewriteLoopBodyForHoistedArray canonicalArrVar rawPtrVar arrAliases varMap k)
+  | .letBind dst ty (.storageLoad m s) k =>
+    .letBind dst ty (.storageLoad (resolve m) (resolve s))
+      (rewriteLoopBodyForHoistedArray canonicalArrVar rawPtrVar arrAliases varMap k)
+  | .letBind dst ty (.storageStore m s v) k =>
+    .letBind dst ty (.storageStore (resolve m) (resolve s) (resolve v))
       (rewriteLoopBodyForHoistedArray canonicalArrVar rawPtrVar arrAliases varMap k)
   | .letBind dst ty (.rawLoad ptrVar idxVar elemTy) k =>
     .letBind dst ty (.rawLoad (resolve ptrVar) (resolve idxVar) elemTy)

@@ -5,15 +5,18 @@ namespace LeanNative.Semantics
 
 open LeanNative.IR
 
-/-- Formal runtime value domain for LNIR operational & denotational evaluation. -/
+/-- Formal runtime value domain for LNIR operational & denotational evaluation
+    (including 256-bit `UInt256` EVM words and `storageMapId` persistent storage maps). -/
 inductive Val where
-  | u64      : UInt64 → Val
-  | bool     : Bool → Val
-  | tuple    : List Val → Val
-  | objPtr   : Nat → Val
-  | sarrayId : Nat → Val
-  | rawPtrId : Nat → Val
-  | unit     : Val
+  | u64          : UInt64 → Val
+  | u256         : UInt256 → Val
+  | bool         : Bool → Val
+  | tuple        : List Val → Val
+  | objPtr       : Nat → Val
+  | sarrayId     : Nat → Val
+  | rawPtrId     : Nat → Val
+  | storageMapId : Nat → Val
+  | unit         : Val
   deriving Repr, Inhabited
 
 namespace Val
@@ -21,11 +24,13 @@ namespace Val
 mutual
   def beq : Val → Val → Bool
     | .u64 a, .u64 b => a == b
+    | .u256 a, .u256 b => a == b
     | .bool a, .bool b => a == b
     | .tuple as, .tuple bs => beqList as bs
     | .objPtr a, .objPtr b => a == b
     | .sarrayId a, .sarrayId b => a == b
     | .rawPtrId a, .rawPtrId b => a == b
+    | .storageMapId a, .storageMapId b => a == b
     | .unit, .unit => true
     | _, _ => false
 
@@ -40,11 +45,13 @@ instance : BEq Val := ⟨Val.beq⟩
 mutual
   theorem beq_refl : ∀ (v : Val), Val.beq v v = true
     | .u64 a => by simp [Val.beq]
+    | .u256 a => by simp [Val.beq]
     | .bool a => by simp [Val.beq]
     | .tuple as => by simp [Val.beq, beqList_refl as]
     | .objPtr a => by simp [Val.beq]
     | .sarrayId a => by simp [Val.beq]
     | .rawPtrId a => by simp [Val.beq]
+    | .storageMapId a => by simp [Val.beq]
     | .unit => rfl
 
   theorem beqList_refl : ∀ (vs : List Val), Val.beqList vs vs = true
@@ -60,11 +67,12 @@ end Val
 
 /-- Explicit undefined behavior / runtime trap conditions in LNIR semantics. -/
 inductive UBError where
-  | unboundVar        : VarId → UBError
-  | typeError         : String → UBError
-  | outOfBounds       : Nat → Nat → UBError
-  | nonExclusiveWrite : Nat → UBError
-  | divisionByZero    : UBError
+  | unboundVar         : VarId → UBError
+  | typeError          : String → UBError
+  | outOfBounds        : Nat → Nat → UBError
+  | nonExclusiveWrite  : Nat → UBError
+  | divisionByZero     : UBError
+  | arithmeticOverflow : String → UBError
   deriving Repr, DecidableEq, Inhabited, BEq
 
 /-- SSA/ANF variable environment mapping `VarId` to optional runtime values. -/
@@ -101,16 +109,66 @@ structure ArrayBuffer where
   data      : Array UInt64
   deriving Repr, DecidableEq, Inhabited, BEq
 
-/-- Abstract heap state tracking contiguous scalar array buffers and allocation IDs. -/
+/-- Model of a 256-bit EVM/Verity persistent key-value storage map (`uint256 -> uint256`).
+    Uninitialized slots default to `UInt256.zero` per EVM SLOAD semantics. -/
+structure StorageMapBuffer where
+  id      : Nat
+  entries : List (UInt256 × UInt256) := []
+  deriving Repr, DecidableEq, Inhabited, BEq
+
+namespace StorageMapBuffer
+
+def lookupSlot (m : StorageMapBuffer) (slot : UInt256) : UInt256 :=
+  match m.entries.find? (fun (k, _) => k == slot) with
+  | some (_, v) => v
+  | none => UInt256.zero
+
+def writeSlot (m : StorageMapBuffer) (slot val : UInt256) : StorageMapBuffer :=
+  { m with entries := (slot, val) :: m.entries.filter (fun (k, _) => k != slot) }
+
+@[simp]
+theorem lookupSlot_writeSlot_same (m : StorageMapBuffer) (slot val : UInt256) :
+    (m.writeSlot slot val).lookupSlot slot = val := by
+  simp [writeSlot, lookupSlot]
+
+theorem lookupSlot_writeSlot_ne (m : StorageMapBuffer) (slot1 slot2 val : UInt256)
+    (hne : (slot1 == slot2) = false) :
+    (m.writeSlot slot1 val).lookupSlot slot2 = m.lookupSlot slot2 := by
+  unfold writeSlot lookupSlot
+  simp only [List.find?, hne]
+  induction m.entries with
+  | nil => rfl
+  | cons hd tl ih =>
+    rcases hd with ⟨k, v⟩
+    by_cases hk1 : (k != slot1) = true
+    · simp only [List.filter, hk1, List.find?]
+      cases k == slot2
+      · exact ih
+      · rfl
+    · have hk_eq : (k == slot1) = true := by
+        cases h : k == slot1
+        · simp [bne, h] at hk1
+        · rfl
+      have hk2 : (k == slot2) = false := by
+        have heq1 : k = slot1 := of_decide_eq_true hk_eq
+        subst heq1
+        exact hne
+      simp only [List.filter, hk1, List.find?, hk2]
+      exact ih
+
+end StorageMapBuffer
+
+/-- Abstract heap state tracking contiguous scalar array buffers, EVM storage maps, and allocation IDs. -/
 structure HeapState where
-  buffers : List ArrayBuffer
-  nextId  : Nat
+  buffers     : List ArrayBuffer
+  nextId      : Nat
+  storageMaps : List StorageMapBuffer := []
   deriving Repr, DecidableEq, Inhabited, BEq
 
 namespace HeapState
 
 def empty : HeapState :=
-  { buffers := [], nextId := 0 }
+  { buffers := [], nextId := 0, storageMaps := [] }
 
 /-- Look up an `ArrayBuffer` by its buffer identifier. -/
 def findBuffer (st : HeapState) (bufId : Nat) : Option ArrayBuffer :=
@@ -151,6 +209,40 @@ def writeElemExclusive (st : HeapState) (bufId : Nat) (idx : Nat) (val : UInt64)
         buffers := st.buffers.map (fun b => if b.id == bufId then { b with data := b.data.set! idx val } else b) }
     else
       .error (.outOfBounds idx buf.data.size)
+
+/-- Read a 256-bit slot from EVM storage map `mapId` (uninitialized maps/slots return `UInt256.zero`). -/
+def storageLoad (st : HeapState) (mapId : Nat) (slot : UInt256) : UInt256 :=
+  match st.storageMaps.find? (fun m => m.id == mapId) with
+  | some m => m.lookupSlot slot
+  | none => UInt256.zero
+
+/-- Write a 256-bit value to `slot` in EVM storage map `mapId`. -/
+def storageStore (st : HeapState) (mapId : Nat) (slot val : UInt256) : HeapState :=
+  match st.storageMaps.find? (fun m => m.id == mapId) with
+  | some m =>
+    let m' : StorageMapBuffer := { id := mapId, entries := (slot, val) :: m.entries.filter (fun (k, _) => k != slot) }
+    { st with storageMaps := m' :: st.storageMaps.filter (fun x => x.id != mapId) }
+  | none =>
+    let m' : StorageMapBuffer := { id := mapId, entries := [(slot, val)] }
+    { st with storageMaps := m' :: st.storageMaps }
+
+@[simp]
+theorem storageLoad_after_storageStore_same (st : HeapState) (mapId : Nat) (slot val : UInt256) :
+    (st.storageStore mapId slot val).storageLoad mapId slot = val := by
+  unfold storageStore storageLoad
+  cases st.storageMaps.find? (fun m => m.id == mapId) <;>
+    simp [StorageMapBuffer.lookupSlot]
+
+theorem storageLoad_after_storageStore_ne (st : HeapState) (mapId : Nat) (slot1 slot2 val : UInt256)
+    (hne : (slot1 == slot2) = false) :
+    (st.storageStore mapId slot1 val).storageLoad mapId slot2 = st.storageLoad mapId slot2 := by
+  unfold storageStore storageLoad
+  cases hfind : st.storageMaps.find? (fun m => m.id == mapId) with
+  | none =>
+    simp [StorageMapBuffer.lookupSlot, hne]
+  | some m =>
+    simp only [List.find?, beq_self_eq_true]
+    exact StorageMapBuffer.lookupSlot_writeSlot_ne m slot1 slot2 val hne
 
 end HeapState
 

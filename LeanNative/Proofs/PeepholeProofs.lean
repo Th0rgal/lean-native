@@ -54,78 +54,68 @@ theorem uint64_mul_eight (a : UInt64) : a * (8 : UInt64) = a <<< (3 : UInt64) :=
 
 @[simp]
 theorem evalBinOp_add_zero (v : Val) : evalBinOp .add v (.u64 0) = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_zero_add (v : Val) : evalBinOp .add (.u64 0) v = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_sub_zero (v : Val) : evalBinOp .sub v (.u64 0) = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_mul_one (v : Val) : evalBinOp .mul v (.u64 1) = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_one_mul (v : Val) : evalBinOp .mul (.u64 1) v = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_xor_zero (v : Val) : evalBinOp .bitXor v (.u64 0) = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_zero_xor (v : Val) : evalBinOp .bitXor (.u64 0) v = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_or_zero (v : Val) : evalBinOp .bitOr v (.u64 0) = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_zero_or (v : Val) : evalBinOp .bitOr (.u64 0) v = .ok v := by
-  cases v <;> simp [evalBinOp]
+  unfold evalBinOp; cases v <;> simp
 
 @[simp]
 theorem evalBinOp_and_self (v : Val) : evalBinOp .bitAnd v v = .ok v := by
-  cases v <;> simp [evalBinOp, Val.beq_self]
+  unfold evalBinOp; cases v <;> simp [Val.beq_self]
 
 @[simp]
 theorem evalBinOp_or_self (v : Val) : evalBinOp .bitOr v v = .ok v := by
-  cases v with
-  | u64 a => simp [evalBinOp]
-  | bool b => simp [evalBinOp, Val.beq_self]
-  | tuple vs => simp [evalBinOp, Val.beq_self]
-  | objPtr p => simp [evalBinOp, Val.beq_self]
-  | sarrayId s => simp [evalBinOp, Val.beq_self]
-  | rawPtrId r => simp [evalBinOp, Val.beq_self]
-  | unit => simp [evalBinOp, Val.beq_self]
+  unfold evalBinOp; cases v <;> simp [Val.beq_self]
 
 theorem evalBinOp_mul_two (v : Val) :
     evalBinOp .mul v (.u64 2) = evalBinOp .shl v (.u64 1) := by
+  unfold evalBinOp
   cases v with
-  | u64 a =>
-    simp only [evalBinOp]
-    rw [uint64_mul_two]
-  | bool _ | tuple _ | objPtr _ | sarrayId _ | rawPtrId _ | unit => rfl
+  | u64 a => simp [uint64_mul_two]
+  | _ => rfl
 
 theorem evalBinOp_mul_four (v : Val) :
     evalBinOp .mul v (.u64 4) = evalBinOp .shl v (.u64 2) := by
+  unfold evalBinOp
   cases v with
-  | u64 a =>
-    simp only [evalBinOp]
-    rw [uint64_mul_four]
-  | bool _ | tuple _ | objPtr _ | sarrayId _ | rawPtrId _ | unit => rfl
+  | u64 a => simp [uint64_mul_four]
+  | _ => rfl
 
 theorem evalBinOp_mul_eight (v : Val) :
     evalBinOp .mul v (.u64 8) = evalBinOp .shl v (.u64 3) := by
+  unfold evalBinOp
   cases v with
-  | u64 a =>
-    simp only [evalBinOp]
-    rw [uint64_mul_eight]
-  | bool _ | tuple _ | objPtr _ | sarrayId _ | rawPtrId _ | unit => rfl
+  | u64 a => simp [uint64_mul_eight]
+  | _ => rfl
 
 /-! ## Verified Scalar Peephole Rewriter -/
 
@@ -353,7 +343,7 @@ theorem rewriteBinOpStep_sound (op : BinOp) (lhs rhs : ScalarExpr) :
         by_cases h3 : lhs = .constU64 0
         · subst h3; simp [evalScalarExpr_or_zero_left]
         · rw [if_neg h3]
-  | div | mod | shl | shr | eq | lt | le =>
+  | div | mod | shl | shr | sar | eq | lt | le | addChecked256 | subChecked256 | mulChecked256 =>
     rfl
 
 theorem rewriteSelectStep_sound (cond thenVal elseVal : ScalarExpr) :
@@ -412,6 +402,7 @@ theorem rewriteLNIRExpr_sound (e : LNIRExpr) :
   | scalar se =>
     simp only [rewriteLNIRExpr]
     exact ExprRefines.of_scalar_equiv (rewriteScalarPeephole_sound se)
+  | constU256 _ | mulDivDown _ _ _ | mulDivUp _ _ _ | storageLoad _ _ | storageStore _ _ _
   | mkTuple _ | projTuple _ _ | allocCtor _ _ _ | ctorGetObj _ _ | ctorGetScalar _ _ _
   | isExclusive _ | sarrayLen _ | sarrayDataPtr _ _ | sarrayEnsureExclusive _ _
   | sarrayGet _ _ _ | sarraySet _ _ _ _ | rawLoad _ _ _ | boxScalar _ _
@@ -515,6 +506,11 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
           by_cases hn : (n != 0) = true
           · rw [if_pos hn, if_pos hn]; exact iht fuel' env st
           · rw [if_neg hn, if_neg hn]; exact ihe fuel' env st
+        | u256 w =>
+          simp only
+          by_cases hw : (w != UInt256.zero) = true
+          · rw [if_pos hw, if_pos hw]; exact iht fuel' env st
+          · rw [if_neg hw, if_neg hw]; exact ihe fuel' env st
         | _ => rfl
   | seqFor idxVar loVar hiVar accVar accInit accTy stepBody k ihs ihk =>
     intro fuel env st
@@ -563,12 +559,64 @@ theorem rewriteCodePeephole_refines (c : LNIRCode) :
   rw [evalCode_rewriteCodePeephole_eq c fuel env st]
   exact hsrc
 
+/-! ## 256-Bit (`UInt256` / `EVMWord`) & EVM Storage Map Soundness Theorems -/
+
+theorem evalBinOp_u256_and_self (w : UInt256) :
+    evalBinOp .bitAnd (.u256 w) (.u256 w) = .ok (.u256 w) := by
+  unfold evalBinOp; simp
+
+theorem evalBinOp_u256_or_self (w : UInt256) :
+    evalBinOp .bitOr (.u256 w) (.u256 w) = .ok (.u256 w) := by
+  unfold evalBinOp; simp
+
+theorem evalBinOp_u256_xor_zero (w : UInt256) :
+    evalBinOp .bitXor (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w) := by
+  unfold evalBinOp; simp
+
+theorem evalBinOp_u256_or_zero (w : UInt256) :
+    evalBinOp .bitOr (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w) := by
+  unfold evalBinOp; simp
+
+/-- EVM `SLOAD` after `SSTORE` to the same 256-bit slot returns the stored `UInt256` value (`storageStore_load_same_sound`). -/
+theorem storageStore_load_same_sound (env : VarEnv) (st : HeapState)
+    (mapVar slotVar valVar : VarId) (mapId : Nat) (slot val : UInt256)
+    (hmap : env mapVar = some (.storageMapId mapId))
+    (hslot : env slotVar = some (.u256 slot))
+    (hval : env valVar = some (.u256 val)) :
+    (match evalExpr env st (.storageStore mapVar slotVar valVar) with
+     | .ok (_, st1) => evalExpr env st1 (.storageLoad mapVar slotVar)
+     | .error err => .error err) =
+    .ok (.u256 val, st.storageStore mapId slot val) := by
+  unfold evalExpr
+  simp [Val.toU256?, hmap, hslot, hval]
+
+/-- EVM `SLOAD` after `SSTORE` to a distinct 256-bit slot preserves the prior slot value (`storageStore_load_ne_sound`). -/
+theorem storageStore_load_ne_sound (env : VarEnv) (st : HeapState)
+    (mapVar slot1Var slot2Var valVar : VarId) (mapId : Nat) (slot1 slot2 val : UInt256)
+    (hmap : env mapVar = some (.storageMapId mapId))
+    (hslot1 : env slot1Var = some (.u256 slot1))
+    (hslot2 : env slot2Var = some (.u256 slot2))
+    (hval : env valVar = some (.u256 val))
+    (hne : (slot1 == slot2) = false) :
+    (match evalExpr env st (.storageStore mapVar slot1Var valVar) with
+     | .ok (_, st1) => evalExpr env st1 (.storageLoad mapVar slot2Var)
+     | .error err => .error err) =
+    .ok (.u256 (st.storageLoad mapId slot2), st.storageStore mapId slot1 val) := by
+  unfold evalExpr
+  simp [Val.toU256?, hmap, hslot1, hslot2, hval, HeapState.storageLoad_after_storageStore_ne st mapId slot1 slot2 val hne]
+
 namespace PeepholeProofs
   abbrev rewriteScalarPeephole_sound := @LeanNative.Proofs.rewriteScalarPeephole_sound
   abbrev rewriteLNIRExpr_sound := @LeanNative.Proofs.rewriteLNIRExpr_sound
   abbrev evalExpr_optimizeExpr_eq := @LeanNative.Proofs.evalExpr_optimizeExpr_eq
   abbrev evalCode_rewriteCodePeephole_eq := @LeanNative.Proofs.evalCode_rewriteCodePeephole_eq
   abbrev rewriteCodePeephole_refines := @LeanNative.Proofs.rewriteCodePeephole_refines
+  abbrev evalBinOp_u256_and_self := @LeanNative.Proofs.evalBinOp_u256_and_self
+  abbrev evalBinOp_u256_or_self := @LeanNative.Proofs.evalBinOp_u256_or_self
+  abbrev evalBinOp_u256_xor_zero := @LeanNative.Proofs.evalBinOp_u256_xor_zero
+  abbrev evalBinOp_u256_or_zero := @LeanNative.Proofs.evalBinOp_u256_or_zero
+  abbrev storageStore_load_same_sound := @LeanNative.Proofs.storageStore_load_same_sound
+  abbrev storageStore_load_ne_sound := @LeanNative.Proofs.storageStore_load_ne_sound
 end PeepholeProofs
 
 end LeanNative.Proofs

@@ -6,49 +6,142 @@ namespace LeanNative.Semantics
 
 open LeanNative.IR
 
-/-- Total, deterministic evaluation of binary scalar operators on `Val`. -/
+/-- Helper to extract a 256-bit `UInt256` from a `Val` (promoting `.u64` if needed). -/
+def Val.toU256? : Val → Option UInt256
+  | .u256 w => some w
+  | .u64 x  => some (UInt256.ofUInt64 x)
+  | _       => none
+
+/-- Total, deterministic evaluation of binary scalar operators on `Val` (64-bit and 256-bit EVM). -/
 def evalBinOp (op : BinOp) (v1 v2 : Val) : Except UBError Val :=
-  match op, v1, v2 with
-  | .add, .u64 a, .u64 b => .ok (.u64 (a + b))
-  | .add, v, .u64 0 => .ok v
-  | .add, .u64 0, v => .ok v
-  | .sub, .u64 a, .u64 b => .ok (.u64 (a - b))
-  | .sub, v, .u64 0 => .ok v
-  | .mul, .u64 a, .u64 b => .ok (.u64 (a * b))
-  | .mul, v, .u64 1 => .ok v
-  | .mul, .u64 1, v => .ok v
-  | .div, .u64 a, .u64 b =>
-    if b == 0 then .error .divisionByZero else .ok (.u64 (a / b))
-  | .div, v, .u64 1 => .ok v
-  | .mod, .u64 a, .u64 b =>
-    if b == 0 then .error .divisionByZero else .ok (.u64 (a % b))
-  | .bitAnd, .u64 a, .u64 b => .ok (.u64 (a &&& b))
-  | .bitAnd, v1, v2 =>
-    if v1 == v2 then .ok v1 else .error (.typeError "bitAnd requires u64")
-  | .bitOr, .u64 a, .u64 b => .ok (.u64 (a ||| b))
-  | .bitOr, v, .u64 0 => .ok v
-  | .bitOr, .u64 0, v => .ok v
-  | .bitOr, v1, v2 =>
-    if v1 == v2 then .ok v1 else .error (.typeError "bitOr requires u64")
-  | .bitXor, .u64 a, .u64 b => .ok (.u64 (a ^^^ b))
-  | .bitXor, v, .u64 0 => .ok v
-  | .bitXor, .u64 0, v => .ok v
-  | .shl, .u64 a, .u64 b => .ok (.u64 (a <<< b))
-  | .shl, v, .u64 0 => .ok v
-  | .shr, .u64 a, .u64 b => .ok (.u64 (a >>> b))
-  | .shr, v, .u64 0 => .ok v
-  | .eq, .u64 a, .u64 b => .ok (.bool (a == b))
-  | .eq, .bool a, .bool b => .ok (.bool (a == b))
-  | .lt, .u64 a, .u64 b => .ok (.bool (decide (a < b)))
-  | .le, .u64 a, .u64 b => .ok (.bool (decide (a ≤ b)))
-  | _, _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  match op with
+  | .add =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a + b))
+    | v, .u64 0 => .ok v
+    | .u64 0, v => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.add a b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .sub =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a - b))
+    | v, .u64 0 => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.sub a b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .mul =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a * b))
+    | v, .u64 1 => .ok v
+    | .u64 1, v => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.mul a b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .div =>
+    match v1, v2 with
+    | .u64 a, .u64 b =>
+      if b == 0 then .error .divisionByZero else .ok (.u64 (a / b))
+    | v, .u64 1 => .ok v
+    | .u256 a, .u256 b =>
+      match UInt256.div a b with
+      | some q => .ok (.u256 q)
+      | none => .error .divisionByZero
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .mod =>
+    match v1, v2 with
+    | .u64 a, .u64 b =>
+      if b == 0 then .error .divisionByZero else .ok (.u64 (a % b))
+    | .u256 a, .u256 b =>
+      match UInt256.mod a b with
+      | some r => .ok (.u256 r)
+      | none => .error .divisionByZero
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .bitAnd =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a &&& b))
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.bitAnd a b))
+    | v1, v2 =>
+      if v1 == v2 then .ok v1 else .error (.typeError "bitAnd requires u64 or u256")
+  | .bitOr =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a ||| b))
+    | v, .u64 0 => .ok v
+    | .u64 0, v => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.bitOr a b))
+    | v1, v2 =>
+      if v1 == v2 then .ok v1 else .error (.typeError "bitOr requires u64 or u256")
+  | .bitXor =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a ^^^ b))
+    | v, .u64 0 => .ok v
+    | .u64 0, v => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.bitXor a b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .shl =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a <<< b))
+    | v, .u64 0 => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.shl a b.toNat))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .shr =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (a >>> b))
+    | v, .u64 0 => .ok v
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.shr a b.toNat))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .sar =>
+    match v1, v2 with
+    | .u64 a, .u64 b =>
+      let w := UInt256.sar (UInt256.ofUInt64 a) b.toNat
+      .ok (.u64 w.lo0)
+    | .u256 a, .u256 b => .ok (.u256 (UInt256.sar a b.toNat))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .eq =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.bool (a == b))
+    | .u256 a, .u256 b => .ok (.bool (a == b))
+    | .bool a, .bool b => .ok (.bool (a == b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .lt =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.bool (decide (a < b)))
+    | .u256 a, .u256 b => .ok (.bool (UInt256.lt a b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .le =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.bool (decide (a ≤ b)))
+    | .u256 a, .u256 b => .ok (.bool (UInt256.le a b))
+    | _, _ => .error (.typeError "evalBinOp: invalid operand types")
+  | .addChecked256 =>
+    match v1.toU256?, v2.toU256? with
+    | some a, some b =>
+      match UInt256.addChecked a b with
+      | some res => .ok (.u256 res)
+      | none => .error (.arithmeticOverflow "addChecked256 overflow")
+    | _, _ => .error (.typeError "addChecked256 requires u256/u64 operands")
+  | .subChecked256 =>
+    match v1.toU256?, v2.toU256? with
+    | some a, some b =>
+      match UInt256.subChecked a b with
+      | some res => .ok (.u256 res)
+      | none => .error (.arithmeticOverflow "subChecked256 underflow")
+    | _, _ => .error (.typeError "subChecked256 requires u256/u64 operands")
+  | .mulChecked256 =>
+    match v1.toU256?, v2.toU256? with
+    | some a, some b =>
+      match UInt256.mulChecked a b with
+      | some res => .ok (.u256 res)
+      | none => .error (.arithmeticOverflow "mulChecked256 overflow")
+    | _, _ => .error (.typeError "mulChecked256 requires u256/u64 operands")
 
 /-- Total, deterministic evaluation of unary scalar operators on `Val`. -/
 def evalUnaryOp (op : UnaryOp) (v : Val) : Except UBError Val :=
   match op, v with
-  | .not, .bool b => .ok (.bool (!b))
-  | .not, .u64 n  => .ok (.u64 (~~~n))
-  | .neg, .u64 n  => .ok (.u64 (0 - n))
+  | .not, .bool b   => .ok (.bool (!b))
+  | .not, .u64 n    => .ok (.u64 (~~~n))
+  | .not, .u256 w   => .ok (.u256 (UInt256.bitNot w))
+  | .neg, .u64 n    => .ok (.u64 (0 - n))
+  | .neg, .u256 w   => .ok (.u256 (UInt256.sub UInt256.zero w))
+  | .clz256, .u256 w => .ok (.u256 (UInt256.clz w))
+  | .clz256, .u64 n  => .ok (.u256 (UInt256.clz (UInt256.ofUInt64 n)))
   | _, _ => .error (.typeError "evalUnaryOp: invalid operand type")
 
 /-- Total denotational evaluator for pure scalar SSA expressions (`ScalarExpr`). -/
@@ -74,7 +167,9 @@ def evalScalarExpr (env : VarEnv) : ScalarExpr → Except UBError Val
     | .ok (.bool false) => evalScalarExpr env elseVal
     | .ok (.u64 n) =>
       if n != 0 then evalScalarExpr env thenVal else evalScalarExpr env elseVal
-    | .ok _ => .error (.typeError "select condition must be bool or u64")
+    | .ok (.u256 w) =>
+      if w != UInt256.zero then evalScalarExpr env thenVal else evalScalarExpr env elseVal
+    | .ok _ => .error (.typeError "select condition must be bool, u64, or u256")
     | .error err => .error err
   | .fma a b c =>
     match evalScalarExpr env a, evalScalarExpr env b with
@@ -102,6 +197,57 @@ def evalExpr (env : VarEnv) (st : HeapState) (e : LNIRExpr) : Except UBError (Va
     match evalScalarExpr env se with
     | .ok v => .ok (v, st)
     | .error err => .error err
+  | .constU256 val =>
+    .ok (.u256 val, st)
+  | .mulDivDown aVar bVar denomVar =>
+    match env aVar, env bVar, env denomVar with
+    | some va, some vb, some vd =>
+      match va.toU256?, vb.toU256?, vd.toU256? with
+      | some a, some b, some d =>
+        if d == UInt256.zero then .error .divisionByZero
+        else
+          match UInt256.mulDivDown a b d with
+          | some q => .ok (.u256 q, st)
+          | none => .error (.arithmeticOverflow "mulDivDown overflow")
+      | _, _, _ => .error (.typeError "mulDivDown expects u256/u64 operands")
+    | none, _, _ => .error (.unboundVar aVar)
+    | _, none, _ => .error (.unboundVar bVar)
+    | _, _, none => .error (.unboundVar denomVar)
+  | .mulDivUp aVar bVar denomVar =>
+    match env aVar, env bVar, env denomVar with
+    | some va, some vb, some vd =>
+      match va.toU256?, vb.toU256?, vd.toU256? with
+      | some a, some b, some d =>
+        if d == UInt256.zero then .error .divisionByZero
+        else
+          match UInt256.mulDivUp a b d with
+          | some q => .ok (.u256 q, st)
+          | none => .error (.arithmeticOverflow "mulDivUp overflow")
+      | _, _, _ => .error (.typeError "mulDivUp expects u256/u64 operands")
+    | none, _, _ => .error (.unboundVar aVar)
+    | _, none, _ => .error (.unboundVar bVar)
+    | _, _, none => .error (.unboundVar denomVar)
+  | .storageLoad mapVar slotVar =>
+    match env mapVar, env slotVar with
+    | some (.storageMapId mapId), some vSlot =>
+      match vSlot.toU256? with
+      | some slot => .ok (.u256 (st.storageLoad mapId slot), st)
+      | none => .error (.typeError "storageLoad slot must be u256 or u64")
+    | none, _ => .error (.unboundVar mapVar)
+    | _, none => .error (.unboundVar slotVar)
+    | _, _ => .error (.typeError "storageLoad expects storageMapId")
+  | .storageStore mapVar slotVar valVar =>
+    match env mapVar, env slotVar, env valVar with
+    | some (.storageMapId mapId), some vSlot, some vVal =>
+      match vSlot.toU256?, vVal.toU256? with
+      | some slot, some val =>
+        let st' := st.storageStore mapId slot val
+        .ok (.storageMapId mapId, st')
+      | _, _ => .error (.typeError "storageStore slot and value must be u256 or u64")
+    | none, _, _ => .error (.unboundVar mapVar)
+    | _, none, _ => .error (.unboundVar slotVar)
+    | _, _, none => .error (.unboundVar valVar)
+    | _, _, _ => .error (.typeError "storageStore expects storageMapId")
   | .mkTuple fields =>
     match evalVarList env fields with
     | .ok vals => .ok (.tuple vals, st)
@@ -267,7 +413,10 @@ def evalCode : Nat → VarEnv → HeapState → LNIRCode → Except UBError (Val
       | some (.u64 n) =>
         if n != 0 then evalCode fuel env st thenBranch
         else evalCode fuel env st elseBranch
-      | some _ => .error (.typeError "ite condition must be bool or u64")
+      | some (.u256 w) =>
+        if w != UInt256.zero then evalCode fuel env st thenBranch
+        else evalCode fuel env st elseBranch
+      | some _ => .error (.typeError "ite condition must be bool, u64, or u256")
       | none => .error (.unboundVar condVar)
     | .seqFor idxVar loVar hiVar accVar accInit _accTy stepBody k =>
       match env loVar, env hiVar, env accInit with

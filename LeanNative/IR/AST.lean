@@ -2,7 +2,7 @@ import LeanNative.IR.Types
 
 namespace LeanNative.IR
 
-/-- Binary arithmetic, bitwise, and comparison operators in LNIR. -/
+/-- Binary arithmetic, bitwise, comparison, and checked 256-bit EVM operators in LNIR. -/
 inductive BinOp where
   | add
   | sub
@@ -14,15 +14,20 @@ inductive BinOp where
   | bitXor
   | shl
   | shr
+  | sar            -- Arithmetic shift right (64-bit / 256-bit EVM SAR)
   | eq
   | lt
   | le
+  | addChecked256  -- 256-bit checked addition (traps/errors on overflow >= 2^256)
+  | subChecked256  -- 256-bit checked subtraction (traps/errors on underflow < 0)
+  | mulChecked256  -- 256-bit checked multiplication (traps/errors on overflow >= 2^256)
   deriving Repr, DecidableEq, Inhabited, BEq
 
 /-- Unary operators in LNIR. -/
 inductive UnaryOp where
   | not
   | neg
+  | clz256         -- 256-bit count leading zeros (EVM/Verity CLZ256)
   deriving Repr, DecidableEq, Inhabited, BEq
 
 /-- Pure / scalar SSA expression in LNIR (verified core fragment). -/
@@ -47,9 +52,14 @@ inductive ParallelKernelKind where
   | customScalar (idxVar : VarId) (inVars : List VarId) (body : ScalarExpr)
   deriving Repr, Inhabited, BEq
 
-/-- Right-hand side of a let-binding in LNIR. -/
+/-- Right-hand side of a let-binding in LNIR (including 256-bit EVM words and Storage Maps). -/
 inductive LNIRExpr where
   | scalar (e : ScalarExpr)
+  | constU256 (val : UInt256)
+  | mulDivDown (aVar : VarId) (bVar : VarId) (denomVar : VarId)
+  | mulDivUp (aVar : VarId) (bVar : VarId) (denomVar : VarId)
+  | storageLoad (mapVar : VarId) (slotVar : VarId)
+  | storageStore (mapVar : VarId) (slotVar : VarId) (valVar : VarId)
   | mkTuple (fields : List VarId)
   | projTuple (tupleVar : VarId) (idx : Nat)
   | allocCtor (tag : Nat) (objFields : List VarId) (scalarFields : List VarId)

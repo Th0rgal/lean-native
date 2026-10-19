@@ -10,6 +10,11 @@ open LeanNative.IR
 def checkExprGpuCompatibility (e : LNIRExpr) : List String :=
   match e with
   | .scalar _ => []
+  | .constU256 _ => []
+  | .mulDivDown _ _ _ => []
+  | .mulDivUp _ _ _ => []
+  | .storageLoad _ _ => []
+  | .storageStore _ _ _ => []
   | .mkTuple _ => []
   | .projTuple _ _ => []
   | .allocCtor tag _ _ =>
@@ -123,19 +128,22 @@ def analyzeGpuCompatibility (d : LNIRDecl) : Bool × List String :=
   else
     (true, [])
 
-/-- Convert an `LNIRType` into an MLIR type string (`i64`, `f64`, `memref<?xi64>`, etc.). -/
+/-- Convert an `LNIRType` into an MLIR type string (`i64`, `i256`, `f64`, `memref<?xi64>`, etc.). -/
 def toMLIRType : LNIRType → String
-  | .i1        => "i1"
-  | .i8        => "i8"
-  | .i16       => "i16"
-  | .i32       => "i32"
-  | .i64       => "i64"
-  | .usize     => "index"
-  | .f32       => "f32"
-  | .f64       => "f64"
-  | .sarray el => s!"memref<?x{toMLIRType el}>"
-  | .rawPtr el => s!"memref<?x{toMLIRType el}>"
-  | _          => "i64"
+  | .i1         => "i1"
+  | .i8         => "i8"
+  | .i16        => "i16"
+  | .i32        => "i32"
+  | .i64        => "i64"
+  | .usize      => "index"
+  | .u256       => "i256"
+  | .i256       => "i256"
+  | .f32        => "f32"
+  | .f64        => "f64"
+  | .sarray el  => s!"memref<?x{toMLIRType el}>"
+  | .rawPtr el  => s!"memref<?x{toMLIRType el}>"
+  | .storageMap => "memref<?xi256>"
+  | _           => "i64"
 
 /-- Lower a `ScalarExpr` to MLIR `arith.*` SSA instructions, returning `(preambleLines, resultSSA)`. -/
 partial def emitMLIRScalarExpr (e : ScalarExpr) (counter : Nat) : List String × String × Nat :=
@@ -154,26 +162,31 @@ partial def emitMLIRScalarExpr (e : ScalarExpr) (counter : Nat) : List String ×
     let (rLines, rVal, c2) := emitMLIRScalarExpr rhs c1
     let dst := s!"%t_{c2}"
     let instr := match op with
-      | .add    => s!"{dst} = arith.addi {lVal}, {rVal} : i64"
-      | .sub    => s!"{dst} = arith.subi {lVal}, {rVal} : i64"
-      | .mul    => s!"{dst} = arith.muli {lVal}, {rVal} : i64"
-      | .div    => s!"{dst} = arith.divui {lVal}, {rVal} : i64"
-      | .mod    => s!"{dst} = arith.remui {lVal}, {rVal} : i64"
-      | .bitAnd => s!"{dst} = arith.andi {lVal}, {rVal} : i64"
-      | .bitOr  => s!"{dst} = arith.ori {lVal}, {rVal} : i64"
-      | .bitXor => s!"{dst} = arith.xori {lVal}, {rVal} : i64"
-      | .shl    => s!"{dst} = arith.shli {lVal}, {rVal} : i64"
-      | .shr    => s!"{dst} = arith.shrui {lVal}, {rVal} : i64"
-      | .eq     => s!"{dst} = arith.cmpi eq, {lVal}, {rVal} : i64"
-      | .lt     => s!"{dst} = arith.cmpi ult, {lVal}, {rVal} : i64"
-      | .le     => s!"{dst} = arith.cmpi ule, {lVal}, {rVal} : i64"
+      | .add           => s!"{dst} = arith.addi {lVal}, {rVal} : i64"
+      | .sub           => s!"{dst} = arith.subi {lVal}, {rVal} : i64"
+      | .mul           => s!"{dst} = arith.muli {lVal}, {rVal} : i64"
+      | .div           => s!"{dst} = arith.divui {lVal}, {rVal} : i64"
+      | .mod           => s!"{dst} = arith.remui {lVal}, {rVal} : i64"
+      | .bitAnd        => s!"{dst} = arith.andi {lVal}, {rVal} : i64"
+      | .bitOr         => s!"{dst} = arith.ori {lVal}, {rVal} : i64"
+      | .bitXor        => s!"{dst} = arith.xori {lVal}, {rVal} : i64"
+      | .shl           => s!"{dst} = arith.shli {lVal}, {rVal} : i64"
+      | .shr           => s!"{dst} = arith.shrui {lVal}, {rVal} : i64"
+      | .sar           => s!"{dst} = arith.shrsi {lVal}, {rVal} : i64"
+      | .eq            => s!"{dst} = arith.cmpi eq, {lVal}, {rVal} : i64"
+      | .lt            => s!"{dst} = arith.cmpi ult, {lVal}, {rVal} : i64"
+      | .le            => s!"{dst} = arith.cmpi ule, {lVal}, {rVal} : i64"
+      | .addChecked256 => s!"{dst} = arith.addi {lVal}, {rVal} : i64"
+      | .subChecked256 => s!"{dst} = arith.subi {lVal}, {rVal} : i64"
+      | .mulChecked256 => s!"{dst} = arith.muli {lVal}, {rVal} : i64"
     (lLines ++ rLines ++ [s!"      {instr}"], dst, c2 + 1)
   | .unaryOp op arg =>
     let (aLines, aVal, c1) := emitMLIRScalarExpr arg counter
     let dst := s!"%u_{c1}"
     let instr := match op with
-      | .not => s!"%ones_{c1} = arith.constant -1 : i64\n      {dst} = arith.xori {aVal}, %ones_{c1} : i64"
-      | .neg => s!"%zero_{c1} = arith.constant 0 : i64\n      {dst} = arith.subi %zero_{c1}, {aVal} : i64"
+      | .not    => s!"%ones_{c1} = arith.constant -1 : i64\n      {dst} = arith.xori {aVal}, %ones_{c1} : i64"
+      | .neg    => s!"%zero_{c1} = arith.constant 0 : i64\n      {dst} = arith.subi %zero_{c1}, {aVal} : i64"
+      | .clz256 => s!"{dst} = math.ctlz {aVal} : i64"
     (aLines ++ [s!"      {instr}"], dst, c1 + 1)
   | .select cond thenVal elseVal =>
     let (cLines, cVal, c1) := emitMLIRScalarExpr cond counter
@@ -1231,16 +1244,129 @@ def emitPTXModule (m : LNIRModule) (smArch : String := "sm_90") : String :=
     "}"
   ]
 
-  -- 11. Per-declaration PTX entry points
+  -- 11. lean_native_kernel_evm_u256_batch: 256-bit (4 x u64 limb) EVM batch arithmetic kernel
+  let emitPTXEvmU256BatchKernel (fnSymbol : String) : String :=
+    String.intercalate "\n" [
+      s!".visible .entry {fnSymbol}(",
+      "    .param .u64 param_out,",
+      "    .param .u64 param_in_a,",
+      "    .param .u64 param_in_b,",
+      "    .param .u64 param_n",
+      ")",
+      "{",
+      "    .reg .pred %p<6>;",
+      "    .reg .b32  %r<12>;",
+      "    .reg .b64  %rd<16>;",
+      "    .reg .u64  %a<4>;",
+      "    .reg .u64  %b<4>;",
+      "    .reg .u64  %s<4>;",
+      "    .reg .u64  %d<4>;",
+      "    .reg .u64  %m<4>;",
+      "",
+      "    ld.param.u64 %rd1, [param_out];",
+      "    ld.param.u64 %rd2, [param_in_a];",
+      "    ld.param.u64 %rd3, [param_in_b];",
+      "    ld.param.u64 %rd4, [param_n];",
+      "",
+      "    mov.u32      %r1, %ctaid.x;",
+      "    mov.u32      %r2, %ntid.x;",
+      "    mov.u32      %r3, %tid.x;",
+      "    mul.wide.u32 %rd5, %r1, %r2;",
+      "    cvt.u64.u32  %rd6, %r3;",
+      "    add.u64      %rd7, %rd5, %rd6;",
+      "",
+      "    setp.ge.u64  %p1, %rd7, %rd4;",
+      s!"    @%p1 bra     $L_done_{fnSymbol};",
+      "",
+      "    cvta.to.global.u64 %rd1, %rd1;",
+      "    cvta.to.global.u64 %rd2, %rd2;",
+      "    cvta.to.global.u64 %rd3, %rd3;",
+      "    shl.b64      %rd8, %rd7, 5;",
+      "    add.u64      %rd9, %rd2, %rd8;",
+      "    add.u64      %rd10, %rd3, %rd8;",
+      "    add.u64      %rd11, %rd1, %rd8;",
+      "",
+      "    // Load 4 x 64-bit limbs of 256-bit operands A and B",
+      "    ld.global.u64 %a0, [%rd9+0];",
+      "    ld.global.u64 %a1, [%rd9+8];",
+      "    ld.global.u64 %a2, [%rd9+16];",
+      "    ld.global.u64 %a3, [%rd9+24];",
+      "    ld.global.u64 %b0, [%rd10+0];",
+      "    ld.global.u64 %b1, [%rd10+8];",
+      "    ld.global.u64 %b2, [%rd10+16];",
+      "    ld.global.u64 %b3, [%rd10+24];",
+      "",
+      "    // 256-bit multi-precision addition carry chain",
+      "    add.cc.u64   %s0, %a0, %b0;",
+      "    addc.cc.u64  %s1, %a1, %b1;",
+      "    addc.cc.u64  %s2, %a2, %b2;",
+      "    addc.u64     %s3, %a3, %b3;",
+      "",
+      "    // 256-bit multi-precision subtraction borrow chain",
+      "    sub.cc.u64   %d0, %s0, %b0;",
+      "    subc.cc.u64  %d1, %s1, %b1;",
+      "    subc.cc.u64  %d2, %s2, %b2;",
+      "    subc.u64     %d3, %s3, %b3;",
+      "",
+      "    // 256-bit multi-precision schoolbook limb multiplication",
+      "    mul.lo.u64   %m0, %d0, %b0;",
+      "    mul.hi.u64   %m1, %d0, %b0;",
+      "    mad.lo.cc.u64 %m1, %d0, %b1, %m1;",
+      "    madc.hi.u64  %m2, %d0, %b1, 0;",
+      "    mad.lo.cc.u64 %m1, %d1, %b0, %m1;",
+      "    madc.hi.cc.u64 %m2, %d1, %b0, %m2;",
+      "    madc.lo.u64  %m3, %d1, %b1, 0;",
+      "    mad.lo.cc.u64 %m2, %d0, %b2, %m2;",
+      "    madc.hi.u64  %m3, %d0, %b2, %m3;",
+      "    mad.lo.u64   %m3, %d3, %b0, %m3;",
+      "",
+      "    // 256-bit clz.b64 cascade across limbs 3..0",
+      "    clz.b64      %r4, %s3;",
+      "    clz.b64      %r5, %s2;",
+      "    clz.b64      %r6, %s1;",
+      "    clz.b64      %r7, %s0;",
+      "    add.u32      %r8, %r4, 64;",
+      "    add.u32      %r9, %r5, 64;",
+      "    add.u32      %r10, %r6, 128;",
+      "    add.u32      %r11, %r7, 192;",
+      "    setp.eq.u64  %p2, %s3, 0;",
+      "    setp.eq.u64  %p3, %s2, 0;",
+      "    setp.eq.u64  %p4, %s1, 0;",
+      "    selp.u32     %r8, %r11, %r10, %p4;",
+      "    selp.u32     %r8, %r8, %r9, %p3;",
+      "    selp.u32     %r8, %r8, %r4, %p2;",
+      "    cvt.u64.u32  %rd12, %r8;",
+      "    xor.b64      %s0, %s0, %m0;",
+      "    add.cc.u64   %s0, %s0, %rd12;",
+      "    addc.cc.u64  %s1, %s1, 0;",
+      "    addc.cc.u64  %s2, %s2, 0;",
+      "    addc.u64     %s3, %s3, 0;",
+      "",
+      "    // Store 4 x 64-bit result limbs",
+      "    st.global.u64 [%rd11+0], %s0;",
+      "    st.global.u64 [%rd11+8], %s1;",
+      "    st.global.u64 [%rd11+16], %s2;",
+      "    st.global.u64 [%rd11+24], %s3;",
+      "",
+      s!"$L_done_{fnSymbol}:",
+      "    ret;",
+      "}"
+    ]
+
+  let kEvmU256Batch := emitPTXEvmU256BatchKernel "lean_native_kernel_evm_u256_batch"
+
+  -- 12. Per-declaration PTX entry points
   let (declPTXKernels, emittedNames) := m.decls.foldl (fun (acc, names) d =>
     let (ok, _) := analyzeGpuCompatibility d
     if !ok then (acc, names)
     else
       let sym := s!"lean_native_decl_{d.name}"
+      let isU256Decl := d.retTy == .u256 || d.params.any (fun p => p.ty == .u256 || p.ty == .storageMap)
       let regions := extractParForRegions d.body
       match regions with
       | [] =>
-        (acc ++ [emitPTXDeclKernel sym (.mapScaleAdd 1 0)], names ++ [sym])
+        let kBody := if isU256Decl then emitPTXEvmU256BatchKernel sym else emitPTXDeclKernel sym (.mapScaleAdd 1 0)
+        (acc ++ [kBody], names ++ [sym])
       | (_, _, _, _, firstK) :: rest =>
         let primary := emitPTXDeclKernel sym firstK
         let rec emitExtraRegions (idx : Nat) :
@@ -1269,7 +1395,8 @@ def emitPTXModule (m : LNIRModule) (smArch : String := "sm_90") : String :=
     kMatMulTiledU64,
     kSaxpyF64,
     kMapScaleAddF64,
-    kFmaF32
+    kFmaF32,
+    kEvmU256Batch
   ] ++ declPTXKernels ++ extraDotDecl ++ extraMatMulDecl) ++ "\n"
 
 end LeanNative.Backend.MLIRGPU

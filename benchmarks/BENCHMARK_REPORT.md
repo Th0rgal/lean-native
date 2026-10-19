@@ -65,3 +65,26 @@
 | `matmul_tiled_u64` | `2384.17 ± 29.63` | `43.67 ± 0.63` | `47.05 ± 20.87` | `47.05 ± 20.87` | **50.67x** | **0.93x** | `0.002165` |
 | `holdout_bitwise` | `13.57 ± 0.29` | `12.46 ± 0.16` | `14.57 ± 0.04` | `14.57 ± 0.04` | **0.93x** | **0.85x** | `0.000583` |
 | `holdout_loop_bounds` | `12.50 ± 0.27` | `11.34 ± 0.20` | `14.04 ± 0.08` | `14.04 ± 0.08` | **0.89x** | **0.81x** | `0.000583` |
+
+---
+
+## 4. Native Executable Compilation (`lean-native build-exe`) Verification
+
+| Source Program | Target Architectures Verified | Reference `official_lean4` Output | `lean-native build-exe` Output | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| `benchmarks/baselines/bench_suite.lean` | `aarch64` (`spark-de79`), `x86_64` (`ashur`) | `8/8` exact benchmark checksums | `8/8` exact benchmark checksums | **BIT-EXACT MATCH** |
+| `tests/general_lean4_suite.lean` (ADTs, closures, `ByteArray`, `FloatArray`, `StateT`/`Except`, `IO`) | `aarch64` (`spark-de79`), `x86_64` (`ashur`) | `CHECKSUM64=4019405577884534497` | `CHECKSUM64=4019405577884534497` | **BIT-EXACT MATCH** |
+
+---
+
+## 5. v0.3 `lean-native-core` (`libleanrt`-Only), JSON-RPC `worker` & 256-Bit `FastCheck` Benchmarks
+
+| Metric / Workload | `spark-de79` (`aarch64` Cortex-X925 + GB10 GPU) | `ashur` (`x86_64` Intel Core i7-7700) | Target / Gate | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **`lean-native-core` Binary Size (Stripped / Unstripped)** | `3.7 MB` (`6.2 MB` unstripped) | `3.7 MB` (`5.6 MB` unstripped) | `~4 MB` (`libleanrt.a` only, 0 `libleanshared.so`) | **PASS (64.3x smaller)** |
+| **`lean-native-core` Cold-Start CLI Latency (`--help`)** | **`2.454 ms`** | **`9.079 ms`** | `< 3.0 ms` on `spark-de79` | **PASS** |
+| **`lean-native-core compile-llvm` (8 Kernels + 4 Passes)** | **`5.999 ms`** | **`25.889 ms`** | `< 10.0 ms` on `spark-de79` | **PASS** |
+| **Persistent `lean-native-core worker` JSON-RPC Latency** | **`0.0716 ms / req` (`13,973 req/s`)** | **`0.2154 ms / req` (`4,643 req/s`)** | `< 0.500 ms / req` | **PASS (7x faster than budget)** |
+| **PTX 8.0 Dynamic JIT (`cuModuleLoadDataEx`, 15 Kernels incl. `u256`)** | `0 errors, 0 register spills` (`sm_90`) | N/A (CPU-only host) | 100% `ptxas` + `cuLaunchKernel` match | **PASS** |
+| **FastCheck Constraint Propagation (`evm_constrained_buggy_prop`)** | `sat=512/512`, `vacuous=0`, `cex=1`, `false_pos=0` | `sat=512/512`, `vacuous=0`, `cex=1`, `false_pos=0` | Eliminates `VacuousPass` (`0/512` without prop) | **PASS** |
+

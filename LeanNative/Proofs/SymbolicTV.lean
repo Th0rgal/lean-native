@@ -314,6 +314,47 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
   | .scalar se =>
     let sv := symEvalScalar st se
     st.bindVar dst sv
+  | .constU256 val =>
+    st.bindVar dst { expr := .constU64 val.lo0, nonPoison := true, noUB := true }
+  | .mulDivDown aVar bVar denomVar =>
+    let sa := st.lookupVar aVar
+    let sb := st.lookupVar bVar
+    let sd := st.lookupVar denomVar
+    let divZero := sd.expr == .constU64 0
+    let mulExpr := normSymBinOpStep .mul sa.expr sb.expr
+    let divExpr := normSymBinOpStep .div mulExpr sd.expr
+    st.bindVar dst {
+      expr := divExpr
+      nonPoison := sa.nonPoison && sb.nonPoison && sd.nonPoison
+      noUB := sa.noUB && sb.noUB && sd.noUB && !divZero
+    }
+  | .mulDivUp aVar bVar denomVar =>
+    let sa := st.lookupVar aVar
+    let sb := st.lookupVar bVar
+    let sd := st.lookupVar denomVar
+    let divZero := sd.expr == .constU64 0
+    let mulExpr := normSymBinOpStep .mul sa.expr sb.expr
+    let divExpr := normSymBinOpStep .div mulExpr sd.expr
+    st.bindVar dst {
+      expr := divExpr
+      nonPoison := sa.nonPoison && sb.nonPoison && sd.nonPoison
+      noUB := sa.noUB && sb.noUB && sd.noUB && !divZero
+    }
+  | .storageLoad mapVar slotVar =>
+    let slotSv := st.lookupVar slotVar
+    let elemExpr := st.readBufSym mapVar slotSv.expr
+    st.bindVar dst { expr := elemExpr, nonPoison := slotSv.nonPoison, noUB := slotSv.noUB }
+  | .storageStore mapVar slotVar valVar =>
+    let root := st.resolveBuf mapVar
+    let slotSv := st.lookupVar slotVar
+    let valSv := st.lookupVar valVar
+    let st1 := st.writeBufSym root slotSv.expr valSv.expr false
+    let st2 := st1.aliasBuf dst root
+    st2.bindVar dst {
+      expr := .symVar root
+      nonPoison := slotSv.nonPoison && valSv.nonPoison
+      noUB := slotSv.noUB && valSv.noUB
+    }
   | .mkTuple fields =>
     let svs := fields.map st.lookupVar
     let allNoUB := svs.all (·.noUB)
@@ -519,6 +560,11 @@ def mkSampleParamVal (seed : UInt64) (paramIdx : Nat) (ty : LNIRType) (st : Heap
   let smallU64 : UInt64 := (r % 8) + 1
   match ty with
   | .i1 => (.bool (r % 2 == 1), st)
+  | .u256 | .i256 => (.u256 (UInt256.ofUInt64 smallU64), st)
+  | .storageMap =>
+    let mapId := st.nextId + 1
+    let mapBuf : StorageMapBuffer := { id := mapId, entries := [] }
+    (.storageMapId mapId, { st with nextId := mapId, storageMaps := mapBuf :: st.storageMaps })
   | .sarray _ =>
     let bufId := st.nextId + 1
     let elems : List UInt64 := (List.range 16).map (fun i =>
@@ -529,7 +575,7 @@ def mkSampleParamVal (seed : UInt64) (paramIdx : Nat) (ty : LNIRType) (st : Heap
       exclusive := (r % 2 == 0)
       data := elems.toArray
     }
-    (.sarrayId bufId, { buffers := buf :: st.buffers, nextId := bufId })
+    (.sarrayId bufId, { st with buffers := buf :: st.buffers, nextId := bufId })
   | .rawPtr _ =>
     let bufId := st.nextId + 1
     let elems : List UInt64 := (List.range 16).map (fun i =>
@@ -540,7 +586,7 @@ def mkSampleParamVal (seed : UInt64) (paramIdx : Nat) (ty : LNIRType) (st : Heap
       exclusive := true
       data := elems.toArray
     }
-    (.rawPtrId bufId, { buffers := buf :: st.buffers, nextId := bufId })
+    (.rawPtrId bufId, { st with buffers := buf :: st.buffers, nextId := bufId })
   | .tuple fs =>
     let vals := fs.mapIdx (fun idx _ =>
       let (tr, _) := splitMix64Next (r + idx.toUInt64 * 17)

@@ -26,6 +26,15 @@ def kernelUsesVar (target : VarId) : ParallelKernelKind → Bool
 /-- Check whether `target` variable occurs in an `LNIRExpr`. -/
 def exprUsesVar (target : VarId) : LNIRExpr → Bool
   | .scalar e => scalarExprUsesVar target e
+  | .constU256 _ => false
+  | .mulDivDown aVar bVar denomVar =>
+    aVar == target || bVar == target || denomVar == target
+  | .mulDivUp aVar bVar denomVar =>
+    aVar == target || bVar == target || denomVar == target
+  | .storageLoad mapVar slotVar =>
+    mapVar == target || slotVar == target
+  | .storageStore mapVar slotVar valVar =>
+    mapVar == target || slotVar == target || valVar == target
   | .mkTuple fields => fields.contains target
   | .projTuple tupleVar _ => tupleVar == target
   | .allocCtor _ objFields scalarFields =>

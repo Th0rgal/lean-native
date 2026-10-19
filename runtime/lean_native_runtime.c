@@ -374,3 +374,154 @@ LEAN_NATIVE_WEAK int lean_native_hybrid_matmul_u64(
     lean_native_cpu_matmul_u64(c, a, b, m, n, k);
     return 0;
 }
+
+/* ============================================================================
+ * 256-Bit EVM Persistent Storage Map Implementation (`SLOAD` / `SSTORE`)
+ * ============================================================================ */
+
+#define LEAN_NATIVE_EVM_INITIAL_CAP 64u
+
+static inline uint64_t lean_native_hash_u256(const uint64_t* limbs) {
+    /* SplitMix64-style mixing across all four 64-bit limbs */
+    uint64_t h = 0x9E3779B97F4A7C15ULL;
+    for (size_t i = 0; i < 4; ++i) {
+        uint64_t z = limbs[i] + 0x9E3779B97F4A7C15ULL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        h ^= z ^ (z >> 31);
+        h = (h << 13) | (h >> 51);
+    }
+    return h;
+}
+
+static inline int lean_native_u256_eq(const uint64_t* a, const uint64_t* b) {
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
+}
+
+void* lean_native_evm_storage_create(void) {
+    lean_native_evm_storage_map* map =
+        (lean_native_evm_storage_map*)malloc(sizeof(lean_native_evm_storage_map));
+    if (!map) {
+        return NULL;
+    }
+    lean_native_evm_storage_entry* entries =
+        (lean_native_evm_storage_entry*)calloc(
+            LEAN_NATIVE_EVM_INITIAL_CAP,
+            sizeof(lean_native_evm_storage_entry)
+        );
+    if (!entries) {
+        free(map);
+        return NULL;
+    }
+    map->m_header.m_rc    = 1;
+    map->m_header.m_cs_sz = (uint16_t)sizeof(lean_native_evm_storage_map);
+    map->m_header.m_other = 0;
+    map->m_header.m_tag   = 0;
+    map->m_count          = 0;
+    map->m_capacity       = LEAN_NATIVE_EVM_INITIAL_CAP;
+    map->m_entries        = entries;
+    return (void*)map;
+}
+
+void lean_native_evm_storage_free(void* map_ptr) {
+    if (!map_ptr || lean_native_is_scalar(map_ptr)) {
+        return;
+    }
+    lean_native_evm_storage_map* map = (lean_native_evm_storage_map*)map_ptr;
+    if (map->m_entries) {
+        free(map->m_entries);
+        map->m_entries = NULL;
+    }
+    free(map);
+}
+
+static int lean_native_evm_storage_grow(lean_native_evm_storage_map* map) {
+    size_t old_cap = map->m_capacity;
+    size_t new_cap = old_cap ? (old_cap * 2u) : LEAN_NATIVE_EVM_INITIAL_CAP;
+    lean_native_evm_storage_entry* new_entries =
+        (lean_native_evm_storage_entry*)calloc(new_cap, sizeof(lean_native_evm_storage_entry));
+    if (!new_entries) {
+        return -1;
+    }
+    size_t mask = new_cap - 1u;
+    for (size_t i = 0; i < old_cap; ++i) {
+        if (map->m_entries[i].occupied) {
+            uint64_t h = lean_native_hash_u256(map->m_entries[i].key.limbs);
+            size_t idx = (size_t)h & mask;
+            while (new_entries[idx].occupied) {
+                idx = (idx + 1u) & mask;
+            }
+            new_entries[idx] = map->m_entries[i];
+        }
+    }
+    free(map->m_entries);
+    map->m_entries  = new_entries;
+    map->m_capacity = new_cap;
+    return 0;
+}
+
+void lean_native_evm_sload(void* map_ptr, const uint64_t* slot_limbs, uint64_t* out_val_limbs) {
+    if (!out_val_limbs) {
+        return;
+    }
+    out_val_limbs[0] = 0ULL;
+    out_val_limbs[1] = 0ULL;
+    out_val_limbs[2] = 0ULL;
+    out_val_limbs[3] = 0ULL;
+    if (!map_ptr || !slot_limbs || lean_native_is_scalar(map_ptr)) {
+        return;
+    }
+    const lean_native_evm_storage_map* map = (const lean_native_evm_storage_map*)map_ptr;
+    if (!map->m_entries || map->m_capacity == 0) {
+        return;
+    }
+    size_t mask = map->m_capacity - 1u;
+    size_t idx = (size_t)lean_native_hash_u256(slot_limbs) & mask;
+    for (size_t probe = 0; probe < map->m_capacity; ++probe) {
+        const lean_native_evm_storage_entry* e = &map->m_entries[idx];
+        if (!e->occupied) {
+            return;
+        }
+        if (lean_native_u256_eq(e->key.limbs, slot_limbs)) {
+            out_val_limbs[0] = e->val.limbs[0];
+            out_val_limbs[1] = e->val.limbs[1];
+            out_val_limbs[2] = e->val.limbs[2];
+            out_val_limbs[3] = e->val.limbs[3];
+            return;
+        }
+        idx = (idx + 1u) & mask;
+    }
+}
+
+void lean_native_evm_sstore(void* map_ptr, const uint64_t* slot_limbs, const uint64_t* val_limbs) {
+    if (!map_ptr || !slot_limbs || !val_limbs || lean_native_is_scalar(map_ptr)) {
+        return;
+    }
+    lean_native_evm_storage_map* map = (lean_native_evm_storage_map*)map_ptr;
+    if (!map->m_entries || map->m_capacity == 0) {
+        return;
+    }
+    if ((map->m_count + 1u) * 10u >= map->m_capacity * 7u) {
+        if (lean_native_evm_storage_grow(map) != 0) {
+            return;
+        }
+    }
+    size_t mask = map->m_capacity - 1u;
+    size_t idx = (size_t)lean_native_hash_u256(slot_limbs) & mask;
+    for (size_t probe = 0; probe < map->m_capacity; ++probe) {
+        lean_native_evm_storage_entry* e = &map->m_entries[idx];
+        if (!e->occupied) {
+            memcpy(e->key.limbs, slot_limbs, 4u * sizeof(uint64_t));
+            memcpy(e->val.limbs, val_limbs, 4u * sizeof(uint64_t));
+            e->occupied = 1u;
+            map->m_count += 1u;
+            return;
+        }
+        if (lean_native_u256_eq(e->key.limbs, slot_limbs)) {
+            memcpy(e->val.limbs, val_limbs, 4u * sizeof(uint64_t));
+            return;
+        }
+        idx = (idx + 1u) & mask;
+    }
+}
+

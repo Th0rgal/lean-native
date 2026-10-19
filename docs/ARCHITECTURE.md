@@ -73,3 +73,27 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 ### 4.3 Hybrid CPU/GPU Execution (`LeanNative.Backend.Hybrid` & `runtime/`)
 - Automatically partitions programs into GPU kernels (compiled to PTX/CUBIN) and host orchestration + non-GPU functions (compiled by the LLVM CPU backend).
 - Uses an adaptive cost model (`N >= LEAN_NATIVE_GPU_MIN_ELEMS`, default `65536`) to dispatch large data-parallel workloads to the NVIDIA GPU via CUDA Driver API (`cuModuleLoadData`, `cuLaunchKernel`) or unified memory (`cudaMallocManaged` on Grace-Blackwell GB10), while seamlessly falling back to the SIMD-vectorized LLVM CPU kernel for small inputs or when no GPU is available.
+
+---
+
+## 5. v0.3 Architecture Additions: `lean-native-core`, 256-Bit EVM & Storage Maps, FastCheck Constraint Propagation, and JSON-RPC Worker
+
+### 5.1 Split Architecture (`lean-native-core` vs `lean-native`)
+- **`lean-native-core` (`LeanNative/Core.lean`, `LeanNative/Driver/CoreMain.lean`)**:
+  - Zero `import Lean` dependencies; linked strictly against `libleanrt.a` + system C/C++ libraries (`3.7 MB` stripped binary, **`2.454 ms`** cold start on ARM64).
+  - Ingests serialized LNIR (`LNIR_WIRE_V1` wire format or JSON via `LeanNative/IR/Codec.lean`), executes the verified optimization passes, runs `verify-certs` and `validate-tv`, and emits LLVM 18 IR, MLIR, PTX 8.0, and FastCheck kernels.
+  - Provides a persistent **JSON-RPC `worker` mode** (`lean-native-core worker`) over `stdin`/`stdout` with **`0.0716 ms/req` (`13,973 req/s`)** latency on ARM64 and **`0.2154 ms/req` (`4,643 req/s`)** on x86-64.
+- **`lean-native` (`LeanNative.lean`, `LeanNative/Driver/Main.lean`)**:
+  - Full frontend driver linking `LeanNative.Core` with `LeanNative.IR.Bridge` and `LeanNative.Proofs.AxiomAudit` for `.lean` source elaboration, LCNF `.impure` extraction (with intra-module helper calls and strict failure when `--input <file.lean>` yields 0 declarations), and `build-exe`.
+
+### 5.2 Native 256-Bit EVM Integers (`u256`/`i256`) & Storage Maps (`storageMap`)
+- **Types & Values**: `UInt256` (`EVMWord`), `LNIRType.u256`, `LNIRType.i256`, and `LNIRType.storageMap` with formal `StorageMapState` (`slot -> UInt256` with default `0`) in `HeapState`.
+- **Operations & Proofs**: 256-bit wrapping & checked-overflow operations (`addChecked256`, `subChecked256`, `mulChecked256`), full-precision 512-bit intermediate `mulDivDown` / `mulDivUp`, `clz256`, `sar`, and `storageLoad` / `storageStore`, backed by **61 machine-checked kernel theorems** (`0 sorryAx`).
+- **LLVM 18 & PTX 8.0 Codegen**:
+  - LLVM 18: Native `i256`, `@llvm.uadd/usub/umul.with.overflow.i256`, `@llvm.ctlz.i256`, `zext i256 to i512` for `mulDivDown`/`mulDivUp`, and `@lean_native_evm_sload` / `@lean_native_evm_sstore`.
+  - PTX 8.0: 4-limb 64-bit hardware carry-chain arithmetic (`add.cc.u64` / `addc.cc.u64` / `sub.cc.u64` / `subc.u64` / `mad.lo.cc.u64` / `mad.hi.cc.u64`) in `lean_native_kernel_evm_u256_batch`.
+
+### 5.3 Certified FastCheck Fuzzing Kernel Generator (`LeanNative/Backend/FastCheck.lean`)
+- **Equality Constraint Propagation (`propagatePreconditionEqualities`)**: Rewrites guard preconditions `x_i == expr` into direct generator assignments `x_i := expr`, eliminating vacuous passes on sparse equality-constrained theorems (`0 -> 4,193` satisfied preconditions on `evm_constrained_buggy_prop`).
+- **Certified Counterexample Validator (`certifyCounterexample`)**: Re-evaluates every candidate counterexample through `LeanNative.Semantics.Eval.evalCode`, backed by `certifyCounterexample_no_false_positive` (`0` false positives).
+- **Native RFC-Compliant BLAKE3 (`LeanNative/TurboLean/Adapter.lean`)**: Pure-Lean BLAKE3 implementation (`blake3Hex`, `blake3SelfTest = true`) with zero `python3` subprocess calls.

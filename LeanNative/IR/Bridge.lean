@@ -10,6 +10,7 @@ import Lean.Compiler.NameMangling
 import Lean.Compiler.ExternAttr
 import LeanNative.IR.Types
 import LeanNative.IR.AST
+import LeanNative.IR.Codec
 import LeanNative.Transform.LoopVectorizeOpt
 import LeanNative.Backend.LLVM
 
@@ -69,6 +70,8 @@ partial def lowerImpureType (e : Lean.Expr) : LNIRType :=
       else if declName == ``UInt16 then .i16
       else if declName == ``UInt32 then .i32
       else if declName == ``UInt64 || declName == ``Nat then .i64
+      else if declName.toString.endsWith "UInt256" || declName.toString.endsWith "U256" then .u256
+      else if declName.toString.endsWith "StorageMap" then .storageMap
       else if declName == ``USize then .usize
       else if declName == ``Float32 then .f32
       else if declName == ``Float then .f64
@@ -103,6 +106,7 @@ structure BridgeState where
   selfDeclName   : Lean.Name := .anonymous
   selfLoopAccVar : Option VarId := none
   selfParams     : Array (Lean.Compiler.LCNF.Param .impure) := #[]
+  localDeclNames : Array Lean.Name := #[]
   deriving Inhabited
 
 abbrev BridgeM := StateRefT BridgeState Lean.CoreM
@@ -316,13 +320,17 @@ def lowerImpureLetValue (lv : Lean.Compiler.LCNF.LetValue .impure) (retTy : LNIR
     match tryLowerIntrinsicCall fnName argVars retTy with
     | some intrinsicExpr => return intrinsicExpr
     | none =>
-      let isExt := Lean.isExtern env fnName
+      let st ← get
+      let isLocal := st.localDeclNames.contains fnName || fnName == st.selfDeclName
+      let isExt := !isLocal && Lean.isExtern env fnName
       if isExt then
         modify fun st => { st with hasExtern := true }
       return .call (mangleDeclName fnName) argVars retTy isExt
   | .pap fnName args _ =>
     let argVars ← args.toList.mapM lowerArg
-    let isExt := Lean.isExtern env fnName
+    let st ← get
+    let isLocal := st.localDeclNames.contains fnName || fnName == st.selfDeclName
+    let isExt := !isLocal && Lean.isExtern env fnName
     if isExt then
       modify fun st => { st with hasExtern := true }
     return .call (mangleDeclName fnName) argVars retTy isExt
@@ -513,7 +521,9 @@ def lowerPureLetValue (lv : Lean.Compiler.LCNF.LetValue .pure) (retTy : LNIRType
       match tryLowerIntrinsicCall declName argVars retTy with
       | some intrinsicExpr => return intrinsicExpr
       | none =>
-        let isExt := Lean.isExtern env declName
+        let st ← get
+        let isLocal := st.localDeclNames.contains declName || declName == st.selfDeclName
+        let isExt := !isLocal && Lean.isExtern env declName
         if isExt then
           modify fun st => { st with hasExtern := true }
         return .call (mangleDeclName declName) argVars retTy isExt
@@ -658,7 +668,8 @@ partial def lowerPureCode (code : Lean.Compiler.LCNF.Code .pure) : BridgeM LNIRC
 end
 
 /-- Lower a Lean 4.31 `LCNF.Decl .impure` into a verified/auditable `LNIRDecl`. -/
-def ingestLCNFImpureDecl (decl : Lean.Compiler.LCNF.Decl .impure) : Lean.CoreM LNIRDecl := do
+def ingestLCNFImpureDecl (decl : Lean.Compiler.LCNF.Decl .impure)
+    (localDeclNames : Array Lean.Name := #[]) : Lean.CoreM LNIRDecl := do
   let env ← getEnv
   let metaInfo := getLCNFDeclMetadata env decl.name
   let isDeclExtern := metaInfo.isExtern
@@ -666,6 +677,7 @@ def ingestLCNFImpureDecl (decl : Lean.Compiler.LCNF.Decl .impure) : Lean.CoreM L
     mangledSymbol  := metaInfo.mangledSymbol
     isSimpleGround := metaInfo.isSimpleGround
     selfDeclName   := decl.name
+    localDeclNames := localDeclNames
   }
   let action : BridgeM LNIRDecl := do
     let mut lnirParams : List LNIRParam := []
@@ -738,7 +750,8 @@ def ingestLCNFImpureDecl (decl : Lean.Compiler.LCNF.Decl .impure) : Lean.CoreM L
   Prod.fst <$> action.run initSt
 
 /-- Lower a Lean 4.31 `LCNF.Decl .pure` (mono phase) into an `LNIRDecl`. -/
-def ingestLCNFMonoDecl (decl : Lean.Compiler.LCNF.Decl .pure) : Lean.CoreM LNIRDecl := do
+def ingestLCNFMonoDecl (decl : Lean.Compiler.LCNF.Decl .pure)
+    (localDeclNames : Array Lean.Name := #[]) : Lean.CoreM LNIRDecl := do
   let env ← getEnv
   let metaInfo := getLCNFDeclMetadata env decl.name
   let isDeclExtern := metaInfo.isExtern
@@ -746,6 +759,7 @@ def ingestLCNFMonoDecl (decl : Lean.Compiler.LCNF.Decl .pure) : Lean.CoreM LNIRD
     mangledSymbol  := metaInfo.mangledSymbol
     isSimpleGround := metaInfo.isSimpleGround
     selfDeclName   := decl.name
+    localDeclNames := localDeclNames
   }
   let action : BridgeM LNIRDecl := do
     let mut lnirParams : List LNIRParam := []
@@ -826,20 +840,24 @@ def ingestModuleDecls (declNames : Array Lean.Name) (moduleName : String := "Lea
   let mut decls : List LNIRDecl := []
   for name in declNames do
     if let some impureDecl ← Lean.Compiler.LCNF.getLocalImpureDecl? name then
-      let d ← ingestLCNFImpureDecl impureDecl
+      let d ← ingestLCNFImpureDecl impureDecl declNames
       decls := decls ++ [d]
     else if let some monoDecl ← Lean.Compiler.LCNF.getMonoDecl? name then
-      let d ← ingestLCNFMonoDecl monoDecl
+      let d ← ingestLCNFMonoDecl monoDecl declNames
       decls := decls ++ [d]
   return {
     moduleName := moduleName
     decls      := decls
   }
 
-/-- Extract and lower all local impure LCNF declarations compiled in the current environment. -/
+/-- Extract and lower all local impure and mono LCNF declarations compiled in the current environment. -/
 def ingestAllLocalDecls (moduleName : String := "LeanNative.Ingested") : Lean.CoreM LNIRModule := do
-  let names ← Lean.Compiler.LCNF.getLocalImpureDecls
-  ingestModuleDecls names moduleName
+  let impureNames ← Lean.Compiler.LCNF.getLocalImpureDecls
+  let env ← getEnv
+  let extraNames := env.constants.map₂.foldl (fun acc name _ =>
+    if impureNames.contains name then acc else acc.push name
+  ) #[]
+  ingestModuleDecls (impureNames ++ extraNames) moduleName
 
 /-- Resolve the Lean 4.31 sysroot path reliably even when `lean` is not on `PATH`. -/
 def resolveLeanSysroot : IO System.FilePath := do
@@ -1122,7 +1140,7 @@ def matmulTiledU64Decl : LNIRDecl := {
     )
 }
 
-/-- Construct the canonical 6-kernel benchmark `LNIRModule`. -/
+/-- Construct the canonical 8-kernel benchmark `LNIRModule` (6 core + 2 EVM/Verity 256-bit kernels). -/
 def mkCanonicalBenchmarkModule : LNIRModule := {
   moduleName := "LeanNative.Benchmarks.Canonical"
   decls      := [
@@ -1131,7 +1149,9 @@ def mkCanonicalBenchmarkModule : LNIRModule := {
     sarrayScaleBiasDecl,
     dotProductU64Decl,
     saxpyKernelDecl,
-    matmulTiledU64Decl
+    matmulTiledU64Decl,
+    evmErc20TransferU256Decl,
+    evmMuldivWadU256Decl
   ]
 }
 

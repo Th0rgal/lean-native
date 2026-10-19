@@ -257,6 +257,48 @@ void lean_native_cpu_matmul_u64(
     size_t k
 );
 
+/* ============================================================================
+ * 256-Bit EVM Word (`u256`) & Persistent Storage Map (`SLOAD` / `SSTORE`)
+ * ============================================================================ */
+
+typedef struct {
+    uint64_t limbs[4];
+} lean_native_u256;
+
+typedef struct lean_native_evm_storage_entry {
+    lean_native_u256 key;
+    lean_native_u256 val;
+    uint8_t          occupied;
+} lean_native_evm_storage_entry;
+
+typedef struct lean_native_evm_storage_map {
+    lean_native_object             m_header;
+    size_t                         m_count;
+    size_t                         m_capacity;
+    lean_native_evm_storage_entry* m_entries;
+} lean_native_evm_storage_map;
+
+/**
+ * Allocates and initializes an empty 256-bit EVM key-value storage map (`uint256 -> uint256`).
+ */
+void* lean_native_evm_storage_create(void);
+
+/**
+ * Frees a 256-bit EVM storage map allocated by `lean_native_evm_storage_create`.
+ */
+void lean_native_evm_storage_free(void* map_ptr);
+
+/**
+ * Reads a 256-bit value (`4 x uint64_t` limbs in little-endian order) from `slot_limbs`.
+ * Uninitialized slots write `{0, 0, 0, 0}` to `out_val_limbs` per EVM SLOAD semantics.
+ */
+void lean_native_evm_sload(void* map_ptr, const uint64_t* slot_limbs, uint64_t* out_val_limbs);
+
+/**
+ * Writes a 256-bit value (`4 x uint64_t` limbs in little-endian order) to `slot_limbs` in `map_ptr`.
+ */
+void lean_native_evm_sstore(void* map_ptr, const uint64_t* slot_limbs, const uint64_t* val_limbs);
+
 #ifdef __cplusplus
 }
 #endif

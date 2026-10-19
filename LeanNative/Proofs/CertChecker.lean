@@ -116,6 +116,23 @@ def verifiedTheoremRegistry : List String :=
   , "LeanNative.Semantics.CodeRefines.decRef_congr"
   , "LeanNative.Semantics.CodeRefines.ite_congr"
   , "LeanNative.Semantics.CodeRefines.parFor_congr"
+  , "LeanNative.IR.UInt256.bitAnd_self"
+  , "LeanNative.IR.UInt256.bitOr_self"
+  , "LeanNative.IR.UInt256.bitXor_zero"
+  , "LeanNative.IR.UInt256.zero_bitXor"
+  , "LeanNative.IR.UInt256.bitOr_zero"
+  , "LeanNative.IR.UInt256.zero_bitOr"
+  , "LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_same"
+  , "LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_ne"
+  , "LeanNative.Semantics.HeapState.storageLoad_after_storageStore_same"
+  , "LeanNative.Semantics.HeapState.storageLoad_after_storageStore_ne"
+  , "LeanNative.Proofs.evalBinOp_u256_and_self"
+  , "LeanNative.Proofs.evalBinOp_u256_or_self"
+  , "LeanNative.Proofs.evalBinOp_u256_xor_zero"
+  , "LeanNative.Proofs.evalBinOp_u256_or_zero"
+  , "LeanNative.Proofs.storageStore_load_same_sound"
+  , "LeanNative.Proofs.storageStore_load_ne_sound"
+  , "LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive"
   ]
 
 /-- Check whether `thmName` is a registered kernel-checked theorem in `LeanNative.Proofs`. -/

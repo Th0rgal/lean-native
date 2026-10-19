@@ -159,9 +159,25 @@ def optimizeKernelAlgebraic (env : List (VarId × ScalarExpr)) (k : ParallelKern
     .customScalar idxVar inVars (rewriteScalarPeephole (substConstScalar env' body))
   | other => other
 
+/-- Check whether `dst` clobbers any variable in `lastStore`. -/
+def invalidateStoreOnRedef (dst : VarId)
+    (lastStore : Option (VarId × VarId × VarId × VarId)) :
+    Option (VarId × VarId × VarId × VarId) :=
+  match lastStore with
+  | some (origMap, newMap, slotVar, valVar) =>
+    if dst == origMap || dst == newMap || dst == slotVar || dst == valVar then
+      none
+    else
+      lastStore
+  | none => none
+
 /-- Recursively apply algebraic strength reduction, identity folding, constant propagation,
-    and constant branch (`ite`) elimination across `LNIRCode`. -/
-def optimizeCodeAlgebraic (env : List (VarId × ScalarExpr)) (code : LNIRCode) : LNIRCode :=
+    constant branch (`ite`) elimination, and same-block EVM `storageStore` -> `storageLoad`
+    forwarding (`storageStore_load_same_sound`) across `LNIRCode`. -/
+def optimizeCodeAlgebraicAux
+    (env : List (VarId × ScalarExpr))
+    (lastStore : Option (VarId × VarId × VarId × VarId))
+    (code : LNIRCode) : LNIRCode :=
   match code with
   | .letBind dst ty (.scalar e) k =>
     let e' := rewriteScalarPeephole (substConstScalar env e)
@@ -170,36 +186,71 @@ def optimizeCodeAlgebraic (env : List (VarId × ScalarExpr)) (code : LNIRCode) :
         (dst, e') :: env.filter (fun (id, _) => id != dst)
       else
         env.filter (fun (id, _) => id != dst)
-    .letBind dst ty (.scalar e') (optimizeCodeAlgebraic env' k)
+    let store' := invalidateStoreOnRedef dst lastStore
+    .letBind dst ty (.scalar e') (optimizeCodeAlgebraicAux env' store' k)
+  | .letBind dst ty (.storageStore mapVar slotVar valVar) k =>
+    let env' := env.filter (fun (id, _) => id != dst)
+    let store' :=
+      if dst == mapVar || dst == slotVar || dst == valVar then
+        none
+      else
+        some (mapVar, dst, slotVar, valVar)
+    .letBind dst ty (.storageStore mapVar slotVar valVar)
+      (optimizeCodeAlgebraicAux env' store' k)
+  | .letBind dst ty (.storageLoad mapVar slotVar) k =>
+    let env' := env.filter (fun (id, _) => id != dst)
+    let store' := invalidateStoreOnRedef dst lastStore
+    match lastStore with
+    | some (origMap, newMap, sSlot, sVal) =>
+      if (mapVar == origMap || mapVar == newMap) && slotVar == sSlot then
+        let e' := rewriteScalarPeephole (substConstScalar env (.var sVal))
+        let envFwd :=
+          if isScalarConst e' then
+            (dst, e') :: env'
+          else
+            env'
+        .letBind dst ty (.scalar e') (optimizeCodeAlgebraicAux envFwd store' k)
+      else
+        .letBind dst ty (.storageLoad mapVar slotVar) (optimizeCodeAlgebraicAux env' store' k)
+    | none =>
+      .letBind dst ty (.storageLoad mapVar slotVar) (optimizeCodeAlgebraicAux env' store' k)
+  | .letBind dst ty (.call fnName args retTy isExtern) k =>
+    let env' := env.filter (fun (id, _) => id != dst)
+    .letBind dst ty (.call fnName args retTy isExtern)
+      (optimizeCodeAlgebraicAux env' none k)
   | .letBind dst ty val k =>
     let env' := env.filter (fun (id, _) => id != dst)
-    .letBind dst ty val (optimizeCodeAlgebraic env' k)
+    let store' := invalidateStoreOnRedef dst lastStore
+    .letBind dst ty val (optimizeCodeAlgebraicAux env' store' k)
   | .rawStore ptrVar idxVar valVar elemTy k =>
-    .rawStore ptrVar idxVar valVar elemTy (optimizeCodeAlgebraic env k)
+    .rawStore ptrVar idxVar valVar elemTy (optimizeCodeAlgebraicAux env lastStore k)
   | .incRef objVar count k =>
-    .incRef objVar count (optimizeCodeAlgebraic env k)
+    .incRef objVar count (optimizeCodeAlgebraicAux env lastStore k)
   | .decRef objVar count k =>
-    .decRef objVar count (optimizeCodeAlgebraic env k)
+    .decRef objVar count (optimizeCodeAlgebraicAux env lastStore k)
   | .ite condVar thenBranch elseBranch =>
     match env.lookup condVar with
-    | some (.constBool true) => optimizeCodeAlgebraic env thenBranch
-    | some (.constBool false) => optimizeCodeAlgebraic env elseBranch
+    | some (.constBool true) => optimizeCodeAlgebraicAux env lastStore thenBranch
+    | some (.constBool false) => optimizeCodeAlgebraicAux env lastStore elseBranch
     | some (.constU64 v) =>
-      if v != 0 then optimizeCodeAlgebraic env thenBranch
-      else optimizeCodeAlgebraic env elseBranch
+      if v != 0 then optimizeCodeAlgebraicAux env lastStore thenBranch
+      else optimizeCodeAlgebraicAux env lastStore elseBranch
     | _ =>
-      .ite condVar (optimizeCodeAlgebraic env thenBranch) (optimizeCodeAlgebraic env elseBranch)
+      .ite condVar (optimizeCodeAlgebraicAux env none thenBranch) (optimizeCodeAlgebraicAux env none elseBranch)
   | .seqFor idxVar loVar hiVar accVar accInit accTy stepBody k =>
     let stepEnv := env.filter (fun (id, _) => id != idxVar && id != accVar)
-    let stepBody' := optimizeCodeAlgebraic stepEnv stepBody
+    let stepBody' := optimizeCodeAlgebraicAux stepEnv none stepBody
     let kEnv := env.filter (fun (id, _) => id != accVar)
-    .seqFor idxVar loVar hiVar accVar accInit accTy stepBody' (optimizeCodeAlgebraic kEnv k)
+    .seqFor idxVar loVar hiVar accVar accInit accTy stepBody' (optimizeCodeAlgebraicAux kEnv none k)
   | .parFor outVar lenVar inputs elemTy kernel k =>
     let kernel' := optimizeKernelAlgebraic env kernel
     let kEnv := env.filter (fun (id, _) => id != outVar)
-    .parFor outVar lenVar inputs elemTy kernel' (optimizeCodeAlgebraic kEnv k)
+    .parFor outVar lenVar inputs elemTy kernel' (optimizeCodeAlgebraicAux kEnv none k)
   | .ret v => .ret v
   | .unreachable => .unreachable
+
+def optimizeCodeAlgebraic (env : List (VarId × ScalarExpr)) (code : LNIRCode) : LNIRCode :=
+  optimizeCodeAlgebraicAux env none code
 
 /-- Run algebraic optimization on an `LNIRDecl`. -/
 def algebraicOptDecl (d : LNIRDecl) : LNIRDecl :=
@@ -211,7 +262,7 @@ def algebraicOptPass : TransformPass :=
     "AlgebraicOpt"
     .verifiedKernelProof
     "LeanNative.Proofs.PeepholeProofs.rewriteScalarPeephole_sound"
-    "Strength reduction (*2^k -> <<<k, /2^k -> >>>k, %2^k -> &&&(2^k-1)), identity folding, and constant branch elimination"
+    "Strength reduction (*2^k -> <<<k, /2^k -> >>>k, %2^k -> &&&(2^k-1)), identity folding, constant branch elimination, and EVM SSTORE->SLOAD forwarding (storageStore_load_same_sound)"
     (fun d => (optimizeCodeAlgebraic [] d.body, none))
 
 end LeanNative.Transform
