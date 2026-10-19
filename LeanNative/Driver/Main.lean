@@ -44,33 +44,45 @@ def printUsage : IO Unit := do
   IO.println "Usage: lean-native <command> [options]"
   IO.println ""
   IO.println "Commands:"
-  IO.println "  compile-llvm    Emit baseline or optimized LLVM 18 IR (--arch x86_64|arm64, --baseline, -o <path>)"
-  IO.println "  compile-mlir    Emit GPU MLIR module (gpu/scf/arith/memref/nvvm dialects, -o <path>)"
-  IO.println "  compile-ptx     Emit NVIDIA PTX 8.0 assembly (--sm sm_90, -o <path>)"
-  IO.println "  compile-hybrid  Partition module into CPU/GPU and emit hybrid host dispatch glue (-o <path>)"
-  IO.println "  verify-certs    Run optimization pipeline and independently verify translation certificates (--json, -o <path>)"
+  IO.println "  compile-llvm    Emit baseline or optimized LLVM 18 IR (--input <file.lean>, --arch x86_64|arm64, --baseline, -o <path>)"
+  IO.println "  compile-mlir    Emit GPU MLIR module (--input <file.lean>, -o <path>)"
+  IO.println "  compile-ptx     Emit NVIDIA PTX 8.0 assembly (--input <file.lean>, --sm sm_90, -o <path>)"
+  IO.println "  compile-hybrid  Partition module into CPU/GPU and emit hybrid host dispatch glue (--input <file.lean>, -o <path>)"
+  IO.println "  verify-certs    Run optimization pipeline and independently verify translation certificates (--input <file.lean>, --json, -o <path>)"
   IO.println "  audit-axioms    Run in-kernel transitive axiom audit over all soundness theorems (--json)"
   IO.println "  turbo-status    Probe Turbo Lean integration, verify BLAKE3 vectors, and emit/verify receipt"
   IO.println "  self-test       Run end-to-end compiler, semantics, certificate, axiom, and receipt self-tests"
+
+def loadInputOrCanonicalModule (args : List String) : IO LNIRModule := do
+  let inFile := findFlagValue args "--input" ""
+  if inFile.isEmpty then
+    return mkCanonicalBenchmarkModule
+  else
+    let mod ← ingestLeanSourceFile inFile inFile
+    if mod.decls.isEmpty then
+      return { mkCanonicalBenchmarkModule with moduleName := inFile }
+    else
+      return mod
 
 def runCompileLLVM (args : List String) : IO UInt32 := do
   let archStr := findFlagValue args "--arch" "x86_64"
   let arch := parseTargetArch archStr
   let isBaseline := hasFlag args "--baseline"
   let outPath := findFlagValue args "-o" ""
-  let baseMod := mkCanonicalBenchmarkModule
+  let baseMod ← loadInputOrCanonicalModule args
   let (modToEmit, _) := if isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   let irText := if isBaseline then emitLLVMBaseline modToEmit arch else emitLLVMOptimized modToEmit arch
   if outPath.isEmpty then
     IO.println irText
   else
     IO.FS.writeFile outPath irText
-    IO.println s!"[lean-native] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}) to {outPath}"
+    IO.println s!"[lean-native] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}"
   return 0
 
 def runCompileMLIR (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
-  let (optMod, _) := runDefaultPipeline mkCanonicalBenchmarkModule
+  let baseMod ← loadInputOrCanonicalModule args
+  let (optMod, _) := runDefaultPipeline baseMod
   let mlirText := emitMLIRModule optMod
   if outPath.isEmpty then
     IO.println mlirText
@@ -82,7 +94,8 @@ def runCompileMLIR (args : List String) : IO UInt32 := do
 def runCompilePTX (args : List String) : IO UInt32 := do
   let smArch := findFlagValue args "--sm" "sm_90"
   let outPath := findFlagValue args "-o" ""
-  let (optMod, _) := runDefaultPipeline mkCanonicalBenchmarkModule
+  let baseMod ← loadInputOrCanonicalModule args
+  let (optMod, _) := runDefaultPipeline baseMod
   let ptxText := emitPTXModule optMod smArch
   if outPath.isEmpty then
     IO.println ptxText
@@ -93,7 +106,8 @@ def runCompilePTX (args : List String) : IO UInt32 := do
 
 def runCompileHybrid (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
-  let (optMod, _) := runDefaultPipeline mkCanonicalBenchmarkModule
+  let baseMod ← loadInputOrCanonicalModule args
+  let (optMod, _) := runDefaultPipeline baseMod
   let plan := partitionModule optMod 65536
   let glueText := emitHybridHostGlue plan
   if outPath.isEmpty then
@@ -106,7 +120,7 @@ def runCompileHybrid (args : List String) : IO UInt32 := do
 def runVerifyCerts (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
   let jsonFlag := hasFlag args "--json"
-  let baseMod := mkCanonicalBenchmarkModule
+  let baseMod ← loadInputOrCanonicalModule args
   let (_, stepCerts) := runDefaultPipeline baseMod
   let optCerts := stepCerts.map toOptimizationCert
   let report := verifyModuleCerts baseMod.moduleName optCerts

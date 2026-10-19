@@ -499,6 +499,28 @@ def ingestModuleDecls (declNames : Array Lean.Name) (moduleName : String := "Lea
     decls      := decls
   }
 
+/-- Extract and lower all local impure LCNF declarations compiled in the current environment. -/
+def ingestAllLocalDecls (moduleName : String := "LeanNative.Ingested") : Lean.CoreM LNIRModule := do
+  let names ← Lean.Compiler.LCNF.getLocalImpureDecls
+  ingestModuleDecls names moduleName
+
+/-- Elaborate a `.lean` source file using Lean 4's frontend, run the LCNF compiler pipeline,
+    and extract the resulting `LNIRModule`. -/
+def ingestLeanSourceFile (filePath : String) (moduleName : String := "LeanNative.FileInput") : IO LNIRModule := do
+  Lean.initSearchPath (← Lean.findSysroot)
+  let input ← IO.FS.readFile filePath
+  let opts : Lean.Options := {}
+  let some env ← Lean.Elab.runFrontend input opts filePath `LeanNativeInput
+    | throw <| IO.userError s!"Elaboration failed for {filePath}"
+  let coreCtx : Lean.Core.Context := {
+    fileName := filePath
+    fileMap  := filePath.toFileMap
+    options  := opts
+  }
+  let coreState : Lean.Core.State := { env := env }
+  let (mod, _) ← (ingestAllLocalDecls moduleName).toIO coreCtx coreState
+  return mod
+
 /-!
 ## Canonical Benchmark & Workload Declarations
 
