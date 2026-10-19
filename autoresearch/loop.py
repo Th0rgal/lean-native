@@ -1501,11 +1501,24 @@ def run_overnight_cycle(cycle_idx: int, prev_hash: str) -> str:
             except Exception:
                 pass
 
-    # Synthesize a parameterized distributive/shift candidate for this cycle
-    k = (cycle_idx % 5) + 1
-    mult = 1 << k
-    cand_rule = f"(x * {mult}) + (x & x) - (x ^ x) -> (x << {k}) + x"
+    # Rotate across 12 algebraic, bitwise, 256-bit EVM, and adversarial test rules
+    candidate_rules = [
+        ("(x * 4) + (x & x) - (x ^ x) -> (x << 2) + x", True),
+        ("(x * 8) + (x & x) - (x ^ x) -> (x << 3) + x", True),
+        ("(x * 16) + (x & x) - (x ^ x) -> (x << 4) + x", True),
+        ("(x * 32) + (x & x) - (x ^ x) -> (x << 5) + x", True),
+        ("(x * 3) + (x * 5) -> x << 3", True),
+        ("((x << 1) << 2) + (x & x) -> (x << 3) + x", True),
+        ("(x * 3 + 7) * 3 + 7 -> x * 9 + 28", True),
+        ("((x + x) >> 1) & 1 -> x & 1", True),
+        ("(x ^ y) ^ y -> x", True),
+        ("(x | 0) & x -> x", True),
+        ("(x * 2) / 2 -> x", False),  # intentional unsound stress test (rejected by Stage 1)
+        ("(x + y) >> 1 -> (x >> 1) + (y >> 1)", False),  # intentional unsound stress test (rejected by Stage 1)
+    ]
+    cand_rule, expected_sound = candidate_rules[(cycle_idx - 1) % len(candidate_rules)]
     fc = evaluator.run_stage1_fastcheck(cand_rule, num_states=100000)
+    gate_behaved_as_expected = (fc.get("ok", False) == expected_sound)
 
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     cycle_entry = {
@@ -1513,7 +1526,9 @@ def run_overnight_cycle(cycle_idx: int, prev_hash: str) -> str:
         "timestamp_utc": now_iso,
         "target_arch": target,
         "synthesized_rule": cand_rule,
+        "expected_sound": expected_sound,
         "fastcheck_100k_ok": fc.get("ok", False),
+        "gate_behaved_as_expected": gate_behaved_as_expected,
         "fastcheck_elapsed_ms": fc.get("elapsed_ms", 0.0),
         "superopt_rewrites": superopt_res.get("rewritesApplied", 4),
         "superopt_cost_before": superopt_res.get("totalCostBefore", 54),
@@ -1536,7 +1551,7 @@ def run_overnight_cycle(cycle_idx: int, prev_hash: str) -> str:
         f"# LeanNative v0.5 Overnight Autoresearch Campaign Status\n\n"
         f"- **Last Completed Sweep Cycle**: `#{cycle_idx}` (`{now_iso}`)\n"
         f"- **Target Architecture Swept**: `{target}`\n"
-        f"- **Latest Synthesized Candidate**: `{cand_rule}` (`100,000` states verified: `{fc.get('ok', False)}` in `{fc.get('elapsed_ms', 0.0)} ms`)\n"
+        f"- **Latest Synthesized Candidate**: `{cand_rule}` (expected_sound=`{expected_sound}`, `100,000` states: `ok={fc.get('ok', False)}` in `{fc.get('elapsed_ms', 0.0)} ms`, gate_verified=`{gate_behaved_as_expected}`)\n"
         f"- **Superoptimizer Cost Reduction**: `{cycle_entry['superopt_cost_before']} -> {cycle_entry['superopt_cost_after']}` (`{cycle_entry['superopt_rewrites']}` rewrites)\n"
         f"- **Law 1 Untrusted Plugin & Adversarial Gate**: `{'PASSED' if cycle_entry['law1_plugin_gate_ok'] else 'FAILED'}`\n"
         f"- **Law 5 Spec & Test Pinning Gate**: `{'PASSED' if cycle_entry['law5_spec_pin_ok'] else 'FAILED'}`\n"
@@ -1546,7 +1561,7 @@ def run_overnight_cycle(cycle_idx: int, prev_hash: str) -> str:
     )
     print(
         f"[Overnight Cycle #{cycle_idx}] target={target} | rule={cand_rule!r} | "
-        f"100k_fc={fc.get('ok')} | Law1/5=PASS | blake3={entry_hash[:16]}...",
+        f"100k_fc={fc.get('ok')} (expected={expected_sound}) | Law1/5=PASS | blake3={entry_hash[:16]}...",
         flush=True,
     )
     return entry_hash
@@ -1566,7 +1581,7 @@ def main() -> int:
         "--until",
         type=str,
         default="",
-        help="ISO-8601 deadline timestamp (e.g. 2026-10-20T06:00:00+01:00) for continuous overnight research",
+        help="ISO-8601 deadline timestamp or 'tomorrow-06:00-lisbon' for continuous overnight research",
     )
     parser.add_argument(
         "--interval-seconds",
@@ -1586,30 +1601,55 @@ def main() -> int:
     records: List[Dict[str, Any]] = []
     prev_hash = "0" * 64
 
-    with open(LEDGER_JSONL, "w", encoding="utf-8") as ledger_f:
-        for cand in candidates:
-            rec = evaluate_in_isolated_worktree(cand, prev_hash)
-            prev_hash = rec["ledger_entry_blake3"]
-            records.append(rec)
-            ledger_f.write(json.dumps(rec) + "\n")
-            status = "ACCEPTED" if rec["accepted"] else f"REJECTED ({rec['rejected_at_stage']})"
-            print(f"[Autoresearch] {cand['id']} (worktree={rec['isolated_git_worktree']}): {status}", flush=True)
+    # If --until is set and LEDGER_JSONL already has all base records, resume directly
+    existing_lines = (
+        [ln for ln in LEDGER_JSONL.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if LEDGER_JSONL.is_file()
+        else []
+    )
+    if args.until and len(existing_lines) == len(candidates):
+        for ln in existing_lines:
+            r = json.loads(ln)
+            records.append(r)
+            prev_hash = r.get("ledger_entry_blake3", prev_hash)
+        print(f"[Autoresearch] Resumed with {len(records)} existing base experiments from {LEDGER_JSONL}", flush=True)
+    else:
+        with open(LEDGER_JSONL, "w", encoding="utf-8") as ledger_f:
+            for cand in candidates:
+                rec = evaluate_in_isolated_worktree(cand, prev_hash)
+                prev_hash = rec["ledger_entry_blake3"]
+                records.append(rec)
+                ledger_f.write(json.dumps(rec) + "\n")
+                status = "ACCEPTED" if rec["accepted"] else f"REJECTED ({rec['rejected_at_stage']})"
+                print(f"[Autoresearch] {cand['id']} (worktree={rec['isolated_git_worktree']}): {status}", flush=True)
 
-    md_text = generate_research_log_md(records)
-    RESEARCH_LOG_MD.write_text(md_text, encoding="utf-8")
-    print(f"[OK] Wrote {len(records)} cryptographic experiment records to {LEDGER_JSONL}", flush=True)
-    print(f"[OK] Wrote detailed research log to {RESEARCH_LOG_MD}", flush=True)
+        md_text = generate_research_log_md(records)
+        RESEARCH_LOG_MD.write_text(md_text, encoding="utf-8")
+        print(f"[OK] Wrote {len(records)} cryptographic experiment records to {LEDGER_JSONL}", flush=True)
+        print(f"[OK] Wrote detailed research log to {RESEARCH_LOG_MD}", flush=True)
 
     if args.until:
         if args.until == "tomorrow-06:00-lisbon":
             from zoneinfo import ZoneInfo
             now_lisbon = datetime.datetime.now(ZoneInfo("Europe/Lisbon"))
-            deadline = (now_lisbon + datetime.timedelta(days=1)).replace(
-                hour=6, minute=0, second=0, microsecond=0
-            )
+            if now_lisbon.hour < 6:
+                deadline = now_lisbon.replace(hour=6, minute=0, second=0, microsecond=0)
+            else:
+                deadline = (now_lisbon + datetime.timedelta(days=1)).replace(
+                    hour=6, minute=0, second=0, microsecond=0
+                )
         else:
             deadline = datetime.datetime.fromisoformat(args.until)
+
+        overnight_jsonl = LEDGER_DIR / "overnight_campaign.jsonl"
         cycle_idx = 1
+        if overnight_jsonl.is_file():
+            ov_lines = [ln for ln in overnight_jsonl.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            if ov_lines:
+                last_ov = json.loads(ov_lines[-1])
+                cycle_idx = int(last_ov.get("cycle_index", len(ov_lines))) + 1
+                prev_hash = str(last_ov.get("cycle_blake3", prev_hash))
+
         while True:
             now = datetime.datetime.now(datetime.timezone.utc)
             if now >= deadline:
