@@ -43,25 +43,51 @@ def sigLLVMType : LNIRType → String
   | .unit => "void"
   | ty => slotLLVMType ty
 
-/-- Collect all `(VarId, LNIRType)` bindings in an `LNIRCode` block so we can pre-allocate
+partial def collectScalarVars : ScalarExpr → List (VarId × LNIRType)
+  | .constU64 _ | .constBool _ => []
+  | .var id => [(id, .i64)]
+  | .binOp _ l r => collectScalarVars l ++ collectScalarVars r
+  | .unaryOp _ a => collectScalarVars a
+  | .select c t e => collectScalarVars c ++ collectScalarVars t ++ collectScalarVars e
+  | .fma a b c => collectScalarVars a ++ collectScalarVars b ++ collectScalarVars c
+
+def collectExprVars : LNIRExpr → List (VarId × LNIRType)
+  | .scalar e => collectScalarVars e
+  | .mkTuple fs => fs.map (fun v => (v, .i64))
+  | .projTuple tv _ => [(tv, .tuple [.i64, .i64])]
+  | .allocCtor _ ofs sfs => ofs.map (fun v => (v, .objPtr)) ++ sfs.map (fun v => (v, .i64))
+  | .ctorGetObj cv _ => [(cv, .objPtr)]
+  | .ctorGetScalar cv _ _ => [(cv, .objPtr)]
+  | .isExclusive ov => [(ov, .objPtr)]
+  | .sarrayLen av => [(av, .objPtr)]
+  | .sarrayDataPtr av et => [(av, .sarray et)]
+  | .sarrayEnsureExclusive av et => [(av, .sarray et)]
+  | .sarrayGet av iv et => [(av, .sarray et), (iv, .i64)]
+  | .sarraySet av iv vv et => [(av, .sarray et), (iv, .i64), (vv, et)]
+  | .rawLoad pv iv et => [(pv, .rawPtr et), (iv, .i64)]
+  | .boxScalar vv ty => [(vv, ty)]
+  | .unboxScalar bv _ => [(bv, .objPtr)]
+  | .call _ args _ _ => args.map (fun v => (v, .i64))
+
+/-- Collect all `(VarId, LNIRType)` bindings and references in an `LNIRCode` block so we can pre-allocate
     type-consistent `alloca` slots in the function `entry` block. -/
 partial def collectCodeVars (code : LNIRCode) : List (VarId × LNIRType) :=
   match code with
-  | .letBind dst ty _ k => (dst, ty) :: collectCodeVars k
-  | .rawStore _ _ _ _ k => collectCodeVars k
-  | .incRef _ _ k => collectCodeVars k
-  | .decRef _ _ k => collectCodeVars k
-  | .ite _ t e => collectCodeVars t ++ collectCodeVars e
+  | .letBind dst ty rhs k => (dst, ty) :: collectExprVars rhs ++ collectCodeVars k
+  | .rawStore pv iv vv et k => (pv, .rawPtr et) :: (iv, .i64) :: (vv, et) :: collectCodeVars k
+  | .incRef ov _ k => (ov, .objPtr) :: collectCodeVars k
+  | .decRef ov _ k => (ov, .objPtr) :: collectCodeVars k
+  | .ite cv t e => (cv, .i64) :: collectCodeVars t ++ collectCodeVars e
   | .seqFor idxVar loVar hiVar accVar accInit accTy stepBody k =>
     (idxVar, .i64) :: (loVar, .i64) :: (hiVar, .i64) :: (accVar, accTy) :: (accInit, accTy) ::
       (collectCodeVars stepBody ++ collectCodeVars k)
   | .parFor outVar lenVar inputs elemTy kernel k =>
     let kVars := match kernel with
-      | .customScalar iv ins _ => (iv, .i64) :: ins.map (fun v => (v, elemTy))
+      | .customScalar iv ins body => (iv, .i64) :: ins.map (fun v => (v, elemTy)) ++ collectScalarVars body
       | _ => []
     (outVar, .sarray elemTy) :: (lenVar, .i64) ::
       (inputs.map (fun v => (v, .sarray elemTy))) ++ kVars ++ collectCodeVars k
-  | .ret _ => []
+  | .ret v => [(v, .i64)]
   | .unreachable => []
 
 /-- Deduplicate variable declarations, keeping the first recorded type for each `VarId`. -/
