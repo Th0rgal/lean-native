@@ -319,6 +319,53 @@ theorem certifyCounterexample_no_false_positive (fuel : Nat) (d : LNIRDecl) (env
     rw [heval] at h
     exact ⟨v, st', rfl, h⟩
 
+/-- Empty constraint substitution is the identity on `ScalarExpr`. -/
+theorem substScalarExpr_nil (e : ScalarExpr) : substScalarExpr [] e = e := by
+  induction e with
+  | constU64 _ => rfl
+  | constBool _ => rfl
+  | var _ => rfl
+  | binOp op l r ihl ihr => simp only [substScalarExpr, ihl, ihr]
+  | unaryOp op a iha => simp only [substScalarExpr, iha]
+  | select c t f ihc iht ihf => simp only [substScalarExpr, ihc, iht, ihf]
+  | fma a b c iha ihb ihc => simp only [substScalarExpr, iha, ihb, ihc]
+
+/-- Machine-checked soundness theorem for single-variable equality constraint substitution:
+    when `evalScalarExpr env rhs = .ok v` and `env x = some v`, substituting `x := rhs`
+    into any `ScalarExpr` preserves exact denotational evaluation under `env`. -/
+theorem substSingleConstraint_sound (env : VarEnv) (x : VarId) (rhs : ScalarExpr) (v : Val)
+    (hrhs : evalScalarExpr env rhs = .ok v) (hx : env x = some v) (e : ScalarExpr) :
+    evalScalarExpr env (substScalarExpr [{ lhsVar := x, rhsExpr := rhs }] e) = evalScalarExpr env e := by
+  induction e with
+  | constU64 _ => rfl
+  | constBool _ => rfl
+  | var id =>
+    simp only [substScalarExpr, List.find?]
+    cases h : (x == id) with
+    | false => rfl
+    | true =>
+      have hid : x = id := of_decide_eq_true h
+      subst hid
+      simp only [hrhs, evalScalarExpr, hx]
+  | binOp op l r ihl ihr =>
+    simp only [substScalarExpr, evalScalarExpr, ihl, ihr]
+  | unaryOp op a iha =>
+    simp only [substScalarExpr, evalScalarExpr, iha]
+  | select c t f ihc iht ihf =>
+    simp only [substScalarExpr, evalScalarExpr, ihc, iht, ihf]
+  | fma a b c iha ihb ihc =>
+    simp only [substScalarExpr, evalScalarExpr, iha, ihb, ihc]
+
+/-- Machine-checked soundness theorem for `letBind` precondition constraint propagation:
+    wrapping `body` in `.letBind x ty (.scalar rhs) body` when `evalScalarExpr env rhs = .ok v`
+    evaluates identically to `body` under `env.bind x v`. -/
+theorem propagatePrecondition_letBind_sound (fuel : Nat) (env : VarEnv) (st : HeapState)
+    (x : VarId) (ty : LNIRType) (rhs : ScalarExpr) (v : Val) (body : LNIRCode)
+    (hrhs : evalScalarExpr env rhs = .ok v) :
+    evalCode (fuel + 1) env st (.letBind x ty (.scalar rhs) body) =
+    evalCode fuel (env.bind x v) st body := by
+  simp only [evalCode, evalExpr, hrhs]
+
 /-! ## 4. Precondition Satisfaction Tracking & Module FastCheck Runner -/
 
 /-- Check whether `env` satisfies all precondition guards (`ite condVar thenCode elseCode` where
@@ -700,13 +747,16 @@ end LeanNative.Backend.FastCheck
 namespace LeanNative.Backend
   export FastCheck (
     ConstraintSub
-     extractDeclConstraints
+    extractDeclConstraints
     propagatePreconditionEqualities
     boundaryU64Values
     boundaryU256Values
     isCounterexampleVal
     certifyCounterexample
     certifyCounterexample_no_false_positive
+    substScalarExpr_nil
+    substSingleConstraint_sound
+    propagatePrecondition_letBind_sound
     FastCheckDeclResult
     FastCheckReport
     runFastCheckDecl

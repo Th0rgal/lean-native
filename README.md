@@ -1,10 +1,10 @@
-# Lean Native (`lean-native` v0.3)
+# Lean Native (`lean-native` v0.4)
 
-**Lean Native (`lean-native`)** is a high-performance, formally validated, self-optimizing native compiler and counterexample engine for **Lean 4** (`leanprover/lean4:v4.31.0`) targeting **x86-64**, **ARM64**, and **NVIDIA CUDA (MLIR / NVVM / PTX 8.0)** with native **256-bit EVM/Verity (`u256`/`i256`/`StorageMap`)** support, achieving performance approaching or exceeding optimized Rust/C++ while preserving Lean's semantics through **61 machine-checked kernel proofs** (`0 sorryAx`) and Alive2-style symbolic translation validation.
+**Lean Native (`lean-native`)** is a high-performance, formally validated, self-optimizing native compiler and counterexample engine for **Lean 4** (`leanprover/lean4:v4.31.0`) targeting **x86-64**, **ARM64**, **NVIDIA CUDA (MLIR / NVVM / PTX 8.0)**, and **Apple Metal (MSL 3.0)** with native **256-bit EVM/Verity (`u256`/`i256`/`StorageMap`)** support, achieving performance approaching or exceeding optimized Rust/C++ while preserving Lean's semantics through **67 machine-checked kernel proofs** (`0 sorryAx`) and Alive2-style symbolic translation validation.
 
 ---
 
-## Highlights & Real Hardware Results (v0.3)
+## Highlights & Real Hardware Results (v0.4)
 
 ### 1. Cross-Architecture Runtime Speedups (`spark-de79` ARM64+GB10 & `ashur` x86-64)
 Across our workload suite (`collatz_steps`, `tuple_accum_sum`, `sarray_scale_bias`, `dot_product_u64`, `saxpy_kernel`, `matmul_tiled_u64`, plus 256-bit EVM/Verity kernels `evm_erc20_transfer_u256` and `evm_muldiv_wad_u256`) and immutable holdout tests (`holdout_bitwise`, `holdout_loop_bounds`), verified with **80/80 exact 64-bit deterministic checksum matches** (`7` trials per target, `p = 0.002165 < 0.05` via Mann-Whitney U):
@@ -15,7 +15,7 @@ Across our workload suite (`collatz_steps`, `tuple_accum_sum`, `sarray_scale_bia
 | **`ashur` (`x86_64`)** | 8-thread Intel Core i7-7700 @ 3.60 GHz | **20.07x** | **1.29x** | **20.07x** | **1.29x** | **7.7x** (`264 MB` vs `2,022 MB`) |
 
 ### 2. `lean-native-core` (`libleanrt`-Only) Cold-Start & Persistent JSON-RPC Worker Latency
-By decoupling [`LeanNative/Core.lean`](LeanNative/Core.lean) (20 compiler, semantics, proof, transform, backend, and adapter modules with **zero `import Lean`**) from the Lean frontend, `lean-native-core` links solely against `libleanrt.a` and standard C libraries (eliminating the ~230 MB `libleanshared.so` dependency):
+By decoupling [`LeanNative/Core.lean`](LeanNative/Core.lean) (23 compiler, semantics, proof, transform, superoptimizer, GPU IR, backend, and adapter modules with **zero `import Lean`**) and unifying CLI/worker dispatch in [`LeanNative/Driver/CoreCLI.lean`](LeanNative/Driver/CoreCLI.lean), `lean-native-core` links solely against `libleanrt.a` and standard C libraries (eliminating the ~230 MB `libleanshared.so` dependency):
 
 | Metric | `lean-native` (Full Frontend + `libleanshared.so`) | `lean-native-core` (`libleanrt.a` Only, `spark-de79` ARM64) | `lean-native-core` (`libleanrt.a` Only, `ashur` x86-64) | Improvement |
 | :--- | :---: | :---: | :---: | :---: |
@@ -28,30 +28,29 @@ See [`benchmarks/BENCHMARK_REPORT.md`](benchmarks/BENCHMARK_REPORT.md) and [`ben
 
 ---
 
-## Architecture (v0.3)
+## Architecture (v0.4)
 
-`lean-native` reuses Lean 4's frontend, elaborator, 3-phase `LCNF` pipeline (`Phase.base` → `Phase.mono` → `Phase.impure`), and C/FFI runtime while introducing a formally specified intermediate representation (`LNIR`) with verified optimization passes and multi-target backends:
+`lean-native` reuses Lean 4's frontend, elaborator, 3-phase `LCNF` pipeline (`Phase.base` → `Phase.mono` → `Phase.impure`), and C/FFI runtime while introducing a formally specified intermediate representation (`LNIR`) with verified optimization passes, enumerative superoptimization, and multi-target CPU/GPU backends:
 
-1. **Decoupled Core & LCNF Ingestion Bridge ([`LeanNative/Core.lean`](LeanNative/Core.lean), [`LeanNative/IR/Codec.lean`](LeanNative/IR/Codec.lean), [`LeanNative/IR/Bridge.lean`](LeanNative/IR/Bridge.lean))**:
-   - [`Codec.lean`](LeanNative/IR/Codec.lean): Lossless `LNIR_WIRE_V1` wire and JSON serialization/deserialization (`LNIRModule.toWire`, `LNIRModule.fromWire?`, `LNIRModule.toJson`, `LNIRModule.fromJson?`) plus 8 canonical kernels (`collatz_steps`, `tuple_accum_sum`, `sarray_scale_bias`, `dot_product_u64`, `saxpy_kernel`, `matmul_tiled_u64`, `evm_erc20_transfer_u256`, `evm_muldiv_wad_u256`).
-   - [`Bridge.lean`](LeanNative/IR/Bridge.lean): Lowers `LCNF .impure` & `.mono` declarations (multi-branch `cases` → `switch`, multi-parameter tail-recursive `.jp`/`.jmp` → `seqFor` loops, intra-module helper calls preserving `VerifiedKernelProof`, and standalone native executable compilation via `lean-native build-exe <file.lean> -o <bin>`). Fails explicitly with non-zero status if `--input <file.lean>` yields 0 declarations.
+1. **Zero-Redundancy Core & $O(N)$ LCNF Ingestion Bridge ([`LeanNative/Core.lean`](LeanNative/Core.lean), [`LeanNative/Driver/CoreCLI.lean`](LeanNative/Driver/CoreCLI.lean), [`LeanNative/IR/Codec.lean`](LeanNative/IR/Codec.lean), [`LeanNative/IR/Bridge.lean`](LeanNative/IR/Bridge.lean))**:
+   - [`CoreCLI.lean`](LeanNative/Driver/CoreCLI.lean): Single shared CLI parser, subcommand dispatcher, and persistent JSON-RPC `worker` loop parameterized by an optional frontend elaboration hook (`FrontendHooks`), reducing [`CoreMain.lean`](LeanNative/Driver/CoreMain.lean) to 24 lines and [`Main.lean`](LeanNative/Driver/Main.lean) to 88 lines (~2,900 lines of duplicated code eliminated across the repository in v0.4).
+   - [`Bridge.lean`](LeanNative/IR/Bridge.lean): Strictly linear $O(N)$ LCNF `.impure`/`.mono` lowering (erasing non-recursive join points on first splice to prevent $O(2^k)$ branching explosion) and `build-exe` compilation emitting `@lean_native_abi_*` C-ABI unboxing/boxing wrapper thunks.
 2. **Formally Specified IR with Native 256-Bit EVM & Storage Maps ([`LeanNative/IR/Types.lean`](LeanNative/IR/Types.lean), [`LeanNative/IR/AST.lean`](LeanNative/IR/AST.lean))**:
    - Models unboxed scalars (`i1`, `i8`, `i16`, `i32`, `i64`, `usize`, `f32`, `f64`), **256-bit EVM words (`u256`, `i256` / `UInt256`)**, **persistent 256-bit key-value storage maps (`storageMap`)**, register-resident tuples (`tuple`), contiguous scalar buffers (`sarray`, `rawPtr`), checked 256-bit arithmetic (`addChecked256`, `subChecked256`, `mulChecked256`), 512-bit intermediate fixed-point scaling (`mulDivDown`, `mulDivUp`), `clz256`, `sar`, and `storageLoad` / `storageStore`.
-3. **Formal Semantics, Symbolic TV & 61 Machine-Checked Proofs ([`LeanNative/Semantics/`](LeanNative/Semantics/), [`LeanNative/Proofs/`](LeanNative/Proofs/))**:
-   - [`Value.lean`](LeanNative/Semantics/Value.lean), [`Eval.lean`](LeanNative/Semantics/Eval.lean), [`Refinement.lean`](LeanNative/Semantics/Refinement.lean): Total operational/denotational semantics over `Val` (including `.u256` and `.storageMapId`), `VarEnv`, and `HeapState` (`StorageMapBuffer` with `lookupSlot_writeSlot_same` and `lookupSlot_writeSlot_ne`).
-   - [`PeepholeProofs.lean`](LeanNative/Proofs/PeepholeProofs.lean), [`LoopOptProofs.lean`](LeanNative/Proofs/LoopOptProofs.lean), [`SymbolicTV.lean`](LeanNative/Proofs/SymbolicTV.lean), [`FastCheck.lean`](LeanNative/Backend/FastCheck.lean): **61 machine-checked kernel theorems** proving end-to-end recursive `CodeRefines` pass soundness (`rewriteCodePeephole_refines`, `unboxTupleLetChain_refines`, `hoistExclusivityPreheader_refines`), 256-bit & EVM storage store-to-load forwarding (`storageStore_load_same_sound`, `storageStore_load_ne_sound`), Alive2-style symbolic translation validation (`validate-tv`), and zero-false-positive counterexample certification (`certifyCounterexample_no_false_positive`).
-   - [`AxiomAudit.lean`](LeanNative/Proofs/AxiomAudit.lean): Compile-time (`#verify_lean_native_axioms`) and runtime (`lean-native audit-axioms`) in-kernel transitive axiom auditor enforcing `{propext, Quot.sound, Classical.choice}` only (`0 sorryAx`, `0 trustCompiler`, `0 native_decide`).
-4. **Constraint-Propagating Fuzzing Kernel Generator ([`LeanNative/Backend/FastCheck.lean`](LeanNative/Backend/FastCheck.lean))**:
-   - Eliminates `VacuousPass` failure modes on equality-constrained preconditions (`x_i == expr`) by propagating `x_i := expr` directly into the generator (`propagatePreconditionEqualities`).
-   - Combines deterministic 64-bit & 256-bit boundary value tables ($0, 1, 2, 2^{64}-1, 2^{128}-1, 2^{255}, 2^{256}-1$, WAD $10^{18}$), pairwise parameter collision sampling ($x_i = x_j$), and parallel SplitMix64 streams.
-   - Emits vectorized LLVM 18 CPU SIMD (`@lean_native_fastcheck_simd`) and NVIDIA PTX 8.0 (`lean_native_fastcheck_kernel`) harnesses tracking `satisfied_preconditions_count`, and certifies every counterexample via `LeanNative.Semantics.Eval.evalCode`.
-5. **CPU (`i256`/`i512`), GPU (PTX 8.0 Carry-Chain & `.shared` Tiled), and Hybrid Backends ([`LeanNative/Backend/`](LeanNative/Backend/), [`runtime/`](runtime/))**:
-   - [`LLVM.lean`](LeanNative/Backend/LLVM.lean): Emits LLVM 18 IR for `x86_64` and `ARM64` with native `i256` arithmetic, `@llvm.uadd/usub/umul.with.overflow.i256`, `@llvm.ctlz.i256`, `i512` `mulDivDown`/`mulDivUp`, multi-way `switch i64`, and `@lean_native_evm_sload`/`@lean_native_evm_sstore`.
-   - [`MLIRGPU.lean`](LeanNative/Backend/MLIRGPU.lean): Synthesizes 15 **NVIDIA PTX 8.0 (`sm_90`)** kernels including 4-limb `.reg .u64` 256-bit hardware carry-chain arithmetic (`add.cc.u64`/`addc.cc.u64`, `sub.cc.u64`/`subc.u64`, `mad.lo.cc.u64`), `.shared` tree reduction (`dot_reduce_u64`), 2D 16×16 `.shared` tiled matrix multiplication (`matmul_tiled_u64`), and IEEE-754 `f64`/`f32` kernels — loaded dynamically via `cuModuleLoadDataEx` and `cuLaunchKernel` in [`runtime/lean_native_cuda.cu`](runtime/lean_native_cuda.cu).
-6. **Zero-Python Native BLAKE3 & Turbo Lean Adapter ([`LeanNative/TurboLean/Adapter.lean`](LeanNative/TurboLean/Adapter.lean))**:
-   - Pure-Lean RFC-compliant **BLAKE3** implementation (`blake3Hex`, `blake3Bytes`, verified against official test vectors) and native sub-4ms 64/256-bit counterexample search with zero `python3` subprocess dependencies.
+3. **Unified Pass Proofs, Symbolic TV & 67 Machine-Checked Theorems ([`LeanNative/Semantics/`](LeanNative/Semantics/), [`LeanNative/Proofs/`](LeanNative/Proofs/))**:
+   - [`PeepholeProofs.lean`](LeanNative/Proofs/PeepholeProofs.lean) & [`AlgebraicOpt.lean`](LeanNative/Transform/AlgebraicOpt.lean): Unified so the executed `AlgebraicOpt` pass directly invokes the kernel-verified `LeanNative.Proofs.rewriteScalarVerified` (`rewriteScalarPeephole` + `rewriteConstFoldBinOp`), backed by `evalBinOp_const_fold_sound` and `rewriteScalarVerified_sound`.
+   - [`FastCheck.lean`](LeanNative/Backend/FastCheck.lean): Proves equality constraint-propagation soundness (`substScalarExpr_nil`, `substSingleConstraint_sound`, `propagatePrecondition_letBind_sound`) alongside `certifyCounterexample_no_false_positive`.
+   - [`AxiomAudit.lean`](LeanNative/Proofs/AxiomAudit.lean): Compile-time (`#verify_lean_native_axioms`) and runtime (`lean-native audit-axioms`) in-kernel transitive axiom auditor verifying all **67 machine-checked kernel theorems** (`0 sorryAx`, `0 trustCompiler`, `0 native_decide`).
+4. **Cost-Guided Enumerative Superoptimizer ([`LeanNative/Transform/Superopt.lean`](LeanNative/Transform/Superopt.lean))**:
+   - Hardware-parameterized instruction cost models (`x86_64`, `arm64`, `cuda_ptx`, `apple_metal`) with enumerative algebraic/bitwise synthesis (distributive factoring `x*a + x*b -> x*(a+b)`, shift composition `(x <<< k1) <<< k2 -> x <<< (k1+k2)`, power-of-two division collapse `(x / d1) / d2 -> x >>> (k1+k2)`, FMA fusion) gated by two-stage verification (`fastCheckScalarEquiv` + `symCheckScalarEquiv`), cutting canonical scalar latency from **`54 -> 24` cycles** on `x86_64` and **`66 -> 22` cycles** on `apple_metal`.
+5. **Unified GPU Kernel IR (`GPUIR.lean`), NVIDIA PTX 8.0 (`MLIRGPU.lean`) & Apple Metal MSL 3.0 (`Metal.lean`)**:
+   - [`GPUIR.lean`](LeanNative/Backend/GPUIR.lean): Shared `GPUKernelDescriptor` & `GPUKernelArchetype` representation across CUDA PTX 8.0, MLIR (`gpu`/`nvvm`), and Apple Metal (MSL 3.0).
+   - [`Metal.lean`](LeanNative/Backend/Metal.lean) & [`runtime/lean_native_metal.m`](runtime/lean_native_metal.m): Emits 18 Apple Metal MSL 3.0 compute kernels (`[[buffer(i)]]`, `[[thread_position_in_grid]]`, `threadgroup` shared-memory tree reduction & 16×16 tiled MatMul with `threadgroup_barrier(mem_flags::mem_threadgroup)`, 4-limb `ln_u256` carry-chain EVM arithmetic, and `lean_native_fastcheck_metal_kernel`), dispatched with zero-copy unified memory (`newBufferWithBytesNoCopy` / `MTLResourceStorageModeShared`) on Apple Silicon and validated via [`runtime/metal_compat_check.h`](runtime/metal_compat_check.h).
+6. **Orthogonal Test Suite ([`tests/test_runner.lean`](tests/test_runner.lean)) & Curated Showcase Examples ([`examples/`](examples/))**:
+   - [`tests/test_runner.lean`](tests/test_runner.lean): Non-redundant 6-family boundary & regression suite (`FNV1A_CHECKSUM64=0x6f66afdade214a0c`) covering 256-bit multi-limb carries, 512-bit `mulDivDown`/`mulDivUp` rounding, `sar` sign extension & `clz256`, EVM storage slot collisions, shared-array (`m_rc > 1`) COW preservation under `HoistExclusivity`, and multi-constructor tag dispatch.
+   - Curated end-to-end examples: [`examples/verity_amm_vault.lean`](examples/verity_amm_vault.lean) (ERC-4626 Vault & AMM `u256` solvency + FastCheck counterexample detection), [`examples/saxpy_matmul_gpu.lean`](examples/saxpy_matmul_gpu.lean), and [`examples/persistent_tuple_tree.lean`](examples/persistent_tuple_tree.lean).
 7. **Autonomous Multi-Agent Optimization Loop ([`autoresearch/`](autoresearch/))**:
-   - Evaluates **24 optimization & FastCheck hypotheses** inside isolated git worktrees (`git worktree add --detach`) gated by Stage 1 (100k-state fuzzing), Stage 2 (61-theorem axiom audit + `lean-native-core validate-tv`), and Stage 3 (`spark-de79` + `ashur` benchmarks), logging BLAKE3-chained receipts to [`autoresearch/ledger/experiments.jsonl`](autoresearch/ledger/experiments.jsonl) and [`autoresearch/RESEARCH_LOG.md`](autoresearch/RESEARCH_LOG.md).
+   - Evaluates **30 optimization, superoptimization, Apple Metal & FastCheck hypotheses** (`21 ACCEPTED`, `9 REJECTED`) inside isolated git worktrees gated by 100k-state fuzzing, the 67-theorem axiom audit + `validate-tv`, and cross-architecture benchmarks, logging BLAKE3-chained receipts to [`autoresearch/ledger/experiments.jsonl`](autoresearch/ledger/experiments.jsonl) and [`autoresearch/RESEARCH_LOG.md`](autoresearch/RESEARCH_LOG.md).
 
 ---
 
@@ -64,29 +63,33 @@ lake build lean-native-core lean-native
 ./.lake/build/bin/lean-native self-test
 ```
 
-### Compile a `.lean` Program Directly to a Standalone Native Executable
+### Compile Orthogonal Tests & Showcase Examples to Native Executables
 ```bash
-./.lake/build/bin/lean-native build-exe tests/general_lean4_suite.lean -o /tmp/general_suite_native
-/tmp/general_suite_native
+./.lake/build/bin/lean-native build-exe tests/test_runner.lean -o /tmp/test_runner && /tmp/test_runner
+./.lake/build/bin/lean-native build-exe examples/verity_amm_vault.lean -o /tmp/verity_amm_vault && /tmp/verity_amm_vault
+./.lake/build/bin/lean-native build-exe examples/saxpy_matmul_gpu.lean -o /tmp/saxpy_matmul_gpu && /tmp/saxpy_matmul_gpu
+./.lake/build/bin/lean-native build-exe examples/persistent_tuple_tree.lean -o /tmp/persistent_tuple_tree && /tmp/persistent_tuple_tree
 ```
 
-### Run Constraint-Propagating FastCheck & Emit SIMD / PTX 8.0 Fuzzing Kernels
+### Run Cost-Guided Superoptimizer & Emit Apple Metal MSL 3.0 / NVIDIA PTX 8.0 / FastCheck Kernels
 ```bash
+./.lake/build/bin/lean-native-core superopt --arch x86_64
+./.lake/build/bin/lean-native-core superopt --arch apple_metal
+./.lake/build/bin/lean-native-core compile-metal -o /tmp/kernels.metal
+./.lake/build/bin/lean-native-core compile-fastcheck --emit-metal -o /tmp/fastcheck.metal
 ./.lake/build/bin/lean-native-core compile-fastcheck --samples 1024
-./.lake/build/bin/lean-native-core compile-fastcheck --emit-llvm -o /tmp/fastcheck_simd.ll
-./.lake/build/bin/lean-native-core compile-fastcheck --emit-ptx --sm sm_90 -o /tmp/fastcheck_gpu.ptx
 ```
 
 ### Run Persistent Sub-Millisecond JSON-RPC Worker (`< 0.1 ms` / request)
 ```bash
-printf '{"id":1,"method":"ping"}\n{"id":2,"method":"eval-cex"}\n{"id":3,"method":"shutdown"}\n' \
+printf '{"id":1,"method":"ping"}\n{"id":2,"method":"superopt","params":{"arch":"apple_metal"}}\n{"id":3,"method":"compile-metal"}\n{"id":4,"method":"shutdown"}\n' \
   | ./.lake/build/bin/lean-native-core worker
 ```
 
-### Verify Formal Proofs, Symbolic TV, Certificates, and Autonomous Research Loop
+### Verify All 67 Formal Proofs, Symbolic TV, Certificates, and 30-Experiment Autoresearch Loop
 ```bash
 ./.lake/build/bin/lean-native audit-axioms
 ./.lake/build/bin/lean-native-core validate-tv
 ./.lake/build/bin/lean-native-core verify-certs
-python3 autoresearch/loop.py --iterations 24
+python3 autoresearch/loop.py --iterations 30
 ```

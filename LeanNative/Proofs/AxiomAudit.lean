@@ -84,7 +84,13 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Proofs.evalBinOp_u256_or_zero
   , ``LeanNative.Proofs.storageStore_load_same_sound
   , ``LeanNative.Proofs.storageStore_load_ne_sound
+  , ``LeanNative.Proofs.evalBinOp_const_fold_sound
+  , ``LeanNative.Proofs.rewriteConstFoldStep_sound
+  , ``LeanNative.Proofs.rewriteScalarVerified_sound
   , ``LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive
+  , ``LeanNative.Backend.FastCheck.substScalarExpr_nil
+  , ``LeanNative.Backend.FastCheck.substSingleConstraint_sound
+  , ``LeanNative.Backend.FastCheck.propagatePrecondition_letBind_sound
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

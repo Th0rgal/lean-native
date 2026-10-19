@@ -132,7 +132,16 @@ def verifiedTheoremRegistry : List String :=
   , "LeanNative.Proofs.evalBinOp_u256_or_zero"
   , "LeanNative.Proofs.storageStore_load_same_sound"
   , "LeanNative.Proofs.storageStore_load_ne_sound"
+  , "LeanNative.Proofs.evalBinOp_const_fold_sound"
+  , "LeanNative.Proofs.PeepholeProofs.evalBinOp_const_fold_sound"
+  , "LeanNative.Proofs.rewriteConstFoldStep_sound"
+  , "LeanNative.Proofs.PeepholeProofs.rewriteConstFoldStep_sound"
+  , "LeanNative.Proofs.rewriteScalarVerified_sound"
+  , "LeanNative.Proofs.PeepholeProofs.rewriteScalarVerified_sound"
   , "LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive"
+  , "LeanNative.Backend.FastCheck.substScalarExpr_nil"
+  , "LeanNative.Backend.FastCheck.substSingleConstraint_sound"
+  , "LeanNative.Backend.FastCheck.propagatePrecondition_letBind_sound"
   ]
 
 /-- Check whether `thmName` is a registered kernel-checked theorem in `LeanNative.Proofs`. -/

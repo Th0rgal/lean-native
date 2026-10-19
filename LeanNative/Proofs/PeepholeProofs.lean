@@ -605,6 +605,80 @@ theorem storageStore_load_ne_sound (env : VarEnv) (st : HeapState)
   unfold evalExpr
   simp [Val.toU256?, hmap, hslot1, hslot2, hval, HeapState.storageLoad_after_storageStore_ne st mapId slot1 slot2 val hne]
 
+/-! ## Verified Binary Constant Folding (`rewriteConstFoldBinOp`) -/
+
+theorem uint64_and_63_mod_64 (b : UInt64) : (b &&& 63).mod 64 = b.mod 64 := by
+  cases b with
+  | ofBitVec bv =>
+    rcases bv with ⟨n, hn⟩
+    apply congrArg UInt64.ofBitVec
+    apply BitVec.eq_of_toNat_eq
+    change (n &&& (2 ^ 6 - 1)) % 64 = n % 64
+    rw [Nat.and_two_pow_sub_one_eq_mod n 6]
+    exact Nat.mod_mod n 64
+
+@[simp]
+theorem uint64_shiftLeft_and_63 (a b : UInt64) : a <<< (b &&& 63) = a <<< b := by
+  change UInt64.shiftLeft a (b &&& 63) = UInt64.shiftLeft a b
+  unfold UInt64.shiftLeft
+  rw [uint64_and_63_mod_64]
+
+@[simp]
+theorem uint64_shiftRight_and_63 (a b : UInt64) : a >>> (b &&& 63) = a >>> b := by
+  change UInt64.shiftRight a (b &&& 63) = UInt64.shiftRight a b
+  unfold UInt64.shiftRight
+  rw [uint64_and_63_mod_64]
+
+/-- Verified binary constant folding on `UInt64` scalar literals. -/
+def rewriteConstFoldBinOp (op : BinOp) (a b : UInt64) : ScalarExpr :=
+  match op with
+  | .add => .constU64 (a + b)
+  | .sub => .constU64 (a - b)
+  | .mul => .constU64 (a * b)
+  | .bitAnd => .constU64 (a &&& b)
+  | .bitOr => .constU64 (a ||| b)
+  | .bitXor => .constU64 (a ^^^ b)
+  | .shl => .constU64 (a <<< (b &&& 63))
+  | .shr => .constU64 (a >>> (b &&& 63))
+  | .eq => .constBool (a == b)
+  | .lt => .constBool (a < b)
+  | .le => .constBool (a ≤ b)
+  | other => .binOp other (.constU64 a) (.constU64 b)
+
+/-- Machine-checked soundness theorem for `rewriteConstFoldBinOp`:
+    constant folding on `UInt64` binary operations preserves exact scalar evaluation semantics. -/
+theorem evalBinOp_const_fold_sound (op : BinOp) (a b : UInt64) (env : VarEnv) :
+    evalScalarExpr env (rewriteConstFoldBinOp op a b) =
+    evalScalarExpr env (.binOp op (.constU64 a) (.constU64 b)) := by
+  cases op <;> unfold rewriteConstFoldBinOp evalScalarExpr evalBinOp <;> try (unfold evalScalarExpr; simp)
+
+/-- Single-step verified constant-folding wrapper on `ScalarExpr`. -/
+def rewriteConstFoldStep : ScalarExpr → ScalarExpr
+  | .binOp op (.constU64 a) (.constU64 b) => rewriteConstFoldBinOp op a b
+  | other => other
+
+theorem rewriteConstFoldStep_sound (e : ScalarExpr) :
+    ScalarExprEquiv e (rewriteConstFoldStep e) := by
+  intro env
+  cases e with
+  | binOp op lhs rhs =>
+    cases lhs <;> cases rhs <;> try rfl
+    case constU64.constU64 a b =>
+      simp only [rewriteConstFoldStep]
+      exact (evalBinOp_const_fold_sound op a b env).symm
+  | _ => rfl
+
+/-- Composed verified scalar peephole + binary constant-folding rewriter. -/
+def rewriteScalarVerified (e : ScalarExpr) : ScalarExpr :=
+  rewriteConstFoldStep (rewriteScalarPeephole e)
+
+/-- Machine-checked soundness theorem for `rewriteScalarVerified`. -/
+theorem rewriteScalarVerified_sound (e : ScalarExpr) :
+    ScalarExprEquiv e (rewriteScalarVerified e) :=
+  ScalarExprEquiv.trans
+    (rewriteScalarPeephole_sound e)
+    (rewriteConstFoldStep_sound (rewriteScalarPeephole e))
+
 namespace PeepholeProofs
   abbrev rewriteScalarPeephole_sound := @LeanNative.Proofs.rewriteScalarPeephole_sound
   abbrev rewriteLNIRExpr_sound := @LeanNative.Proofs.rewriteLNIRExpr_sound
@@ -617,6 +691,9 @@ namespace PeepholeProofs
   abbrev evalBinOp_u256_or_zero := @LeanNative.Proofs.evalBinOp_u256_or_zero
   abbrev storageStore_load_same_sound := @LeanNative.Proofs.storageStore_load_same_sound
   abbrev storageStore_load_ne_sound := @LeanNative.Proofs.storageStore_load_ne_sound
+  abbrev evalBinOp_const_fold_sound := @LeanNative.Proofs.evalBinOp_const_fold_sound
+  abbrev rewriteConstFoldStep_sound := @LeanNative.Proofs.rewriteConstFoldStep_sound
+  abbrev rewriteScalarVerified_sound := @LeanNative.Proofs.rewriteScalarVerified_sound
 end PeepholeProofs
 
 end LeanNative.Proofs

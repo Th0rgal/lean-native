@@ -1,132 +1,31 @@
 import LeanNative.IR.Types
 import LeanNative.IR.AST
+import LeanNative.Backend.GPUIR
 
 namespace LeanNative.Backend.MLIRGPU
 
 open LeanNative.IR
+open LeanNative.Backend.GPUIR
 
 /-- Inspect an `LNIRExpr` for constructs incompatible with GPU execution.
-    Returns a list of diagnostic reasons if incompatible (empty list means compatible). -/
+    Delegates to `LeanNative.Backend.GPUIR.checkExprGpuCompatibility`. -/
 def checkExprGpuCompatibility (e : LNIRExpr) : List String :=
-  match e with
-  | .scalar _ => []
-  | .constU256 _ => []
-  | .mulDivDown _ _ _ => []
-  | .mulDivUp _ _ _ => []
-  | .storageLoad _ _ => []
-  | .storageStore _ _ _ => []
-  | .mkTuple _ => []
-  | .projTuple _ _ => []
-  | .allocCtor tag _ _ =>
-    [s!"heap constructor allocation (allocCtor tag={tag}) is not allowed on GPU"]
-  | .ctorGetObj _ _ =>
-    ["boxed object field projection (ctorGetObj) is not allowed on GPU"]
-  | .ctorGetScalar _ _ ty =>
-    if ty.isGpuCompatible then []
-    else [s!"ctorGetScalar has non-GPU type {reprStr ty}"]
-  | .isExclusive _ =>
-    ["reference-count exclusivity check (isExclusive) is a host-only operation"]
-  | .sarrayLen _ => []
-  | .sarrayDataPtr _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"sarrayDataPtr element type {reprStr elemTy} is not an unboxed scalar"]
-  | .sarrayEnsureExclusive _ _ =>
-    ["COW buffer cloning (sarrayEnsureExclusive) must execute on host before kernel launch"]
-  | .sarrayGet _ _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"sarrayGet element type {reprStr elemTy} is not an unboxed scalar"]
-  | .sarraySet _ _ _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"sarraySet element type {reprStr elemTy} is not an unboxed scalar"]
-  | .rawLoad _ _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"rawLoad element type {reprStr elemTy} is not an unboxed scalar"]
-  | .boxScalar _ _ =>
-    ["scalar boxing (boxScalar) allocates on the Lean heap and cannot run on GPU"]
-  | .unboxScalar _ _ =>
-    ["scalar unboxing (unboxScalar) accesses a boxed heap pointer and cannot run on GPU"]
-  | .call fnName _ retTy isExtern =>
-    if isExtern then
-      [s!"external CPU FFI call '{fnName}' cannot be offloaded to GPU"]
-    else if !retTy.isGpuCompatible then
-      [s!"call to '{fnName}' returns non-GPU type {reprStr retTy}"]
-    else
-      []
+  GPUIR.checkExprGpuCompatibility e
 
-/-- Recursively check an `LNIRCode` block for GPU compatibility violations. -/
-partial def checkCodeGpuCompatibility (code : LNIRCode) : List String :=
-  match code with
-  | .letBind dst ty val k =>
-    let tyErrs :=
-      if ty.isGpuCompatible then []
-      else [s!"let-binding %v{dst} has non-GPU-compatible type {reprStr ty}"]
-    let valErrs :=
-      match val with
-      | .sarrayEnsureExclusive _ elemTy =>
-        -- Host-side COW exclusivity preparation before parFor is permitted in hybrid functions
-        if elemTy.isUnboxedScalar then []
-        else [s!"sarrayEnsureExclusive element type {reprStr elemTy} is not an unboxed scalar"]
-      | _ => checkExprGpuCompatibility val
-    tyErrs ++ valErrs ++ checkCodeGpuCompatibility k
-  | .rawStore _ _ _ elemTy k =>
-    let elemErrs :=
-      if elemTy.isUnboxedScalar then []
-      else [s!"rawStore element type {reprStr elemTy} is not an unboxed scalar"]
-    elemErrs ++ checkCodeGpuCompatibility k
-  | .incRef objVar count k =>
-    [s!"reference counting (incRef %v{objVar} by {count}) is not allowed in GPU kernels"] ++
-      checkCodeGpuCompatibility k
-  | .decRef objVar count k =>
-    [s!"reference counting (decRef %v{objVar} by {count}) is not allowed in GPU kernels"] ++
-      checkCodeGpuCompatibility k
-  | .ite _ thenBranch elseBranch =>
-    checkCodeGpuCompatibility thenBranch ++ checkCodeGpuCompatibility elseBranch
-  | .seqFor _ _ _ _ _ accTy stepBody k =>
-    let accErrs :=
-      if accTy.isGpuCompatible then []
-      else [s!"seqFor accumulator type {reprStr accTy} is not GPU-compatible"]
-    accErrs ++ checkCodeGpuCompatibility stepBody ++ checkCodeGpuCompatibility k
-  | .parFor _ _ _ elemTy _ k =>
-    let elemErrs :=
-      if elemTy.isUnboxedScalar then []
-      else [s!"parFor element type {reprStr elemTy} is not an unboxed scalar"]
-    elemErrs ++ checkCodeGpuCompatibility k
-  | .ret _ => []
-  | .unreachable => []
+/-- Recursively check an `LNIRCode` block for GPU compatibility violations.
+    Delegates to `LeanNative.Backend.GPUIR.checkCodeGpuCompatibility`. -/
+def checkCodeGpuCompatibility (code : LNIRCode) : List String :=
+  GPUIR.checkCodeGpuCompatibility code
 
-/-- Check whether an `LNIRCode` contains at least one `parFor` data-parallel region. -/
-partial def containsParFor (code : LNIRCode) : Bool :=
-  match code with
-  | .letBind _ _ _ k => containsParFor k
-  | .rawStore _ _ _ _ k => containsParFor k
-  | .incRef _ _ k => containsParFor k
-  | .decRef _ _ k => containsParFor k
-  | .ite _ t e => containsParFor t || containsParFor e
-  | .seqFor _ _ _ _ _ _ step k => containsParFor step || containsParFor k
-  | .parFor _ _ _ _ _ _ => true
-  | .ret _ => false
-  | .unreachable => false
+/-- Check whether an `LNIRCode` contains at least one `parFor` data-parallel region.
+    Delegates to `LeanNative.Backend.GPUIR.containsParFor`. -/
+def containsParFor (code : LNIRCode) : Bool :=
+  GPUIR.containsParFor code
 
 /-- Automatic GPU suitability analyzer for an `LNIRDecl`.
-    Checks parameter/return types (`LNIRType.isGpuCompatible`), verifies the absence of
-    heap allocations (`allocCtor`), reference counting (`incRef`/`decRef`), and external CPU calls,
-    and returns `(isCompatible, diagnostics)`. -/
+    Delegates to `LeanNative.Backend.GPUIR.analyzeDeclGpuSuitability`. -/
 def analyzeGpuCompatibility (d : LNIRDecl) : Bool × List String :=
-  let paramErrs := d.params.foldl (fun acc p =>
-    if p.ty.isGpuCompatible then acc
-    else acc ++ [s!"parameter '{p.name}' (%v{p.id}) has non-GPU type {reprStr p.ty}"]) []
-  let retErrs :=
-    if d.retTy.isGpuCompatible || d.retTy == .unit then []
-    else [s!"return type {reprStr d.retTy} is not GPU-compatible"]
-  let bodyErrs := checkCodeGpuCompatibility d.body
-  let allErrs := paramErrs ++ retErrs ++ bodyErrs
-  let hasParallelOrCand := d.isGpuCand || containsParFor d.body
-  if !allErrs.isEmpty then
-    (false, allErrs)
-  else if !hasParallelOrCand then
-    (false, ["declaration has no parFor region and is not marked isGpuCand"])
-  else
-    (true, [])
+  GPUIR.analyzeDeclGpuSuitability d
 
 /-- Convert an `LNIRType` into an MLIR type string (`i64`, `i256`, `f64`, `memref<?xi64>`, etc.). -/
 def toMLIRType : LNIRType → String
@@ -286,19 +185,9 @@ def emitMLIRKernelBody (elemTy : LNIRType) (kernel : ParallelKernelKind) : Strin
     String.intercalate "\n" ([idxCast] ++ loadLines ++ exprLines ++ [storeLine])
 
 /-- Extract all `(outVar, lenVar, inputs, elemTy, kernel)` regions from an `LNIRCode` tree. -/
-partial def extractParForRegions (code : LNIRCode) :
+def extractParForRegions (code : LNIRCode) :
     List (VarId × VarId × List VarId × LNIRType × ParallelKernelKind) :=
-  match code with
-  | .letBind _ _ _ k => extractParForRegions k
-  | .rawStore _ _ _ _ k => extractParForRegions k
-  | .incRef _ _ k => extractParForRegions k
-  | .decRef _ _ k => extractParForRegions k
-  | .ite _ t e => extractParForRegions t ++ extractParForRegions e
-  | .seqFor _ _ _ _ _ _ step k => extractParForRegions step ++ extractParForRegions k
-  | .parFor outVar lenVar inputs elemTy kernel k =>
-    (outVar, lenVar, inputs, elemTy, kernel) :: extractParForRegions k
-  | .ret _ => []
-  | .unreachable => []
+  GPUIR.extractParForRegions code
 
 /-- Emit an MLIR `gpu.func` for a single extracted `parFor` region inside a declaration. -/
 def emitMLIRGpuFunc (declName : String) (regionIdx : Nat) (elemTy : LNIRType)

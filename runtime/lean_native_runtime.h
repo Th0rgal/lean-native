@@ -258,6 +258,51 @@ void lean_native_cpu_matmul_u64(
 );
 
 /* ============================================================================
+ * Apple Metal Unified-Memory Runtime API (Apple Silicon M1/M2/M3/M4 & Fallback)
+ * ============================================================================ */
+
+/**
+ * Returns 1 if an Apple Metal GPU device (`MTLCreateSystemDefaultDevice`) is available, 0 otherwise.
+ */
+int lean_native_metal_available(void);
+
+/**
+ * Returns a human-readable description of the Apple Metal GPU device (or "Apple Metal Unavailable (CPU Fallback)").
+ */
+const char* lean_native_metal_device_name(void);
+
+/**
+ * Validates an Apple Metal Shading Language (MSL 3.0) source string (`msl_src`).
+ * Returns 1 when valid, 0 otherwise.
+ */
+int lean_native_metal_validate_msl(const char* msl_src);
+
+/**
+ * Launches a 64-bit SAXPY kernel on Apple Metal using zero-copy unified memory (`MTLResourceStorageModeShared`),
+ * falling back to `lean_native_cpu_saxpy_u64` on non-Apple platforms.
+ */
+int lean_native_metal_launch_saxpy_u64(
+    uint64_t* out,
+    const uint64_t* x,
+    const uint64_t* y,
+    uint64_t alpha,
+    size_t n
+);
+
+/**
+ * Launches a 16x16 threadgroup-tiled 64-bit matrix multiplication kernel on Apple Metal using zero-copy
+ * unified memory (`MTLResourceStorageModeShared`), falling back to `lean_native_cpu_matmul_u64` on non-Apple platforms.
+ */
+int lean_native_metal_launch_matmul_u64(
+    uint64_t* c,
+    const uint64_t* a,
+    const uint64_t* b,
+    size_t m,
+    size_t n,
+    size_t k
+);
+
+/* ============================================================================
  * 256-Bit EVM Word (`u256`) & Persistent Storage Map (`SLOAD` / `SSTORE`)
  * ============================================================================ */
 

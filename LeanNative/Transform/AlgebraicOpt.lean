@@ -1,5 +1,6 @@
 import LeanNative.IR.Types
 import LeanNative.IR.AST
+import LeanNative.Proofs.PeepholeProofs
 import LeanNative.Transform.Pass
 
 namespace LeanNative.Transform
@@ -7,111 +8,81 @@ namespace LeanNative.Transform
 open LeanNative.IR
 
 /-- Single-step algebraic and strength-reduction peephole rewrite on `ScalarExpr`.
-    Backed by `LeanNative.Proofs.PeepholeProofs.rewriteScalarPeephole_sound`. -/
+    Delegates the verified core identity, strength-reduction, and binary constant-folding
+    rules directly to `LeanNative.Proofs.rewriteScalarPeepholeStep` and
+    `LeanNative.Proofs.rewriteConstFoldBinOp` (`rewriteScalarPeephole_sound`, `evalBinOp_const_fold_sound`),
+    followed by extended div/mod/fma rules validated by `SymbolicTV`. -/
 def rewriteScalarPeepholeStep (e : ScalarExpr) : ScalarExpr :=
-  match e with
-  -- Constant folding for binary operations on UInt64
-  | .binOp .add (.constU64 a) (.constU64 b) => .constU64 (a + b)
-  | .binOp .sub (.constU64 a) (.constU64 b) => .constU64 (a - b)
-  | .binOp .mul (.constU64 a) (.constU64 b) => .constU64 (a * b)
-  | .binOp .div (.constU64 a) (.constU64 b) =>
-    if b == 0 then e else .constU64 (a / b)
-  | .binOp .mod (.constU64 a) (.constU64 b) =>
-    if b == 0 then e else .constU64 (a % b)
-  | .binOp .bitAnd (.constU64 a) (.constU64 b) => .constU64 (a &&& b)
-  | .binOp .bitOr (.constU64 a) (.constU64 b) => .constU64 (a ||| b)
-  | .binOp .bitXor (.constU64 a) (.constU64 b) => .constU64 (a ^^^ b)
-  | .binOp .shl (.constU64 a) (.constU64 b) => .constU64 (a <<< (b &&& 63))
-  | .binOp .shr (.constU64 a) (.constU64 b) => .constU64 (a >>> (b &&& 63))
-  | .binOp .eq (.constU64 a) (.constU64 b) => .constBool (a == b)
-  | .binOp .lt (.constU64 a) (.constU64 b) => .constBool (a < b)
-  | .binOp .le (.constU64 a) (.constU64 b) => .constBool (a ≤ b)
-  | .binOp .eq (.constBool a) (.constBool b) => .constBool (a == b)
-
-  -- Additive identities: x + 0 -> x, 0 + x -> x, x - 0 -> x, x - x -> 0
-  | .binOp .add x (.constU64 0) => x
-  | .binOp .add (.constU64 0) x => x
-  | .binOp .sub x (.constU64 0) => x
+  -- 1. Apply kernel-verified binary constant folding (`evalBinOp_const_fold_sound`)
+  let e1 :=
+    match e with
+    | .binOp op (.constU64 a) (.constU64 b) =>
+      let folded := LeanNative.Proofs.rewriteConstFoldBinOp op a b
+      match folded with
+      | .binOp .div (.constU64 a') (.constU64 b') =>
+        if b' == 0 then folded else .constU64 (a' / b')
+      | .binOp .mod (.constU64 a') (.constU64 b') =>
+        if b' == 0 then folded else .constU64 (a' % b')
+      | other => other
+    | .binOp .eq (.constBool a) (.constBool b) => .constBool (a == b)
+    | other => other
+  -- 2. Apply kernel-verified peephole step (`rewriteScalarPeepholeStep_sound`),
+  --    preserving `.fma` nodes for dedicated FMA rules below
+  let e2 :=
+    match e1 with
+    | .fma _ _ _ => e1
+    | other => LeanNative.Proofs.rewriteScalarPeepholeStep other
+  -- 3. Apply extended div/mod/cancellation/FMA rules not in `Proofs.rewriteScalarPeepholeStep`
+  match e2 with
   | .binOp .sub x y =>
-    if x == y then .constU64 0 else e
-
-  -- Multiplicative identities & annihilation: x * 1 -> x, 1 * x -> x, x * 0 -> 0, 0 * x -> 0
-  | .binOp .mul x (.constU64 1) => x
-  | .binOp .mul (.constU64 1) x => x
+    if x == y then .constU64 0 else e2
   | .binOp .mul _ (.constU64 0) => .constU64 0
   | .binOp .mul (.constU64 0) _ => .constU64 0
-
-  -- Strength reduction for multiplication by powers of 2: * 2 -> <<< 1, * 4 -> <<< 2, * 8 -> <<< 3
-  | .binOp .mul x (.constU64 2) => .binOp .shl x (.constU64 1)
   | .binOp .mul (.constU64 2) x => .binOp .shl x (.constU64 1)
-  | .binOp .mul x (.constU64 4) => .binOp .shl x (.constU64 2)
   | .binOp .mul (.constU64 4) x => .binOp .shl x (.constU64 2)
-  | .binOp .mul x (.constU64 8) => .binOp .shl x (.constU64 3)
   | .binOp .mul (.constU64 8) x => .binOp .shl x (.constU64 3)
-
-  -- Strength reduction for unsigned division by powers of 2: / 1 -> x, / 2 -> >>> 1, / 4 -> >>> 2, / 8 -> >>> 3
   | .binOp .div x (.constU64 1) => x
   | .binOp .div x (.constU64 2) => .binOp .shr x (.constU64 1)
   | .binOp .div x (.constU64 4) => .binOp .shr x (.constU64 2)
   | .binOp .div x (.constU64 8) => .binOp .shr x (.constU64 3)
-
-  -- Strength reduction for unsigned modulo by powers of 2: % 1 -> 0, % 2 -> &&& 1, % 4 -> &&& 3, % 8 -> &&& 7
   | .binOp .mod _ (.constU64 1) => .constU64 0
   | .binOp .mod x (.constU64 2) => .binOp .bitAnd x (.constU64 1)
   | .binOp .mod x (.constU64 4) => .binOp .bitAnd x (.constU64 3)
   | .binOp .mod x (.constU64 8) => .binOp .bitAnd x (.constU64 7)
-
-  -- Bitwise identities and idempotence
-  | .binOp .bitXor x (.constU64 0) => x
-  | .binOp .bitXor (.constU64 0) x => x
   | .binOp .bitXor x y =>
-    if x == y then .constU64 0 else e
-  | .binOp .bitOr x (.constU64 0) => x
-  | .binOp .bitOr (.constU64 0) x => x
-  | .binOp .bitOr x y =>
-    if x == y then x else e
+    if x == y then .constU64 0 else e2
   | .binOp .bitAnd _ (.constU64 0) => .constU64 0
   | .binOp .bitAnd (.constU64 0) _ => .constU64 0
-  | .binOp .bitAnd x y =>
-    if x == y then x else e
-
-  -- Shift identities
   | .binOp .shl x (.constU64 0) => x
   | .binOp .shr x (.constU64 0) => x
-
-  -- Reflexive comparisons
   | .binOp .eq x y =>
-    if x == y then .constBool true else e
+    if x == y then .constBool true else e2
   | .binOp .lt x y =>
-    if x == y then .constBool false else e
+    if x == y then .constBool false else e2
   | .binOp .le x y =>
-    if x == y then .constBool true else e
-
-  -- Unary operations
+    if x == y then .constBool true else e2
   | .unaryOp .not (.constBool b) => .constBool (!b)
   | .unaryOp .not (.unaryOp .not x) => x
   | .unaryOp .neg (.constU64 a) => .constU64 (0 - a)
   | .unaryOp .neg (.unaryOp .neg x) => x
-
-  -- Select / branch folding
-  | .select (.constBool true) t _ => t
-  | .select (.constBool false) _ f => f
   | .select (.constU64 c) t f =>
     if c != 0 then t else f
   | .select _ t f =>
-    if t == f then t else e
-
-  -- FMA folding
+    if t == f then t else e2
   | .fma (.constU64 a) (.constU64 b) (.constU64 c) => .constU64 (a * b + c)
-  | .fma x (.constU64 1) c => rewriteScalarPeepholeStep (.binOp .add x c)
-  | .fma (.constU64 1) x c => rewriteScalarPeepholeStep (.binOp .add x c)
+  | .fma x (.constU64 1) c =>
+    LeanNative.Proofs.rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteConstFoldStep (.binOp .add x c))
+  | .fma (.constU64 1) x c =>
+    LeanNative.Proofs.rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteConstFoldStep (.binOp .add x c))
   | .fma _ (.constU64 0) c => c
   | .fma (.constU64 0) _ c => c
-  | .fma a b (.constU64 0) => rewriteScalarPeepholeStep (.binOp .mul a b)
+  | .fma a b (.constU64 0) =>
+    LeanNative.Proofs.rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteConstFoldStep (.binOp .mul a b))
+  | _ => e2
 
-  | _ => e
-
-/-- Recursive bottom-up peephole optimizer on `ScalarExpr`. -/
+/-- Recursive bottom-up peephole optimizer on `ScalarExpr`.
+    Runs `LeanNative.Proofs.rewriteScalarPeephole` for non-FMA subtrees and layers
+    `rewriteScalarPeepholeStep` on top. -/
 def rewriteScalarPeephole : ScalarExpr → ScalarExpr
   | .constU64 v => .constU64 v
   | .constBool b => .constBool b
@@ -119,7 +90,7 @@ def rewriteScalarPeephole : ScalarExpr → ScalarExpr
   | .binOp op lhs rhs =>
     let lhs' := rewriteScalarPeephole lhs
     let rhs' := rewriteScalarPeephole rhs
-    rewriteScalarPeepholeStep (.binOp op lhs' rhs')
+    rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteScalarPeepholeStep (.binOp op lhs' rhs'))
   | .unaryOp op arg =>
     let arg' := rewriteScalarPeephole arg
     rewriteScalarPeepholeStep (.unaryOp op arg')
@@ -127,7 +98,7 @@ def rewriteScalarPeephole : ScalarExpr → ScalarExpr
     let c' := rewriteScalarPeephole c
     let t' := rewriteScalarPeephole t
     let f' := rewriteScalarPeephole f
-    rewriteScalarPeepholeStep (.select c' t' f')
+    rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteScalarPeepholeStep (.select c' t' f'))
   | .fma a b c =>
     let a' := rewriteScalarPeephole a
     let b' := rewriteScalarPeephole b

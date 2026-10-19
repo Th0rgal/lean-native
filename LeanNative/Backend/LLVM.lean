@@ -1362,6 +1362,68 @@ def emitMetadataFooter (target : TargetArch) : String :=
     "!6 = distinct !{!6, !2}"
   ]
 
+/-- Check whether an `LNIRType` is a scalar integer type boxed/unboxed as a tagged Lean scalar pointer. -/
+def isABIScalarIntType : LNIRType → Bool
+  | .i64 | .usize | .i32 | .i16 | .i8 | .i1 => true
+  | _ => false
+
+/-- Check whether an `LNIRType` is a pointer type passed directly across the Lean 4 C ABI. -/
+def isABIPtrType : LNIRType → Bool
+  | .sarray _ | .objPtr | .taggedPtr => true
+  | _ => false
+
+/-- Check whether an `LNIRType` is ABI-thunkable for `emitLLVMABIWrapperDecl`. -/
+def isABIThunkableType (ty : LNIRType) : Bool :=
+  isABIScalarIntType ty || isABIPtrType ty
+
+/-- Check whether `d` is an extern wrapper declaration stub. -/
+def isExternDecl (d : LNIRDecl) : Bool :=
+  match d.body with
+  | .letBind dst _ (.call fn _ _ true) (.ret retVar) => dst == retVar && fn == d.name
+  | _ => false
+
+/-- Emit a Lean 4 C-ABI boxing/unboxing wrapper thunk `@lean_native_abi_<sanitizedName>`
+    for any non-extern declaration `d` whose parameters and return type are ABI-thunkable. -/
+def emitLLVMABIWrapperDecl (d : LNIRDecl) : String :=
+  if isExternDecl d || !(d.params.all (fun p => isABIThunkableType p.ty)) || !(isABIThunkableType d.retTy) then
+    ""
+  else
+    let fnSym := sanitizeSymbol d.name
+    let indexedParams := (List.range d.params.length).zip d.params
+    let abiParamSig := String.intercalate ", " (indexedParams.map fun (idx, _) => s!"ptr %abi_arg{idx}")
+    let (unboxLines, callArgs) := indexedParams.foldl (fun (lines, args) (idx, p) =>
+      if isABIScalarIntType p.ty then
+        let uLines := [
+          s!"  %raw_{idx} = ptrtoint ptr %abi_arg{idx} to i64",
+          s!"  %unboxed_{idx} = lshr i64 %raw_{idx}, 1"
+        ]
+        (lines ++ uLines, args ++ [s!"i64 %unboxed_{idx}"])
+      else
+        (lines, args ++ [s!"ptr %abi_arg{idx}"])
+    ) ([], [])
+    let callArgsStr := String.intercalate ", " callArgs
+    let callAndRetLines :=
+      if isABIScalarIntType d.retTy then
+        [
+          s!"  %ret64 = call i64 @{fnSym}({callArgsStr})",
+          "  %shl = shl i64 %ret64, 1",
+          "  %tagged = or i64 %shl, 1",
+          "  %boxptr = inttoptr i64 %tagged to ptr",
+          "  ret ptr %boxptr"
+        ]
+      else
+        [
+          s!"  %ret = call ptr @{fnSym}({callArgsStr})",
+          "  ret ptr %ret"
+        ]
+    String.intercalate "\n" ([
+      s!"; Lean 4 C-ABI Wrapper Thunk for {d.name}",
+      s!"define dso_local ptr @lean_native_abi_{fnSym}({abiParamSig}) #0 \{",
+      "entry:"
+    ] ++ unboxLines ++ callAndRetLines ++ [
+      "}"
+    ])
+
 /-- Emit unoptimized/baseline LLVM 18 IR (`emitLLVMBaseline`) mimicking standard Lean 4
     boxed/per-iteration runtime checks. -/
 def emitLLVMBaseline (m : LNIRModule) (target : TargetArch := .x86_64) : String :=
@@ -1380,8 +1442,9 @@ def emitLLVMBaseline (m : LNIRModule) (target : TargetArch := .x86_64) : String 
 
 /-- Emit `lean-native` optimized LLVM 18 IR (`emitLLVMOptimized`) with `nuw`/`nsw`, `noalias`
     pointer attributes, inline single-threaded RC fast-paths (`@llvm.expect.i1`), direct
-    `getelementptr inbounds i64, ptr %raw, i64 %idx` loads/stores, and loop vectorization
-    metadata (`!llvm.loop !0`, `!llvm.loop.vectorize.enable`). -/
+    `getelementptr inbounds i64, ptr %raw, i64 %idx` loads/stores, loop vectorization
+    metadata (`!llvm.loop !0`, `!llvm.loop.vectorize.enable`), and `@lean_native_abi_*`
+    C-ABI boxing/unboxing wrapper thunks. -/
 def emitLLVMOptimized (m : LNIRModule) (target : TargetArch := .x86_64) : String :=
   let triple := cpuTriple target
   let dl := targetDataLayout target
@@ -1392,14 +1455,15 @@ def emitLLVMOptimized (m : LNIRModule) (target : TargetArch := .x86_64) : String
     s!"target triple = \"{triple}\""
   ]
   let declStrs := m.decls.map (emitDeclLLVM true)
+  let abiWrapperStrs := (m.decls.map emitLLVMABIWrapperDecl).filter (fun s => !s.isEmpty)
   let runtimeStr := emitRuntimeAndCAbiHelpers true
   let footer := emitMetadataFooter target
-  String.intercalate "\n\n" ([header, runtimeStr] ++ declStrs ++ [footer]) ++ "\n"
+  String.intercalate "\n\n" ([header, runtimeStr] ++ declStrs ++ abiWrapperStrs ++ [footer]) ++ "\n"
 
 end LeanNative.Backend.LLVM
 
 namespace LeanNative.Backend
 
-export LeanNative.Backend.LLVM (emitLLVMBaseline emitLLVMOptimized)
+export LeanNative.Backend.LLVM (emitLLVMBaseline emitLLVMOptimized emitLLVMABIWrapperDecl)
 
 end LeanNative.Backend

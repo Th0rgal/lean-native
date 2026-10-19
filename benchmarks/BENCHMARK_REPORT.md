@@ -88,3 +88,18 @@
 | **PTX 8.0 Dynamic JIT (`cuModuleLoadDataEx`, 15 Kernels incl. `u256`)** | `0 errors, 0 register spills` (`sm_90`) | N/A (CPU-only host) | 100% `ptxas` + `cuLaunchKernel` match | **PASS** |
 | **FastCheck Constraint Propagation (`evm_constrained_buggy_prop`)** | `sat=512/512`, `vacuous=0`, `cex=1`, `false_pos=0` | `sat=512/512`, `vacuous=0`, `cex=1`, `false_pos=0` | Eliminates `VacuousPass` (`0/512` without prop) | **PASS** |
 
+---
+
+## 6. v0.4 Enumerative Superoptimizer, Apple Metal MSL 3.0 & Orthogonal Suite Verification
+
+| Workload / Verification Gate | Target / Architecture | Measured Result | Reference / Gate | Status |
+| :--- | :---: | :---: | :---: | :---: |
+| **`lean-native-core superopt` (`x86_64`)** | `x86_64` cost model | **`54 -> 24` cycles (`-55.6%`)**, `3` synthesized rewrites (`100%` FastCheck + SymbolicTV) | Strictly lower cycle cost + 100% TV | **PASS** |
+| **`lean-native-core superopt` (`arm64` / `cuda_ptx` / `apple_metal`)** | `arm64`, `cuda_ptx`, `apple_metal` | **`66 -> 22` cycles (`-66.7%`)**, `3` synthesized rewrites (`100%` FastCheck + SymbolicTV) | Strictly lower cycle cost + 100% TV | **PASS** |
+| **Apple Metal MSL 3.0 Codegen (`compile-metal` & `--emit-metal`)** | Apple Metal 3.0 (`18` GPU descriptors) | `11,985` bytes MSL 3.0 (`threadgroup` reductions, 16×16 tiled MatMul, `ln_u256`), `0` errors in `validateMetalShader` & `clang++ -std=c++14 -fsyntax-only` | 100% syntax & type-checked MSL 3.0 | **PASS** |
+| **`tests/test_runner.lean` (`lean-native build-exe`)** | `aarch64` (`spark-de79`) | `6/6` orthogonal test families PASS (`FNV1A_CHECKSUM64=0x6f66afdade214a0c`) | Bit-exact match vs interpreter | **PASS** |
+| **`examples/verity_amm_vault.lean` (`lean-native build-exe`)** | `aarch64` (`spark-de79`) | `1,000/1,000` swaps solvent, share-inflation CEX caught (`FNV1A_CHECKSUM64=0xdccfc9f3bf484211`) | Bit-exact match (`~2.3 s` build) | **PASS** |
+| **`examples/saxpy_matmul_gpu.lean` (`lean-native build-exe`)** | `aarch64` (`spark-de79`) | SAXPY + DotProduct + 16×16 Tiled MatMul (`FNV1A_CHECKSUM64=0xeab15d918b7a5eb4`) | Bit-exact match (`~2.2 s` build) | **PASS** |
+| **`examples/persistent_tuple_tree.lean` (`lean-native build-exe`)** | `aarch64` (`spark-de79`) | Persistent BST + Unboxed Tuple Fold + COW Array (`FNV1A_CHECKSUM64=0x82ab55c171ef195e`) | Bit-exact match (`~2.2 s` build) | **PASS** |
+| **Autoresearch v0.4 Campaign (`30` Hypotheses)** | Isolated Git Worktrees | **`21 ACCEPTED` / `9 REJECTED`** (`67/67` kernel theorems, `0 sorryAx`, `10/10` SymbolicTV) | 100% Soundness & Non-Regression | **PASS** |
+

@@ -13,14 +13,18 @@ import LeanNative.Transform.AlgebraicOpt
 import LeanNative.Transform.UnboxTupleSROA
 import LeanNative.Transform.HoistExclusivity
 import LeanNative.Transform.LoopVectorizeOpt
+import LeanNative.Transform.Superopt
 import LeanNative.Backend.LLVM
+import LeanNative.Backend.GPUIR
 import LeanNative.Backend.MLIRGPU
+import LeanNative.Backend.Metal
 import LeanNative.Backend.Hybrid
 import LeanNative.Backend.FastCheck
 import LeanNative.TurboLean.Adapter
+import LeanNative.Driver.CoreCLI
 
 namespace LeanNative.Core
 
-def coreVersion : String := "0.2.0"
+def coreVersion : String := "0.4.0"
 
 end LeanNative.Core

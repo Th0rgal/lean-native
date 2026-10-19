@@ -443,6 +443,7 @@ partial def lowerImpureCode (code : Lean.Compiler.LCNF.Code .impure) : BridgeM L
     let st ← get
     match st.jpMap[fvarId]? with
     | some (jpParams, jpBody) =>
+      modify fun st => { st with jpMap := st.jpMap.erase fvarId }
       spliceJoinPointJmp jpParams jpBody args
     | none =>
       match args.toList with
@@ -647,6 +648,7 @@ partial def lowerPureCode (code : Lean.Compiler.LCNF.Code .pure) : BridgeM LNIRC
     let st ← get
     match st.jpMap[fvarId]? with
     | some (jpParams, jpBody) =>
+      modify fun st => { st with jpMap := st.jpMap.erase fvarId }
       spliceJoinPointJmp jpParams jpBody args
     | none =>
       match args.toList with
@@ -850,14 +852,24 @@ def ingestModuleDecls (declNames : Array Lean.Name) (moduleName : String := "Lea
     decls      := decls
   }
 
+/-- Check whether `name` is an internal compiler-synthesized closed constant or repr auxiliary. -/
+def isInternalClosedOrReprAux (name : Lean.Name) : Bool :=
+  let s := name.toString
+  (s.splitOn "___closed__").length > 1 ||
+  (s.splitOn "instRepr").length > 1 ||
+  (s.splitOn "_cstage").length > 1 ||
+  (s.splitOn "ctorElim").length > 1
+
 /-- Extract and lower all local impure and mono LCNF declarations compiled in the current environment. -/
 def ingestAllLocalDecls (moduleName : String := "LeanNative.Ingested") : Lean.CoreM LNIRModule := do
   let impureNames ← Lean.Compiler.LCNF.getLocalImpureDecls
   let env ← getEnv
   let extraNames := env.constants.map₂.foldl (fun acc name _ =>
-    if impureNames.contains name then acc else acc.push name
+    if impureNames.contains name || isInternalClosedOrReprAux name then acc else acc.push name
   ) #[]
-  ingestModuleDecls (impureNames ++ extraNames) moduleName
+  let filteredImpure := impureNames.filter (fun n => !isInternalClosedOrReprAux n)
+  let finalNames := if filteredImpure.isEmpty && extraNames.isEmpty then impureNames else (filteredImpure ++ extraNames)
+  ingestModuleDecls finalNames moduleName
 
 /-- Resolve the Lean 4.31 sysroot path reliably even when `lean` is not on `PATH`. -/
 def resolveLeanSysroot : IO System.FilePath := do
@@ -914,10 +926,11 @@ def emitLeanCFromSourceFile (filePath : String) (modName : Lean.Name := `Main) :
 /-- Full LCNF-to-Executable builder (`buildNativeExecutable` / `buildExecutableFromLeanFile`):
     1. Runs `emitLeanCFromSourceFile` on `filePath`.
     2. Runs the verified `LeanNative` 4-pass optimization pipeline on the extracted `LNIRModule`
-       and emits `<outBin>.lnir.ll`.
-    3. Compiles the module through LLVM 18 (`clang -S -emit-llvm` -> `/usr/lib/llvm-18/bin/opt`
-       with loop & SLP vectorization -> `clang` linked against `libleanshared.so` and
-       `runtime/lean_native_runtime.c`) to produce a standalone native executable at `outBin`. -/
+       and emits `<outBin>.lnir.ll` (including `@lean_native_abi_*` C-ABI wrapper thunks).
+    3. Compiles both `<outBin>.lnir.ll` and the lowered C/LLVM module through LLVM 18
+       (`clang -S -emit-llvm` -> `/usr/lib/llvm-18/bin/opt` with loop & SLP vectorization ->
+       `clang` linked against `libleanshared.so` and `runtime/lean_native_runtime.c`)
+       to produce a standalone native executable at `outBin`. -/
 def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : String := "-O3") :
     IO (LNIRModule × String) := do
   let sysroot ← resolveLeanSysroot
@@ -929,6 +942,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
     else
       .x86_64
   let lnirLlPath := s!"{outBin}.lnir.ll"
+  let lnirOptLlPath := s!"{outBin}.lnir.opt.ll"
   let lnirLlText := LeanNative.Backend.LLVM.emitLLVMOptimized optMod hostArch
   IO.FS.writeFile lnirLlPath lnirLlText
 
@@ -956,7 +970,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   if clangEmitOut.exitCode != 0 then
     throw <| IO.userError s!"clang -emit-llvm failed:\n{clangEmitOut.stderr}"
 
-  -- Step 2: /usr/lib/llvm-18/bin/opt with O3 + loop-vectorize + slp-vectorizer
+  -- Step 2: /usr/lib/llvm-18/bin/opt with O3 + loop-vectorize + slp-vectorizer on both rawLlPath and lnirLlPath
   let optBin : System.FilePath := "/usr/lib/llvm-18/bin/opt"
   let optCmd ← if (← optBin.pathExists) then pure optBin.toString else pure "opt"
   let optOut ← IO.Process.output {
@@ -974,7 +988,22 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   if optOut.exitCode != 0 then
     IO.FS.writeFile optLlPath (← IO.FS.readFile rawLlPath)
 
-  -- Step 3: clang -O3 linked against libleanshared.so and runtime/lean_native_runtime.c
+  let lnirOptOut ← IO.Process.output {
+    cmd  := optCmd
+    args := #[
+      "-S",
+      "-passes=default<O3>,loop-vectorize,slp-vectorizer",
+      "-vectorize-loops",
+      "-vectorize-slp",
+      lnirLlPath,
+      "-o",
+      lnirOptLlPath
+    ]
+  }
+  if lnirOptOut.exitCode != 0 then
+    IO.FS.writeFile lnirOptLlPath lnirLlText
+
+  -- Step 3: clang -O3 linking both optLlPath and lnirOptLlPath against libleanshared.so and runtime/lean_native_runtime.c
   let linkOut ← IO.Process.output {
     cmd  := clangCmd
     args := #[
@@ -983,7 +1012,9 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
       s!"-I{incDir}",
       s!"-I{runtimeDir}",
       optLlPath,
+      lnirOptLlPath,
       runtimePath,
+      "-Wl,--allow-multiple-definition",
       s!"-L{libDir}",
       "-lleanshared",
       s!"-Wl,-rpath,{libDir}",
@@ -1002,157 +1033,23 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
 abbrev buildExecutableFromLeanFile := buildNativeExecutable
 
 /-!
-## Canonical Benchmark & Workload Declarations
-
-These 6 canonical workloads represent real Lean 4 computational kernels lowered from LCNF:
-1. `collatz_steps` — scalar iterative loop with power-of-two mul/div and algebraic identity opportunities.
-2. `tuple_accum_sum` — loop allocating and projecting intermediate 2-tuples `(a, b)` per iteration (`UnboxTupleSROA`).
-3. `sarray_scale_bias` — in-place scalar array loop with `sarrayEnsureExclusive` inside the loop (`HoistExclusivity` + SIMD).
-4. `dot_product_u64` — data-parallel dot product / reduction over contiguous unboxed arrays.
-5. `saxpy_kernel` — data-parallel `alpha * x[i] + y[i]` kernel eligible for AVX2/NEON SIMD and GPU MLIR/PTX offload.
-6. `matmul_tiled_u64` — dense numerical matrix FMA kernel eligible for GPU PTX and hybrid CPU/GPU dispatch.
+## Canonical Benchmark & Workload Declarations (Re-exported from `LeanNative.IR.Codec`)
 -/
 
-/-- 1. `collatz_steps`: Scalar loop with strength-reduction (`x * 2`, `x / 2`, `x + 0`, `x * 1`) opportunities. -/
-def collatzStepsDecl : LNIRDecl := {
-  name      := "collatz_steps"
-  params    := [
-    { id := 0, name := "n", ty := .i64, borrow := false },
-    { id := 1, name := "steps", ty := .i64, borrow := false }
-  ]
-  retTy     := .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := false
-  body      :=
-    .letBind 2 .i64 (.scalar (.constU64 0)) (
-      .seqFor 3 2 1 4 0 .i64
-        (.letBind 5 .i64 (.scalar (.binOp .mul (.var 4) (.constU64 2)))
-          (.letBind 6 .i64 (.scalar (.binOp .add (.var 5) (.var 4)))
-            (.letBind 7 .i64 (.scalar (.binOp .add (.var 6) (.constU64 1)))
-              (.letBind 8 .i64 (.scalar (.binOp .div (.var 7) (.constU64 2)))
-                (.letBind 9 .i64 (.scalar (.binOp .add (.var 8) (.constU64 0)))
-                  (.ret 9))))))
-        (.ret 4)
-    )
-}
-
-/-- 2. `tuple_accum_sum`: Loop constructing intermediate 2-tuples `mkTuple` and projecting fields (`UnboxTupleSROA`). -/
-def tupleAccumSumDecl : LNIRDecl := {
-  name      := "tuple_accum_sum"
-  params    := [
-    { id := 0, name := "n", ty := .i64, borrow := false },
-    { id := 1, name := "seed", ty := .i64, borrow := false }
-  ]
-  retTy     := .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := false
-  body      :=
-    .letBind 2 .i64 (.scalar (.constU64 0)) (
-      .seqFor 3 2 0 4 1 .i64
-        (.letBind 5 .i64 (.scalar (.binOp .add (.var 4) (.var 3)))
-          (.letBind 6 .i64 (.scalar (.binOp .mul (.var 3) (.constU64 2)))
-            (.letBind 7 (.tuple [.i64, .i64]) (.mkTuple [5, 6])
-              (.letBind 8 .i64 (.projTuple 7 0)
-                (.letBind 9 .i64 (.projTuple 7 1)
-                  (.letBind 10 .i64 (.scalar (.binOp .add (.var 8) (.var 9)))
-                    (.ret 10)))))))
-        (.ret 4)
-    )
-}
-
-/-- 3. `sarray_scale_bias`: In-place scalar array loop with `sarrayEnsureExclusive` inside the loop body (`HoistExclusivity`). -/
-def sarrayScaleBiasDecl : LNIRDecl := {
-  name      := "sarray_scale_bias"
-  params    := [
-    { id := 0, name := "arr", ty := .sarray .i64, borrow := false },
-    { id := 1, name := "scale", ty := .i64, borrow := false },
-    { id := 2, name := "bias", ty := .i64, borrow := false }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 3 .i64 (.scalar (.constU64 0)) (
-      .letBind 4 .i64 (.sarrayLen 0) (
-        .seqFor 5 3 4 6 0 (.sarray .i64)
-          (.letBind 7 (.sarray .i64) (.sarrayEnsureExclusive 6 .i64)
-            (.letBind 8 .i64 (.sarrayGet 7 5 .i64)
-              (.letBind 9 .i64 (.scalar (.fma (.var 8) (.var 1) (.var 2)))
-                (.letBind 10 (.sarray .i64) (.sarraySet 7 5 9 .i64)
-                  (.ret 10)))))
-          (.ret 6)
-      )
-    )
-}
-
-/-- 4. `dot_product_u64`: Data-parallel dot product / reduction over contiguous arrays with redundant RC pair for `BorrowInference`. -/
-def dotProductU64Decl : LNIRDecl := {
-  name      := "dot_product_u64"
-  params    := [
-    { id := 0, name := "xs", ty := .sarray .i64, borrow := false },
-    { id := 1, name := "ys", ty := .sarray .i64, borrow := false }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .incRef 0 1 (
-      .letBind 2 .i64 (.sarrayLen 0) (
-        .parFor 3 2 [0, 1] .i64 .dotProduct (
-          .decRef 0 1 (.ret 3)
-        )
-      )
-    )
-}
-
-/-- 5. `saxpy_kernel`: Data-parallel `alpha * x[i] + y[i]` kernel eligible for both CPU SIMD and GPU MLIR/PTX offload. -/
-def saxpyKernelDecl : LNIRDecl := {
-  name      := "saxpy_kernel"
-  params    := [
-    { id := 0, name := "xs", ty := .sarray .i64, borrow := true },
-    { id := 1, name := "ys", ty := .sarray .i64, borrow := true }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 2 .i64 (.sarrayLen 0) (
-      .parFor 3 2 [0, 1] .i64 (.saxpy 4) (.ret 3)
-    )
-}
-
-/-- 6. `matmul_tiled_u64`: Dense numerical matrix kernel eligible for GPU PTX and hybrid CPU/GPU dispatch. -/
-def matmulTiledU64Decl : LNIRDecl := {
-  name      := "matmul_tiled_u64"
-  params    := [
-    { id := 0, name := "matA", ty := .sarray .i64, borrow := true },
-    { id := 1, name := "matB", ty := .sarray .i64, borrow := true },
-    { id := 2, name := "matC", ty := .sarray .i64, borrow := true }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 3 .i64 (.sarrayLen 0) (
-      .parFor 4 3 [0, 1, 2] .i64
-        (.customScalar 10 [0, 1, 2] (.fma (.var 0) (.var 1) (.var 2)))
-        (.ret 4)
-    )
-}
-
-/-- Construct the canonical 8-kernel benchmark `LNIRModule` (6 core + 2 EVM/Verity 256-bit kernels). -/
-def mkCanonicalBenchmarkModule : LNIRModule := {
-  moduleName := "LeanNative.Benchmarks.Canonical"
-  decls      := [
-    collatzStepsDecl,
-    tupleAccumSumDecl,
-    sarrayScaleBiasDecl,
-    dotProductU64Decl,
-    saxpyKernelDecl,
-    matmulTiledU64Decl,
-    evmErc20TransferU256Decl,
-    evmMuldivWadU256Decl
-  ]
-}
+abbrev collatzStepsDecl : LNIRDecl := LeanNative.IR.Codec.collatzStepsDecl
+abbrev tupleAccumSumDecl : LNIRDecl := LeanNative.IR.Codec.tupleAccumSumDecl
+abbrev sarrayScaleBiasDecl : LNIRDecl := LeanNative.IR.Codec.sarrayScaleBiasDecl
+abbrev dotProductU64Decl : LNIRDecl := LeanNative.IR.Codec.dotProductU64Decl
+abbrev saxpyKernelDecl : LNIRDecl := LeanNative.IR.Codec.saxpyKernelDecl
+abbrev matmulTiledU64Decl : LNIRDecl := LeanNative.IR.Codec.matmulTiledU64Decl
+abbrev mkCollatzStepsDecl : LNIRDecl := LeanNative.IR.Codec.collatzStepsDecl
+abbrev mkTupleAccumSumDecl : LNIRDecl := LeanNative.IR.Codec.tupleAccumSumDecl
+abbrev mkSArrayScaleBiasDecl : LNIRDecl := LeanNative.IR.Codec.sarrayScaleBiasDecl
+abbrev mkDotProductU64Decl : LNIRDecl := LeanNative.IR.Codec.dotProductU64Decl
+abbrev mkSaxpyKernelDecl : LNIRDecl := LeanNative.IR.Codec.saxpyKernelDecl
+abbrev mkMatmulTiledU64Decl : LNIRDecl := LeanNative.IR.Codec.matmulTiledU64Decl
+abbrev mkEvmErc20TransferU256Decl : LNIRDecl := LeanNative.IR.evmErc20TransferU256Decl
+abbrev mkEvmMulDivWadU256Decl : LNIRDecl := LeanNative.IR.evmMuldivWadU256Decl
+abbrev mkCanonicalBenchmarkModule : LNIRModule := LeanNative.IR.Codec.mkCanonicalBenchmarkModule
 
 end LeanNative.IR

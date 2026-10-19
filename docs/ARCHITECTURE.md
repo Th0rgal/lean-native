@@ -97,3 +97,23 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 - **Equality Constraint Propagation (`propagatePreconditionEqualities`)**: Rewrites guard preconditions `x_i == expr` into direct generator assignments `x_i := expr`, eliminating vacuous passes on sparse equality-constrained theorems (`0 -> 4,193` satisfied preconditions on `evm_constrained_buggy_prop`).
 - **Certified Counterexample Validator (`certifyCounterexample`)**: Re-evaluates every candidate counterexample through `LeanNative.Semantics.Eval.evalCode`, backed by `certifyCounterexample_no_false_positive` (`0` false positives).
 - **Native RFC-Compliant BLAKE3 (`LeanNative/TurboLean/Adapter.lean`)**: Pure-Lean BLAKE3 implementation (`blake3Hex`, `blake3SelfTest = true`) with zero `python3` subprocess calls.
+
+---
+
+## 6. v0.4 Architecture Additions: Zero-Redundancy `CoreCLI`, Unified GPUIR & Apple Metal 3.0, Cost-Guided Superoptimizer, and 67 Kernel Proofs
+
+### 6.1 Shared CLI & Worker Engine (`LeanNative/Driver/CoreCLI.lean`) and Codebase Deduplication
+- **Parameterized Driver (`FrontendHooks`)**: `LeanNative.Driver.CoreCLI` encapsulates all CLI argument parsing, subcommand execution (`compile-llvm`, `compile-mlir`, `compile-ptx`, `compile-metal`, `compile-fastcheck`, `compile-hybrid`, `superopt`, `verify-certs`, `validate-tv`, `self-test`, `emit-lnir`, `worker`), and the persistent JSON-RPC worker loop. `CoreMain.lean` (`24` lines) invokes `runCoreCLI args none`, while `Main.lean` (`88` lines) passes `some fullFrontendHooks`.
+- **Single-Source Canonical Declarations & Embedded PTX**: `LeanNative/IR/Bridge.lean` re-exports `LeanNative.IR.Codec.mkCanonicalBenchmarkModule`, `runtime/lean_native_cuda.cu` includes `runtime/generated_kernels.ptx.h` generated directly from `LeanNative.Backend.MLIRGPU`, and `scripts/turbo_lean_bridge.py` (`216` lines) delegates directly to `lean-native-core`.
+
+### 6.2 Unified Pass Proofs & 67 Machine-Checked Theorems (`PeepholeProofs.lean`, `FastCheck.lean`)
+- **Unified Peephole & Constant-Folding Pass**: `LeanNative.Transform.AlgebraicOpt` directly calls `LeanNative.Proofs.rewriteScalarVerified` (`rewriteScalarPeephole` + `rewriteConstFoldBinOp`), backed by `evalBinOp_const_fold_sound` and `rewriteScalarVerified_sound`.
+- **FastCheck Constraint-Propagation Soundness**: `substScalarExpr_nil`, `substSingleConstraint_sound`, and `propagatePrecondition_letBind_sound` formally prove that substituting an equality precondition `x == rhs` preserves evaluation semantics on all satisfying states.
+
+### 6.3 Cost-Guided Enumerative Superoptimizer (`LeanNative/Transform/Superopt.lean`)
+- Synthesizes candidate expressions using hardware latency tables (`SuperoptTarget.x86_64`, `.arm64`, `.cuda_ptx`, `.apple_metal`) and verifies every candidate through both 16-state concrete execution (`fastCheckScalarEquiv`) and symbolic translation validation (`symCheckScalarEquiv`), reducing canonical scalar latency from `54 -> 24` cycles on `x86_64` and `66 -> 22` cycles on `apple_metal`.
+
+### 6.4 Unified GPU Kernel IR (`GPUIR.lean`) & Apple Metal Backend (`Metal.lean`, `runtime/lean_native_metal.m`)
+- **`LeanNative/Backend/GPUIR.lean`**: Shared `GPUKernelDescriptor` and suitability analyzer consumed by `MLIRGPU.lean` and `Metal.lean`.
+- **`LeanNative/Backend/Metal.lean` & `runtime/lean_native_metal.m`**: Generates 18 Apple Metal Shading Language (MSL 3.0) compute kernels (`threadgroup` shared-memory reductions, 16×16 tiled MatMul with `threadgroup_barrier(mem_flags::mem_threadgroup)`, 4-limb `ln_u256` EVM kernels, and `lean_native_fastcheck_metal_kernel`) with zero-copy unified-memory `MTLBuffer` dispatch (`newBufferWithBytesNoCopy`) on Apple Silicon and C++14 header verification (`runtime/metal_compat_check.h`).
+
