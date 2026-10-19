@@ -189,7 +189,8 @@ def runSelfTest : IO UInt32 := do
 
 end LeanNative.Driver
 
-def main (args : List String) : IO UInt32 := do
+unsafe def main (args : List String) : IO UInt32 := do
+  Lean.enableInitializersExecution
   match args with
   | "compile-llvm" :: rest   => LeanNative.Driver.runCompileLLVM rest
   | "compile-mlir" :: rest   => LeanNative.Driver.runCompileMLIR rest
