@@ -1,10 +1,10 @@
 # LeanNative v0.5 Overnight Autoresearch Campaign Status
 
-- **Last Completed Sweep Cycle**: `#12` (`2026-10-19T19:48:57.255456+00:00`)
-- **Target Architecture Swept**: `x86_64`
-- **Latest Synthesized Candidate**: `(x + y) >> 1 -> (x >> 1) + (y >> 1)` (expected_sound=`False`, `100,000` states: `ok=False` in `0.126 ms`, gate_verified=`True`)
-- **Superoptimizer Cost Reduction**: `54 -> 24` (`4` rewrites)
+- **Last Completed Sweep Cycle**: `#15` (`2026-10-19T19:59:26.900877+00:00`)
+- **Target Architecture Swept**: `apple_metal`
+- **Latest Synthesized Candidate**: `(x * 16) + (x & x) - (x ^ x) -> (x << 4) + x` (expected_sound=`True`, `100,000` states: `ok=True` in `5.954 ms`, gate_verified=`True`)
+- **Superoptimizer Cost Reduction**: `66 -> 22` (`4` rewrites)
 - **Law 1 Untrusted Plugin & Adversarial Gate**: `PASSED`
 - **Law 5 Spec & Test Pinning Gate**: `PASSED`
 - **Season 8 `turbo-lean` Spec Audit**: `PASSED (15/15 tight, 0 vacuous)`
-- **Latest Chained BLAKE3 Commitment**: `8520e6fa127d8e596751e1756fbd88021813c153647fe145e89d8a930c637ecd`
+- **Latest Chained BLAKE3 Commitment**: `1a2d882a3ce2315cd8926a66dde1c6c56ed836e090dc5727d3b34fc9005a196e`
