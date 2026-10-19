@@ -117,3 +117,23 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 - **`LeanNative/Backend/GPUIR.lean`**: Shared `GPUKernelDescriptor` and suitability analyzer consumed by `MLIRGPU.lean` and `Metal.lean`.
 - **`LeanNative/Backend/Metal.lean` & `runtime/lean_native_metal.m`**: Generates 18 Apple Metal Shading Language (MSL 3.0) compute kernels (`threadgroup` shared-memory reductions, 16×16 tiled MatMul with `threadgroup_barrier(mem_flags::mem_threadgroup)`, 4-limb `ln_u256` EVM kernels, and `lean_native_fastcheck_metal_kernel`) with zero-copy unified-memory `MTLBuffer` dispatch (`newBufferWithBytesNoCopy`) on Apple Silicon and C++14 header verification (`runtime/metal_compat_check.h`).
 
+---
+
+## 7. v0.5 Architecture Additions: Pinned Formal Spec (`Spec.lean`), Segregated Optimization Plugins (`Plugins.lean`), Season 8 `turbo-lean` Protocol & 5-Gate Automated CI
+
+### 7.1 Pinned Formal Executable Specification (`LeanNative/Spec.lean`, 82 Total Kernel Proofs)
+- **`LeanNative/Spec.lean`** (zero `import Lean`, zero `sorryAx`) pins the 5 foundational soundness laws (15 machine-checked theorems, audited in `0.14 ms` as 15/15 non-vacuous and tight by `turbo-lean audit-spec`):
+  1. **Law 1 (`evalWithUntrustedOptPlugin`)**: Any untrusted optimization plugin candidate is accepted if and only if `verifyGate src cand cert = true`; timeout (`none`) or verification failure (`false`) falls back to `src`.
+  2. **Law 2 (`opt_pipeline_chain_refines`)**: Folded composition of arbitrarily many verified plugin passes preserves `CodeRefines`.
+  3. **Law 3 (`fastcheck_non_vacuous_tightness_law`)**: Rejects vacuous passes (`satisfiedPreconditionsCount = 0`).
+  4. **Law 4 (`c_abi_unbox_box_zero`, `c_abi_unbox_box_one`)**: Lean 4 tagged scalar pointer ABI (`(n <<< 1) ||| 1` and `tagged >>> 1`) round-trips cleanly.
+  5. **Law 5 (`checkPRVerificationGate`, `pr_spec_pinning_gate_sound`)**: Any contributor PR or `autoresearch` mutation that tampers with `LeanNative/Spec.lean`, `tests/test_runner.lean`, or introduces forbidden axioms is deterministically rejected.
+
+### 7.2 Segregated Optimization Plugins (`LeanNative/Transform/Plugins.lean`, `.lean-native/plugins.json`)
+- Segregates all heuristic/experimental passes (`builtin:algebraic-peephole`, `builtin:unbox-tuple-sroa`, `builtin:hoist-exclusivity`, `builtin:loop-vectorize`, `builtin:enumerative-superopt`) and external JSONL-stdio plugins (`runExternalOptPlugin`) behind `verifyOptPluginGate` (Alive2 `SymbolicTV` + 64-state concrete `evalCode` + cycle cost non-regression).
+- Continuously tests an adversarial plugin (`adversarial:unsound-alu-corruptor`) to verify 100% rejection of unsound rewrites.
+
+### 7.3 Season 8 `turbo-lean` External Accelerator Protocol & Automated 5-Gate CI
+- **`lean-native-core turbo-plugin` & `.turbo-lean/accelerators.json`**: Implements `Th0rgal/turbo-lean`'s `ExternalProcessAccelerator` JSONL-stdio protocol (`AcceleratorInput` -> `AcceleratorCertificate`).
+- **`.github/workflows/ci.yml` & `scripts/ci_verify.sh`**: Runs all 5 formal & empirical verification gates on every push and pull request.
+

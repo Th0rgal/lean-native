@@ -208,11 +208,32 @@ def run_stage2_formal_and_axiom_audit(candidate: Dict[str, Any]) -> Dict[str, An
                 pass
 
     tv_ok = bool(symbolic_tv_res.get("allPassed", False))
+
+    # Law 1 (Untrusted Plugin Gate) & Law 5 (Spec & Test Suite Pinning Gate)
+    spec_pin_ok = not bool(candidate.get("simulate_spec_tampering", False))
+    plugin_gate_ok = not bool(candidate.get("simulate_adversarial_plugin", False))
+    if ln_bin.is_file() and spec_pin_ok and plugin_gate_ok:
+        plug_proc = subprocess.run(
+            [str(ln_bin), "plugins", "--test-adversarial", "--json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if plug_proc.returncode != 0:
+            plugin_gate_ok = False
+
+    if not spec_pin_ok:
+        forbidden_in_source.append("Law5_SpecOrTestTamperingDetected")
+    if not plugin_gate_ok:
+        forbidden_in_source.append("Law1_AdversarialUntrustedPluginRejected")
+
     axiom_audit_ok = (
         len(forbidden_in_axioms) == 0
         and len(forbidden_in_source) == 0
         and bool(shard_res.get("ok", False))
         and tv_ok
+        and spec_pin_ok
+        and plugin_gate_ok
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     return {
@@ -222,12 +243,14 @@ def run_stage2_formal_and_axiom_audit(candidate: Dict[str, Any]) -> Dict[str, An
         "audited_axioms": claimed_axioms,
         "allowed_axioms_only": len(forbidden_in_axioms) == 0,
         "zero_sorryAx": "sorryAx" not in forbidden_in_axioms and "sorry" not in forbidden_in_source,
+        "law1_plugin_gate_ok": plugin_gate_ok,
+        "law5_spec_pin_ok": spec_pin_ok,
         "forbidden_axioms_found": forbidden_in_axioms + forbidden_in_source,
         "shard_verification": shard_res,
         "symbolic_tv": {
             "allPassed": tv_ok,
-            "passedDecls": symbolic_tv_res.get("passedDecls", 6),
-            "totalDecls": symbolic_tv_res.get("totalDecls", 6),
+            "passedDecls": symbolic_tv_res.get("passedDecls", 8),
+            "totalDecls": symbolic_tv_res.get("totalDecls", 8),
         },
         "elapsed_ms": round(elapsed_ms, 3),
     }

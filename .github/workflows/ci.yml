@@ -1,0 +1,53 @@
+name: LeanNative v0.5 Verified CI & PR Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-compiler-and-proofs:
+    name: "5-Gate Formal Proof, Plugin Segregation & Native Codegen Verification"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout lean-native
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install LLVM 18 & Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18 lld-18 curl git jq python3
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/opt-18 /usr/local/bin/opt
+          sudo ln -sf /usr/bin/llc-18 /usr/local/bin/llc
+
+      - name: Install elan & Lean 4 Toolchain
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.elan/bin:$PATH"
+          elan toolchain install $(cat lean-toolchain)
+
+      - name: Install Rust & Th0rgal/turbo-lean (Season 8)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build & Cache turbo-lean
+        run: |
+          git clone --depth 1 https://github.com/Th0rgal/turbo-lean.git /tmp/turbo-lean
+          cd /tmp/turbo-lean
+          cargo build --release --bin turbo-lean
+          cp target/release/turbo-lean "$HOME/.cargo/bin/turbo-lean"
+
+      - name: Run 5-Gate CI & PR Verification Suite
+        env:
+          LEAN_NATIVE_PR_FLAGS: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'spec-change-approved') && '--disallow-spec-changes' || '' }}
+        run: |
+          chmod +x scripts/ci_verify.sh
+          BASE_REF="${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD' }}"
+          ./scripts/ci_verify.sh "$BASE_REF"

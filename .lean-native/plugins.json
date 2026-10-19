@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "default_budget_ms": 25,
+  "gate_law": "LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound",
+  "pipeline_law": "LeanNative.Spec.opt_pipeline_chain_refines",
+  "builtins": [
+    "builtin:algebraic-peephole",
+    "builtin:unbox-tuple-sroa",
+    "builtin:hoist-exclusivity",
+    "builtin:loop-vectorize",
+    "builtin:enumerative-superopt"
+  ],
+  "disabled_builtins": [],
+  "external": []
+}

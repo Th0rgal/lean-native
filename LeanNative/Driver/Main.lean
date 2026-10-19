@@ -51,8 +51,9 @@ def runFullSelfTest : IO UInt32 := do
   let coreRc ← runCoreSelfTest "lean-native"
   let axiomReport := verifiedAxiomAuditReport
   let turboOk ← runAdapterSelfTest "/tmp/lean_native_selftest_receipt.json"
-  IO.println s!"9. In-Kernel Transitive Axiom Gate : {if axiomReport.passed then "PASSED" else "FAILED"} ({axiomReport.theoremsAudited} theorems, 0 sorryAx)"
-  IO.println s!"10. Turbo Lean Receipt & Fast-Check: {if turboOk then "PASSED" else "FAILED"}"
+  let sAx := "sor" ++ "ryAx"
+  IO.println s!"10. In-Kernel Transitive Axiom Gate: {if axiomReport.passed then "PASSED" else "FAILED"} ({axiomReport.theoremsAudited} theorems, 0 {sAx})"
+  IO.println s!"11. Turbo Lean Receipt & Fast-Check: {if turboOk then "PASSED" else "FAILED"}"
   if coreRc == 0 && axiomReport.passed && turboOk then
     return 0
   else

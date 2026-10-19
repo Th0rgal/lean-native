@@ -142,6 +142,21 @@ def verifiedTheoremRegistry : List String :=
   , "LeanNative.Backend.FastCheck.substScalarExpr_nil"
   , "LeanNative.Backend.FastCheck.substSingleConstraint_sound"
   , "LeanNative.Backend.FastCheck.propagatePrecondition_letBind_sound"
+  , "LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound"
+  , "LeanNative.Spec.untrusted_opt_plugin_code_refines"
+  , "LeanNative.Spec.untrusted_opt_plugin_timeout_fallback"
+  , "LeanNative.Spec.untrusted_opt_plugin_reject_fallback"
+  , "LeanNative.Spec.opt_pipeline_two_step_refines"
+  , "LeanNative.Spec.opt_pipeline_chain_refines"
+  , "LeanNative.Spec.fastcheck_rejects_vacuous_precondition"
+  , "LeanNative.Spec.fastcheck_non_vacuous_tightness_law"
+  , "LeanNative.Spec.c_abi_box_zero_eq_one"
+  , "LeanNative.Spec.c_abi_unbox_box_zero"
+  , "LeanNative.Spec.c_abi_unbox_box_one"
+  , "LeanNative.Spec.pr_spec_pinning_blocks_spec_tampering"
+  , "LeanNative.Spec.pr_spec_pinning_blocks_test_tampering"
+  , "LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms"
+  , "LeanNative.Spec.pr_spec_pinning_gate_sound"
   ]
 
 /-- Check whether `thmName` is a registered kernel-checked theorem in `LeanNative.Proofs`. -/

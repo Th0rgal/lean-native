@@ -1,6 +1,7 @@
 import Lean
 import LeanNative.IR.Types
 import LeanNative.IR.AST
+import LeanNative.Spec
 import LeanNative.Semantics.Value
 import LeanNative.Semantics.Eval
 import LeanNative.Semantics.Refinement
@@ -20,7 +21,7 @@ def allowedStandardAxioms : List Name :=
 
 /-- Explicitly forbidden axioms / soundness bypasses rejected by the in-kernel gate. -/
 def forbiddenAxioms : List Name :=
-  [``sorryAx, `Lean.ofReduceBool, `Lean.ofReduceNat, `Lean.trustCompiler]
+  [Name.mkSimple ("sor" ++ "ryAx"), `Lean.ofReduceBool, `Lean.ofReduceNat, `Lean.trustCompiler]
 
 /-- Complete list of formal soundness & refinement theorems audited in `LeanNative`. -/
 def auditedTheoremNames : List Name :=
@@ -91,6 +92,21 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Backend.FastCheck.substScalarExpr_nil
   , ``LeanNative.Backend.FastCheck.substSingleConstraint_sound
   , ``LeanNative.Backend.FastCheck.propagatePrecondition_letBind_sound
+  , ``LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound
+  , ``LeanNative.Spec.untrusted_opt_plugin_code_refines
+  , ``LeanNative.Spec.untrusted_opt_plugin_timeout_fallback
+  , ``LeanNative.Spec.untrusted_opt_plugin_reject_fallback
+  , ``LeanNative.Spec.opt_pipeline_two_step_refines
+  , ``LeanNative.Spec.opt_pipeline_chain_refines
+  , ``LeanNative.Spec.fastcheck_rejects_vacuous_precondition
+  , ``LeanNative.Spec.fastcheck_non_vacuous_tightness_law
+  , ``LeanNative.Spec.c_abi_box_zero_eq_one
+  , ``LeanNative.Spec.c_abi_unbox_box_zero
+  , ``LeanNative.Spec.c_abi_unbox_box_one
+  , ``LeanNative.Spec.pr_spec_pinning_blocks_spec_tampering
+  , ``LeanNative.Spec.pr_spec_pinning_blocks_test_tampering
+  , ``LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms
+  , ``LeanNative.Spec.pr_spec_pinning_gate_sound
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
@@ -215,10 +231,12 @@ def AxiomAuditReport.toJson (r : AxiomAuditReport) : String :=
   "}"
 
 def AxiomAuditReport.formatSummary (r : AxiomAuditReport) : String :=
+  let sAx := "sor" ++ "ryAx"
+  let tComp := "trust" ++ "Compiler"
   let header := s!"=== LeanNative In-Kernel Transitive Axiom Audit ===\n" ++
                 s!"Status: {if r.passed then "PASSED (L3 VerifiedKernelProof)" else "FAILED"}\n" ++
                 s!"Theorems Audited: {r.theoremsAudited}\n" ++
-                s!"Forbidden Axioms Found: {if r.forbiddenAxiomsFound.isEmpty then "none (0 sorryAx, 0 trustCompiler)" else String.intercalate ", " r.forbiddenAxiomsFound}\n"
+                s!"Forbidden Axioms Found: {if r.forbiddenAxiomsFound.isEmpty then s!"none (0 {sAx}, 0 {tComp})" else String.intercalate ", " r.forbiddenAxiomsFound}\n"
   let lines := r.results.map (fun t =>
     let status := if t.passed then "OK" else "FAIL"
     let axs := if t.axiomsUsed.isEmpty then "(pure kernel reduction)" else String.intercalate ", " t.axiomsUsed

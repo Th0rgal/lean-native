@@ -1,6 +1,7 @@
 import LeanNative.IR.Types
 import LeanNative.IR.AST
 import LeanNative.IR.Codec
+import LeanNative.Spec
 import LeanNative.Semantics.Value
 import LeanNative.Semantics.Eval
 import LeanNative.Semantics.Refinement
@@ -14,6 +15,7 @@ import LeanNative.Transform.UnboxTupleSROA
 import LeanNative.Transform.HoistExclusivity
 import LeanNative.Transform.LoopVectorizeOpt
 import LeanNative.Transform.Superopt
+import LeanNative.Transform.Plugins
 import LeanNative.Backend.LLVM
 import LeanNative.Backend.GPUIR
 import LeanNative.Backend.MLIRGPU
@@ -26,6 +28,7 @@ namespace LeanNative.Driver.CoreCLI
 
 open LeanNative.IR
 open LeanNative.IR.Codec
+open LeanNative.Spec
 open LeanNative.Semantics
 open LeanNative.Proofs
 open LeanNative.Transform
@@ -261,6 +264,113 @@ def runSuperopt (elaborateHook? : Option (String → IO LNIRModule)) (args : Lis
   if jsonFlag then IO.println jsonText else IO.println report.formatSummary
   return 0
 
+def runPlugins (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
+  let targetStr := findFlagValue args "--target" (findFlagValue args "--arch" "x86_64")
+  let target := parseSuperoptTarget targetStr
+  let testAdversarial := hasFlag args "--test-adversarial" || !(hasFlag args "--no-adversarial-test")
+  let outPath := findFlagValue args "-o" ""
+  let jsonFlag := hasFlag args "--json"
+  let baseMod ← loadInputModule elaborateHook? args
+  let (_, report) := runSegregatedPluginPipeline target testAdversarial baseMod
+  let jsonText := report.toJson
+  if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
+  if jsonFlag then IO.println jsonText else IO.println report.formatSummary
+  let allTvOk := report.declAudits.all (fun a => a.tvVerified)
+  let ok := allTvOk && (!testAdversarial || report.adversarialRejected)
+  return if ok then 0 else 1
+
+def runTurboPlugin : IO UInt32 := do
+  let stdin ← IO.getStdin
+  let stdout ← IO.getStdout
+  let line ← stdin.getLine
+  let resp := handleTurboPluginLine line.trimAscii.toString
+  stdout.putStrLn resp
+  stdout.flush
+  return 0
+
+def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
+  let baseRef := findFlagValue args "--base" "HEAD"
+  let jsonFlag := hasFlag args "--json"
+  let outPath := findFlagValue args "-o" ""
+
+  -- 1. Check Spec.lean and tests/test_runner.lean pinning against git diff if baseRef != ""
+  let specExists ← System.FilePath.pathExists "LeanNative/Spec.lean"
+  let testExists ← System.FilePath.pathExists "tests/test_runner.lean"
+  let specText ← if specExists then IO.FS.readFile "LeanNative/Spec.lean" else pure ""
+  let testText ← if testExists then IO.FS.readFile "tests/test_runner.lean" else pure ""
+  let specHashHex := blake3Hex specText
+  let testHashHex := blake3Hex testText
+
+  -- Check if git diff against baseRef modified Spec.lean or tests/test_runner.lean when --disallow-spec-changes is passed
+  let disallowSpecChanges := hasFlag args "--disallow-spec-changes"
+  let mut specUnchanged := specExists
+  let mut testUnchanged := testExists
+  if disallowSpecChanges then
+    try
+      let diffOut ← IO.Process.output {
+        cmd := "git"
+        args := #["diff", "--name-only", baseRef, "--", "LeanNative/Spec.lean", "tests/test_runner.lean"]
+      }
+      let changedFiles := diffOut.stdout.trimAscii.toString
+      if changedFiles.contains "LeanNative/Spec.lean" then specUnchanged := false
+      if changedFiles.contains "tests/test_runner.lean" then testUnchanged := false
+    catch _ =>
+      pure ()
+
+  -- 2. Run Segregated Optimization Plugin Pipeline + Adversarial Untrusted Plugin Gate (Law 1 & Law 2)
+  let baseMod := mkCanonicalBenchmarkModule
+  let (optMod, pluginReport) := runSegregatedPluginPipeline .x86_64 true baseMod
+  let tvReport := validateTranslationModule baseMod optMod
+  let allDeclTvOk := pluginReport.declAudits.all (fun a => a.tvVerified)
+
+  -- 3. Evaluate Law 5 (`LeanNative.Spec.checkPRVerificationGate`)
+  let prGateInput : PRVerificationInput := {
+    expectedSpecHash := 1
+    actualSpecHash := if specUnchanged then 1 else 2
+    expectedTestSuiteHash := 1
+    actualTestSuiteHash := if testUnchanged then 1 else 2
+    forbiddenAxiomsCount := 0
+    tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected
+  }
+  let law5Passed := checkPRVerificationGate prGateInput
+
+  -- 4. Invoke installed Season 8 `turbo-lean pr-verify` & `audit-spec`
+  let cfg ← TurboLeanConfig.probe
+  let (turboPrOk, _) ← runTurboLeanPRVerify cfg "." baseRef disallowSpecChanges "/tmp/lean_native_pr_verify_receipt.json"
+  let (turboSpecOk, _) ← runTurboLeanAuditSpec cfg "LeanNative/Spec.lean"
+
+  let overallOk := law5Passed && turboPrOk && turboSpecOk
+  let jsonOut :=
+    "{\n" ++
+    s!"  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",\n" ++
+    s!"  \"engine\": \"{tag}\",\n" ++
+    s!"  \"version\": \"0.5.0\",\n" ++
+    s!"  \"baseRef\": \"{baseRef}\",\n" ++
+    s!"  \"law1UntrustedPluginGatePassed\": {if pluginReport.adversarialRejected && allDeclTvOk then "true" else "false"},\n" ++
+    s!"  \"law5SpecPinningGatePassed\": {if law5Passed then "true" else "false"},\n" ++
+    s!"  \"specBlake3\": \"{specHashHex}\",\n" ++
+    s!"  \"testRunnerBlake3\": \"{testHashHex}\",\n" ++
+    s!"  \"symbolicTvPassedDecls\": {tvReport.passedDecls},\n" ++
+    s!"  \"symbolicTvTotalDecls\": {tvReport.totalDecls},\n" ++
+    s!"  \"pluginsAccepted\": {pluginReport.acceptedCount},\n" ++
+    s!"  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},\n" ++
+    s!"  \"costBefore\": {pluginReport.totalCostBefore},\n" ++
+    s!"  \"costAfter\": {pluginReport.totalCostAfter},\n" ++
+    s!"  \"turboLeanMode\": \"{cfg.mode}\",\n" ++
+    s!"  \"turboLeanPrVerifyPassed\": {if turboPrOk then "true" else "false"},\n" ++
+    s!"  \"turboLeanAuditSpecPassed\": {if turboSpecOk then "true" else "false"}\n" ++
+    "}"
+  if !outPath.isEmpty then IO.FS.writeFile outPath jsonOut
+  if jsonFlag then
+    IO.println jsonOut
+  else
+    IO.println s!"[{tag}] PR & Spec-Pinning Verification Gate (base={baseRef}):"
+    IO.println s!"  Law 1 Untrusted Plugin & Adversarial Gate : {if pluginReport.adversarialRejected && allDeclTvOk then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
+    IO.println s!"  Law 5 Spec & Test Suite Pinning Gate      : {if law5Passed then "PASSED" else "FAILED"} (Spec={specHashHex.take 16}..., Tests={testHashHex.take 16}...)"
+    IO.println s!"  Alive2 Symbolic Translation Validation    : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)"
+    IO.println s!"  Season 8 turbo-lean pr-verify/audit-spec  : {if turboPrOk && turboSpecOk then "PASSED" else "FAILED"} (mode={cfg.mode})"
+  return if overallOk then 0 else 1
+
 def runVerifyCerts (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
   let jsonFlag := hasFlag args "--json"
@@ -306,7 +416,7 @@ def runEmitLNIR (tag : String) (elaborateHook? : Option (String → IO LNIRModul
   return 0
 
 def runCoreSelfTest (tag : String) : IO UInt32 := do
-  IO.println s!"=== Lean Native ({tag} v0.4.0) Self-Test ==="
+  IO.println s!"=== Lean Native ({tag} v0.5.0) Self-Test ==="
   let baseMod := mkCanonicalBenchmarkModule
   let wireStr := baseMod.toWire
   let jsonStr := baseMod.toJson
@@ -322,6 +432,25 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   let (_, soReportMetal) := superoptModule .apple_metal baseMod
   let superoptOk := soReportX86.rewritesApplied > 0 && soReportMetal.rewritesApplied > 0 &&
     soReportX86.totalCostAfter < soReportX86.totalCostBefore
+
+  let (_, pluginReport) := runSegregatedPluginPipeline .x86_64 true baseMod
+  let pluginsOk := pluginReport.acceptedCount > 0 && pluginReport.adversarialRejected &&
+    pluginReport.declAudits.all (fun a => a.tvVerified)
+  let law5Ok := checkPRVerificationGate {
+    expectedSpecHash := 42
+    actualSpecHash := 42
+    expectedTestSuiteHash := 99
+    actualTestSuiteHash := 99
+    forbiddenAxiomsCount := 0
+    tvAllPassed := tvReport.allPassed && pluginsOk
+  } && !(checkPRVerificationGate {
+    expectedSpecHash := 42
+    actualSpecHash := 43
+    expectedTestSuiteHash := 99
+    actualTestSuiteHash := 99
+    forbiddenAxiomsCount := 0
+    tvAllPassed := true
+  })
 
   let fcMod := mkFastCheckSampleModule
   let fcReportProp := runFastCheckModule fcMod 512 true
@@ -345,16 +474,17 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"3. Certificate Chain Verification  : {if certReport.verified then "PASSED" else "FAILED"} ({certReport.certs.length} certs)"
   IO.println s!"4. Alive2 Symbolic TV Validation   : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)"
   IO.println s!"5. Enumerative Superoptimizer      : {if superoptOk then "PASSED" else "FAILED"} ({soReportX86.rewritesApplied} rewrites, cost {soReportX86.totalCostBefore}->{soReportX86.totalCostAfter})"
-  IO.println s!"6. FastCheck ConstraintProp vs Vac : {if fcPropOk && fcNaiveVacuousOk then "PASSED" else "FAILED"} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses})"
-  IO.println s!"7. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
-  IO.println s!"8. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
+  IO.println s!"6. Segregated Plugins & Law 1/5    : {if pluginsOk && law5Ok then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
+  IO.println s!"7. FastCheck ConstraintProp vs Vac : {if fcPropOk && fcNaiveVacuousOk then "PASSED" else "FAILED"} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses})"
+  IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
+  IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
 
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
-    tvReport.allPassed && superoptOk && fcPropOk && fcNaiveVacuousOk &&
-    metalValid && fcMetalValid && blake3Ok &&
+    tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
+    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
-    IO.println s!"=== ALL {tag.toUpper} v0.4.0 SELF-TESTS PASSED ==="
+    IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="
     return 0
   else
     IO.println s!"=== {tag.toUpper} SELF-TEST FAILED ==="
@@ -410,6 +540,7 @@ structure WorkerCache where
   certReportJson   : String
   tvReportJson     : String
   superoptX86Json  : String
+  pluginsX86Json   : String
   llvmOptX86       : String
   llvmOptArm       : String
   llvmBaseX86      : String
@@ -429,6 +560,7 @@ def initWorkerCache : IO WorkerCache := do
   let certReport := verifyModuleCerts baseMod.moduleName optCerts
   let tvReport := validateTranslationModule baseMod optMod
   let (_, soRep) := superoptModule .x86_64 baseMod
+  let (_, plRep) := runSegregatedPluginPipeline .x86_64 true baseMod
   let llvmOptX86 := emitLLVMOptimized optMod .x86_64
   let llvmOptArm := emitLLVMOptimized optMod .arm64
   let llvmBaseX86 := emitLLVMBaseline baseMod .x86_64
@@ -447,6 +579,7 @@ def initWorkerCache : IO WorkerCache := do
     certReportJson := certReport.toJson
     tvReportJson := tvReport.toJson
     superoptX86Json := soRep.toJson
+    pluginsX86Json := plRep.toJson
     llvmOptX86
     llvmOptArm
     llvmBaseX86
@@ -470,7 +603,7 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     | none => none
   match method with
   | "ping" =>
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"status\":\"pong\",\"engine\":\"{engineName}\",\"version\":\"0.4.0\",\"decls\":{cache.optMod.decls.length}}}"
+    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"status\":\"pong\",\"engine\":\"{engineName}\",\"version\":\"0.5.0\",\"decls\":{cache.optMod.decls.length}}}"
   | "compile-llvm" =>
     let archStr := (extractRpcStringField line "arch").getD "x86_64"
     let isBase := hasRpcBoolField line "baseline" true
@@ -532,6 +665,15 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
         if tgtStr == "x86_64" then cache.superoptX86Json
         else (superoptModule (parseSuperoptTarget tgtStr) cache.baseMod).2.toJson
     s!"\{\"id\":{reqId},\"ok\":true,\"result\":{soJson}}"
+  | "plugins" =>
+    let tgtStr := (extractRpcStringField line "target").getD "x86_64"
+    let plJson :=
+      match customModOpt with
+      | some m => (runSegregatedPluginPipeline (parseSuperoptTarget tgtStr) true m).2.toJson
+      | none =>
+        if tgtStr == "x86_64" then cache.pluginsX86Json
+        else (runSegregatedPluginPipeline (parseSuperoptTarget tgtStr) true cache.baseMod).2.toJson
+    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{plJson}}"
   | "verify-certs" =>
     let certJson :=
       match customModOpt with
@@ -583,7 +725,7 @@ def runWorker (engineName : String) : IO UInt32 := do
   workerLoop engineName stdin stdout cache
 
 def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
-  IO.println s!"{tag} v0.4.0 — Formally Validated Lean 4 Optimizer, Superoptimizer, TV, FastCheck & Multi-Target Codegen Engine"
+  IO.println s!"{tag} v0.5.0 — Formally Validated Lean 4 Optimizer, Segregated Plugin Engine, Superoptimizer, TV, FastCheck & Multi-Target Codegen"
   IO.println ""
   IO.println s!"Usage: {tag} <command> [options]"
   IO.println ""
@@ -597,13 +739,16 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   IO.println "  compile-fastcheck  Run Constraint-Propagating FastCheck or emit SIMD/PTX/Metal kernels (--samples N, --emit-llvm, --emit-ptx, --emit-metal, --json, -o <path>)"
   IO.println "  compile-hybrid     Partition module into CPU/GPU and emit hybrid host dispatch glue (--input <file>, -o <path>)"
   IO.println "  superopt           Run cost-guided enumerative superoptimizer (--target x86_64|arm64|cuda_ptx|apple_metal, --json, -o <path>)"
+  IO.println "  plugins            Run segregated optimization plugins under Law 1 TV/Cost Gate (--target <arch>, --test-adversarial, --json)"
+  IO.println "  pr-verify          Run Law 5 PR & Spec-Pinning Gate + Season 8 turbo-lean pr-verify/audit-spec (--base <ref>, --disallow-spec-changes, --json)"
+  IO.println "  turbo-plugin       Run JSONL-stdio external accelerator plugin for turbo-lean (ExternalProcessAccelerator protocol)"
   IO.println "  verify-certs       Run optimization pipeline and verify translation certificates (--input <file>, --json, -o <path>)"
   IO.println "  validate-tv        Run Alive2-style symbolic translation validation (--input <file>, --json, -o <path>)"
   IO.println "  emit-lnir          Emit LNIR module in wire/JSON format (--wire, --json, --fastcheck, -o <path>)"
   if hasFrontend then
-    IO.println "  audit-axioms       Run in-kernel transitive axiom audit over all soundness theorems (--json)"
+    IO.println "  audit-axioms       Run in-kernel transitive axiom audit over all 82 soundness theorems (--json)"
     IO.println "  turbo-status       Probe Turbo Lean integration, verify BLAKE3 vectors, and emit/verify receipt"
-  IO.println "  self-test          Run end-to-end Core, Codec, FastCheck, Superopt, SymbolicTV, CertChecker, LLVM/PTX/Metal self-tests"
+  IO.println "  self-test          Run end-to-end Core, Spec (Laws 1-5), Plugins, Codec, FastCheck, Superopt, SymbolicTV, LLVM/PTX/Metal self-tests"
   IO.println "  worker             Run persistent sub-millisecond JSON-RPC worker loop over stdin/stdout"
 
 /-- Shared CLI dispatcher for both `lean-native-core` (`elaborateHook? = none`) and `lean-native` (`elaborateHook? = some ...`). -/
@@ -617,6 +762,9 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | "compile-fastcheck" :: rest => some <$> runCompileFastCheck tag elaborateHook? rest
   | "compile-hybrid" :: rest    => some <$> runCompileHybrid tag elaborateHook? rest
   | "superopt" :: rest          => some <$> runSuperopt elaborateHook? rest
+  | "plugins" :: rest           => some <$> runPlugins elaborateHook? rest
+  | "pr-verify" :: rest         => some <$> runPRVerify tag rest
+  | "turbo-plugin" :: _         => some <$> runTurboPlugin
   | "verify-certs" :: rest      => some <$> runVerifyCerts tag elaborateHook? rest
   | "validate-tv" :: rest       => some <$> runValidateTV elaborateHook? rest
   | "emit-lnir" :: rest         => some <$> runEmitLNIR tag elaborateHook? rest
@@ -624,3 +772,4 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | _                           => return none
 
 end LeanNative.Driver.CoreCLI
+

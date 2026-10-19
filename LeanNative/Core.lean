@@ -1,6 +1,7 @@
 import LeanNative.IR.Types
 import LeanNative.IR.AST
 import LeanNative.IR.Codec
+import LeanNative.Spec
 import LeanNative.Semantics.Value
 import LeanNative.Semantics.Eval
 import LeanNative.Semantics.Refinement
@@ -14,6 +15,7 @@ import LeanNative.Transform.UnboxTupleSROA
 import LeanNative.Transform.HoistExclusivity
 import LeanNative.Transform.LoopVectorizeOpt
 import LeanNative.Transform.Superopt
+import LeanNative.Transform.Plugins
 import LeanNative.Backend.LLVM
 import LeanNative.Backend.GPUIR
 import LeanNative.Backend.MLIRGPU
@@ -25,6 +27,6 @@ import LeanNative.Driver.CoreCLI
 
 namespace LeanNative.Core
 
-def coreVersion : String := "0.4.0"
+def coreVersion : String := "0.5.0"
 
 end LeanNative.Core
