@@ -441,14 +441,16 @@ partial def synthesizeCandidates (target : SuperoptTarget) (e : ScalarExpr) : Li
 
 /-- Record of a single verified superoptimizer rewrite inside an `LNIRDecl`. -/
 structure SuperoptRewriteRecord where
-  declName         : String
-  target           : String
-  originalExpr     : String
-  synthesizedExpr  : String
-  costBefore       : Nat
-  costAfter        : Nat
-  fastCheckPassed  : Bool
-  symbolicTVPassed : Bool
+  declName            : String
+  target              : String
+  originalExpr        : String
+  synthesizedExpr     : String
+  costBefore          : Nat
+  costAfter           : Nat
+  fastCheckPassed     : Bool
+  symbolicTVPassed    : Bool
+  kernelProofVerified : Bool := false
+  theoremRef          : String := "LeanNative.Proofs.SymbolicTV"
   deriving Repr, DecidableEq, Inhabited, BEq
 
 /-- Module-level superoptimization report. -/
@@ -481,6 +483,12 @@ def superoptScalarExpr (target : SuperoptTarget) (declName : String) (e : Scalar
     ) e
   let afterCost := scalarExprCost target bestCand
   if bestCand != e && afterCost < origCost then
+    let isKernelVerified :=
+      bestCand == LeanNative.Proofs.rewriteScalarVerified e ||
+      bestCand == LeanNative.Proofs.rewriteScalarPeephole e
+    let thmRef :=
+      if isKernelVerified then "LeanNative.Proofs.rewriteScalarVerified_sound"
+      else "LeanNative.Proofs.SymbolicTV"
     let recEntry : SuperoptRewriteRecord := {
       declName := declName
       target := target.toString
@@ -490,6 +498,8 @@ def superoptScalarExpr (target : SuperoptTarget) (declName : String) (e : Scalar
       costAfter := afterCost
       fastCheckPassed := fastCheckScalarEquiv e bestCand
       symbolicTVPassed := symCheckScalarEquiv e bestCand
+      kernelProofVerified := isKernelVerified
+      theoremRef := thmRef
     }
     (bestCand, some recEntry)
   else
@@ -553,7 +563,10 @@ def superoptDecl (target : SuperoptTarget) (d : LNIRDecl) :
   let (body', recs) := superoptCode target d.name d.body
   let assurance' :=
     if recs.isEmpty then d.assurance
-    else AssuranceLevel.combine d.assurance .translationValidated
+    else if recs.all (fun r => r.kernelProofVerified) then
+      AssuranceLevel.combine d.assurance .verifiedKernelProof
+    else
+      AssuranceLevel.combine d.assurance .translationValidated
   ({ d with body := body', assurance := assurance' }, recs)
 
 /-- Superoptimize all declarations in an `LNIRModule` for `target` and return the
@@ -598,7 +611,9 @@ def SuperoptRewriteRecord.toJson (r : SuperoptRewriteRecord) : String :=
   s!"\"costBefore\":{r.costBefore}," ++
   s!"\"costAfter\":{r.costAfter}," ++
   s!"\"fastCheckPassed\":{if r.fastCheckPassed then "true" else "false"}," ++
-  s!"\"symbolicTVPassed\":{if r.symbolicTVPassed then "true" else "false"}" ++
+  s!"\"symbolicTVPassed\":{if r.symbolicTVPassed then "true" else "false"}," ++
+  s!"\"kernelProofVerified\":{if r.kernelProofVerified then "true" else "false"}," ++
+  s!"\"theoremRef\":\"{escapeJsonSO r.theoremRef}\"" ++
   "}"
 
 def SuperoptReport.toJson (r : SuperoptReport) : String :=
@@ -623,7 +638,7 @@ def SuperoptReport.formatSummary (r : SuperoptReport) : String :=
     s!"Total Latency   : {r.totalCostBefore} -> {r.totalCostAfter} cycles\n"
   let lines := r.records.map (fun recEntry =>
     s!"  [{recEntry.declName}] cost {recEntry.costBefore} -> {recEntry.costAfter} " ++
-    s!"(FastCheck={recEntry.fastCheckPassed}, SymbolicTV={recEntry.symbolicTVPassed}): " ++
+    s!"(FastCheck={recEntry.fastCheckPassed}, SymbolicTV={recEntry.symbolicTVPassed}, KernelProof={recEntry.kernelProofVerified} [{recEntry.theoremRef}]): " ++
     s!"{recEntry.originalExpr} ==> {recEntry.synthesizedExpr}")
   header ++ String.intercalate "\n" lines
 

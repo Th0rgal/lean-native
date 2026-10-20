@@ -981,6 +981,56 @@ theorem rewriteScalarVerified_sound (e : ScalarExpr) :
     (rewriteScalarPeephole_sound e)
     (rewriteConstFoldStep_sound (rewriteScalarPeephole e))
 
+/-! ## Superoptimizer Multi-Node Template Soundness Theorems (`evalScalarExpr`) -/
+
+theorem evalScalarExpr_add_self_u64 (env : VarEnv) (x : ScalarExpr) (a : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 a)) :
+    evalScalarExpr env (.binOp .add x x) =
+    evalScalarExpr env (.binOp .shl x (.constU64 1)) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_add_self_shl_one a)
+
+theorem evalScalarExpr_add_assoc_const_u64 (env : VarEnv) (x : ScalarExpr) (a c1 c2 : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 a)) :
+    evalScalarExpr env (.binOp .add (.binOp .add x (.constU64 c1)) (.constU64 c2)) =
+    evalScalarExpr env (.binOp .add x (.constU64 (c1 + c2))) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_add_assoc_const a c1 c2)
+
+theorem evalScalarExpr_and_mask_coalesce_u64 (env : VarEnv) (x : ScalarExpr) (a m1 m2 : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 a)) :
+    evalScalarExpr env (.binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2)) =
+    evalScalarExpr env (.binOp .bitAnd x (.constU64 (m1 &&& m2))) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_and_mask_coalesce a m1 m2)
+
+theorem evalScalarExpr_or_mask_coalesce_u64 (env : VarEnv) (x : ScalarExpr) (a m1 m2 : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 a)) :
+    evalScalarExpr env (.binOp .bitOr (.binOp .bitOr x (.constU64 m1)) (.constU64 m2)) =
+    evalScalarExpr env (.binOp .bitOr x (.constU64 (m1 ||| m2))) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_or_mask_coalesce a m1 m2)
+
+theorem evalScalarExpr_xor_mask_coalesce_u64 (env : VarEnv) (x : ScalarExpr) (a m1 m2 : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 a)) :
+    evalScalarExpr env (.binOp .bitXor (.binOp .bitXor x (.constU64 m1)) (.constU64 m2)) =
+    evalScalarExpr env (.binOp .bitXor x (.constU64 (m1 ^^^ m2))) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_xor_mask_coalesce a m1 m2)
+
+theorem evalScalarExpr_mul_add_distrib_const_u64 (env : VarEnv) (x : ScalarExpr) (v a b : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 v)) :
+    evalScalarExpr env (.binOp .add (.binOp .mul x (.constU64 a)) (.binOp .mul x (.constU64 b))) =
+    evalScalarExpr env (.binOp .mul x (.constU64 (a + b))) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun r => Except.ok (Val.u64 r)) (uint64_mul_add_distrib_const v a b)
+
 namespace PeepholeProofs
   abbrev rewriteScalarPeephole_sound := @LeanNative.Proofs.rewriteScalarPeephole_sound
   abbrev rewriteLNIRExpr_sound := @LeanNative.Proofs.rewriteLNIRExpr_sound

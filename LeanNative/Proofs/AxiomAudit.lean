@@ -121,6 +121,12 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Proofs.uint64_or_mask_coalesce
   , ``LeanNative.Proofs.uint64_xor_mask_coalesce
   , ``LeanNative.Proofs.uint64_mul_add_distrib_const
+  , ``LeanNative.Proofs.evalScalarExpr_add_self_u64
+  , ``LeanNative.Proofs.evalScalarExpr_add_assoc_const_u64
+  , ``LeanNative.Proofs.evalScalarExpr_and_mask_coalesce_u64
+  , ``LeanNative.Proofs.evalScalarExpr_or_mask_coalesce_u64
+  , ``LeanNative.Proofs.evalScalarExpr_xor_mask_coalesce_u64
+  , ``LeanNative.Proofs.evalScalarExpr_mul_add_distrib_const_u64
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
