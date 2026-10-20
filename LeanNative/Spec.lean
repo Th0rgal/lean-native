@@ -122,6 +122,46 @@ theorem evalLoopStepBudget_monotone (init fuel : Nat) (b : AffineStepBudget) {s1
     evalLoopStepBudget init fuel b s1 ≤ evalLoopStepBudget init fuel b s2 :=
   Nat.add_le_add_left (Nat.mul_le_mul_left fuel (affine_step_budget_monotone b h)) init
 
+def evalPassChainBudget (passes : List AffineStepBudget) : AffineStepBudget :=
+  passes.foldl composeAffineBudget { scale := 1, offset := 0 }
+
+theorem evalPassChainBudget_cons (b : AffineStepBudget) (bs : List AffineStepBudget) (steps : Nat) :
+    (bs.foldl composeAffineBudget b).eval steps =
+      b.eval ((bs.foldl composeAffineBudget { scale := 1, offset := 0 }).eval steps) := by
+  induction bs generalizing b with
+  | nil => simp [AffineStepBudget.eval]
+  | cons hd tl ih =>
+    rw [List.foldl_cons, List.foldl_cons, ih (composeAffineBudget b hd),
+        ih (composeAffineBudget { scale := 1, offset := 0 } hd)]
+    simp [composeAffineBudget, AffineStepBudget.eval, Nat.mul_add, Nat.mul_assoc, Nat.add_assoc]
+
+/-- Minimal radix-2 Patricia-tree (`Spt`) code/memory table model for RISC-V & `evm.fast-dev`. -/
+inductive SptTree (α : Type) where
+  | leaf : SptTree α
+  | node : Option α → SptTree α → SptTree α → SptTree α
+  deriving Repr, DecidableEq, BEq
+
+def sptLookup {α : Type} : SptTree α → List Bool → Option α
+  | .leaf, _ => none
+  | .node v _ _, [] => v
+  | .node _ l r, b :: bs => sptLookup (if b then r else l) bs
+
+def sptInsert {α : Type} : SptTree α → List Bool → α → SptTree α
+  | .leaf, [], val => .node (some val) .leaf .leaf
+  | .leaf, b :: bs, val =>
+    if b then .node none .leaf (sptInsert .leaf bs val)
+    else .node none (sptInsert .leaf bs val) .leaf
+  | .node _ l r, [], val => .node (some val) l r
+  | .node v l r, b :: bs, val =>
+    if b then .node v l (sptInsert r bs val)
+    else .node v (sptInsert l bs val) r
+
+theorem sptLookup_insert_same {α : Type} (t : SptTree α) (k : List Bool) (val : α) :
+    sptLookup (sptInsert t k val) k = some val := by
+  induction k generalizing t with
+  | nil => cases t <;> rfl
+  | cons b bs ih => cases t <;> cases b <;> simp [sptInsert, sptLookup, ih]
+
 /-! ============================================================================
     LAYER II: DECLARATIVE COROLLARIES (≤ 3 LINES) & `MetaGateSpec` BUNDLES
     ============================================================================ -/
@@ -315,5 +355,13 @@ theorem riscv_div_by_zero_spec (x : UInt64) : riscvDivU64Spec x 0 = 0xffffffffff
 theorem zisk_csr_atomic_step_budget (boot csrCount bodySteps boundK : Nat) (h : csrCount + bodySteps ≤ boundK) :
     ({ scale := 1, offset := boot } : AffineStepBudget).eval (csrCount + bodySteps) ≤ boot + boundK :=
   bootstrap_shift_step_budget_sound boot (csrCount + bodySteps) boundK h
+
+theorem pass_chain_two_passes_eval (p1 p2 : AffineStepBudget) (steps : Nat) :
+    (evalPassChainBudget [p1, p2]).eval steps = p1.eval (p2.eval steps) := by
+  simp [evalPassChainBudget, composeAffineBudget, AffineStepBudget.eval, Nat.mul_add, Nat.mul_assoc, Nat.add_assoc]
+
+theorem spt_rom_fetch_deterministic {α : Type} (rom : SptTree α) (pcBits : List Bool) (instr : α) :
+    sptLookup (sptInsert rom pcBits instr) pcBits = some instr :=
+  sptLookup_insert_same rom pcBits instr
 
 end LeanNative.Spec

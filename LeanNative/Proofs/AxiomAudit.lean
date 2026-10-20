@@ -148,6 +148,10 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.evalLoopStepBudget_monotone
   , ``LeanNative.Spec.riscv_div_by_zero_spec
   , ``LeanNative.Spec.zisk_csr_atomic_step_budget
+  , ``LeanNative.Spec.evalPassChainBudget_cons
+  , ``LeanNative.Spec.sptLookup_insert_same
+  , ``LeanNative.Spec.pass_chain_two_passes_eval
+  , ``LeanNative.Spec.spt_rom_fetch_deterministic
   , ``LeanNative.ResearchGovernor.bayesian_effective_effort_pos
   , ``LeanNative.ResearchGovernor.bayesian_falsified_branch_score_zero
   , ``LeanNative.ResearchGovernor.bayesian_zero_impact_score_zero

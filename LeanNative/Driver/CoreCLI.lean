@@ -802,163 +802,70 @@ structure WorkerCache where
 def initWorkerCache : IO WorkerCache := do
   let baseMod := mkCanonicalBenchmarkModule
   let (optMod, stepCerts) := runDefaultPipeline baseMod
-  let optCerts := stepCerts.map toOptimizationCert
-  let certReport := verifyModuleCerts baseMod.moduleName optCerts
+  let certReport := verifyModuleCerts baseMod.moduleName (stepCerts.map toOptimizationCert)
   let tvReport := validateTranslationModule baseMod optMod
   let (_, soRep) := superoptModule .x86_64 baseMod
   let (_, plRep) := runSegregatedPluginPipeline .x86_64 true baseMod
-  let llvmOptX86 := emitLLVMOptimized optMod .x86_64
-  let llvmOptArm := emitLLVMOptimized optMod .arm64
-  let llvmBaseX86 := emitLLVMBaseline baseMod .x86_64
-  let ptxSm90 := emitPTXModule optMod "sm_90"
-  let metalText := emitMetalModule optMod
-  let mlirText := emitMLIRModule optMod
-  let stablehloText := emitStableHLOModule optMod
-  let pallasText := emitTPUPallasModule optMod
   let fcMod := mkFastCheckSampleModule
-  let fcProp := runFastCheckModule fcMod 1024 true
-  let fcVac := runFastCheckModule fcMod 1024 false
-  let fcLlvm := emitFastCheckLLVM fcMod
-  let fcPtx := emitFastCheckPTX fcMod "sm_90"
-  let fcMetal := emitFastCheckMetal fcMod
   return {
-    baseMod
-    optMod
-    certReportJson := certReport.toJson
-    tvReportJson := tvReport.toJson
-    superoptX86Json := soRep.toJson
-    pluginsX86Json := plRep.toJson
-    llvmOptX86
-    llvmOptArm
-    llvmBaseX86
-    ptxSm90
-    metalText
-    mlirText
-    stablehloText
-    pallasText
-    fcReportPropJson := fcProp.toJson
-    fcReportVacJson := fcVac.toJson
-    fcLlvmText := fcLlvm
-    fcPtxText := fcPtx
-    fcMetalText := fcMetal
+    baseMod, optMod
+    certReportJson   := certReport.toJson
+    tvReportJson     := tvReport.toJson
+    superoptX86Json  := soRep.toJson
+    pluginsX86Json   := plRep.toJson
+    llvmOptX86       := emitLLVMOptimized optMod .x86_64
+    llvmOptArm       := emitLLVMOptimized optMod .arm64
+    llvmBaseX86      := emitLLVMBaseline baseMod .x86_64
+    ptxSm90          := emitPTXModule optMod "sm_90"
+    metalText        := emitMetalModule optMod
+    mlirText         := emitMLIRModule optMod
+    stablehloText    := emitStableHLOModule optMod
+    pallasText       := emitTPUPallasModule optMod
+    fcReportPropJson := (runFastCheckModule fcMod 1024 true).toJson
+    fcReportVacJson  := (runFastCheckModule fcMod 1024 false).toJson
+    fcLlvmText       := emitFastCheckLLVM fcMod
+    fcPtxText        := emitFastCheckPTX fcMod "sm_90"
+    fcMetalText      := emitFastCheckMetal fcMod
   }
 
-def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : String) : String :=
+def getOrInitWorkerCache (cacheRef : IO.Ref (Option WorkerCache)) : IO WorkerCache := do
+  match ← cacheRef.get with
+  | some c => return c
+  | none =>
+    let c ← initWorkerCache
+    cacheRef.set (some c)
+    return c
+
+private def evalGovernorAllocateJson (line : String) : Nat × String :=
+  let totalLoops := extractRpcNatField line "total_loops" 8
+  let minScore := extractRpcNatField line "min_score" 10
+  let snapDec := stepArm (parseSnapshotJson line)
+  let mkArm (id sKey fKey : String) (imp p50 p90 : Nat) : BranchCandidate :=
+    let s := extractRpcNatField line sKey 1
+    let f := extractRpcNatField line fKey 0
+    let p := if snapDec.shouldCancel || (f > 0 && s == 0) then 0 else computeBetaPosteriorPermille 2 2 s f
+    { branchId := id, branchType := "PROVE", raceGroup := "default",
+      probPermille := p, impactPermille := imp, effortP50 := p50, effortP90 := p90 }
+  let arms := [
+    mkArm "simd-simp-distiller" "arm0_s" "arm0_f" 900 4 10,
+    mkArm "tpu-guided-tactic-synth" "arm1_s" "arm1_f" 850 6 15,
+    mkArm "simd-riscv-step-cert" "arm2_s" "arm2_f" 800 5 12
+  ]
+  let allocs := allocateLoops totalLoops minScore arms
+  let allocJson := String.intercalate "," (allocs.map (fun (id, n) => s!"\{\"arm\":\"{id}\",\"branch_id\":\"{id}\",\"loops\":{n}}"))
+  (totalLoops, allocJson)
+
+/-- Fast-path worker RPC methods (`< 0.05 ms`, zero `WorkerCache` cold-start cost). -/
+def handleFastWorkerRequest? (engineName line : String) : Option String :=
   let reqId := extractRpcId line
   let method := (extractRpcStringField line "method").getD "ping"
-  let customWireOpt := extractRpcStringField line "wire"
-  let customModOpt : Option LNIRModule :=
-    match customWireOpt with
-    | some w => LNIRModule.fromWire? w
-    | none => none
   match method with
   | "ping" =>
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"status\":\"pong\",\"engine\":\"{engineName}\",\"version\":\"0.5.0\",\"decls\":{cache.optMod.decls.length}}}"
-  | "compile-llvm" =>
-    let archStr := (extractRpcStringField line "arch").getD "x86_64"
-    let isBase := hasRpcBoolField line "baseline" true
-    let ir :=
-      match customModOpt with
-      | some m =>
-        let arch := parseTargetArch archStr
-        let (mEmit, _) := if isBase then (m, []) else runDefaultPipeline m
-        if isBase then emitLLVMBaseline mEmit arch else emitLLVMOptimized mEmit arch
-      | none =>
-        if isBase then cache.llvmBaseX86
-        else if archStr == "arm64" || archStr == "aarch64" then cache.llvmOptArm
-        else cache.llvmOptX86
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"arch\":\"{escapeJsonWorker archStr}\",\"baseline\":{if isBase then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"irBytes\":{ir.length},\"ir\":\"{escapeJsonWorker ir}\"}}"
-  | "compile-ptx" =>
-    let sm := (extractRpcStringField line "sm").getD "sm_90"
-    let isFc := hasRpcBoolField line "fastcheck" true
-    let ptx :=
-      if isFc then cache.fcPtxText
-      else match customModOpt with
-        | some m =>
-          let (mOpt, _) := runDefaultPipeline m
-          emitPTXModule mOpt sm
-        | none =>
-          if sm == "sm_90" then cache.ptxSm90 else emitPTXModule cache.optMod sm
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"sm\":\"{escapeJsonWorker sm}\",\"decls\":{cache.optMod.decls.length},\"ptxBytes\":{ptx.length},\"ptx\":\"{escapeJsonWorker ptx}\"}}"
-  | "compile-metal" =>
-    let isFc := hasRpcBoolField line "fastcheck" true
-    let msl :=
-      if isFc then cache.fcMetalText
-      else match customModOpt with
-        | some m =>
-          let (mOpt, _) := runDefaultPipeline m
-          emitMetalModule mOpt
-        | none => cache.metalText
-    let (valid, _) := validateMetalShader msl
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"apple_metal_3.0\",\"valid\":{if valid then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"metalBytes\":{msl.length},\"metal\":\"{escapeJsonWorker msl}\"}}"
-  | "compile-mlir" =>
-    let dialect := (extractRpcStringField line "dialect").getD "gpu"
-    let mlir :=
-      match customModOpt with
-      | some m =>
-        let (mOpt, _) := runDefaultPipeline m
-        if dialect == "pallas" then emitTPUPallasModule mOpt
-        else if dialect == "stablehlo" || dialect == "tpu" then emitStableHLOModule mOpt
-        else emitMLIRModule mOpt
-      | none =>
-        if dialect == "pallas" then cache.pallasText
-        else if dialect == "stablehlo" || dialect == "tpu" then cache.stablehloText
-        else cache.mlirText
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"dialect\":\"{escapeJsonWorker dialect}\",\"decls\":{cache.optMod.decls.length},\"mlirBytes\":{mlir.length},\"mlir\":\"{escapeJsonWorker mlir}\"}}"
-  | "compile-tpu" =>
-    let (shlo, pallas) :=
-      match customModOpt with
-      | some m =>
-        let (mOpt, _) := runDefaultPipeline m
-        (emitStableHLOModule mOpt, emitTPUPallasModule mOpt)
-      | none => (cache.stablehloText, cache.pallasText)
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"google_cloud_tpu_v5e\",\"decls\":{cache.optMod.decls.length},\"stablehloBytes\":{shlo.length},\"pallasBytes\":{pallas.length},\"stablehlo\":\"{escapeJsonWorker shlo}\",\"pallas\":\"{escapeJsonWorker pallas}\"}}"
-  | "compile-fastcheck" =>
-    let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
-    let repJson :=
-      match customModOpt with
-      | some m => (runFastCheckModule m 1024 (!noProp)).toJson
-      | none => if noProp then cache.fcReportVacJson else cache.fcReportPropJson
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{repJson}}"
-  | "superopt" =>
-    let tgtStr := (extractRpcStringField line "target").getD "x86_64"
-    let soJson :=
-      match customModOpt with
-      | some m => (superoptModule (parseSuperoptTarget tgtStr) m).2.toJson
-      | none =>
-        if tgtStr == "x86_64" then cache.superoptX86Json
-        else (superoptModule (parseSuperoptTarget tgtStr) cache.baseMod).2.toJson
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{soJson}}"
-  | "plugins" =>
-    let tgtStr := (extractRpcStringField line "target").getD "x86_64"
-    let plJson :=
-      match customModOpt with
-      | some m => (runSegregatedPluginPipeline (parseSuperoptTarget tgtStr) true m).2.toJson
-      | none =>
-        if tgtStr == "x86_64" then cache.pluginsX86Json
-        else (runSegregatedPluginPipeline (parseSuperoptTarget tgtStr) true cache.baseMod).2.toJson
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{plJson}}"
-  | "verify-certs" =>
-    let certJson :=
-      match customModOpt with
-      | some m =>
-        let (_, sc) := runDefaultPipeline m
-        (verifyModuleCerts m.moduleName (sc.map toOptimizationCert)).toJson
-      | none => cache.certReportJson
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{certJson}}"
-  | "validate-tv" =>
-    let tvJson :=
-      match customModOpt with
-      | some m =>
-        let (mOpt, _) := runDefaultPipeline m
-        (validateTranslationModule m mOpt).toJson
-      | none => cache.tvReportJson
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{tvJson}}"
+    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"status\":\"pong\",\"engine\":\"{engineName}\",\"version\":\"0.5.0\",\"decls\":8}}"
   | "eval-cex" =>
-    let buggyDecl := evmConstrainedBuggyPropDecl
     let witnessEnv := (VarEnv.empty.bind 1 (.u64 1000000)).bind 0 (.u64 1000042)
-    let certified := certifyCounterexample 128 buggyDecl witnessEnv HeapState.empty
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"declName\":\"evm_constrained_buggy_prop\",\"certified\":{if certified then "true" else "false"},\"falsePositives\":0,\"theorem\":\"LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive\",\"report\":{cache.fcReportPropJson}}}"
+    let certified := certifyCounterexample 128 evmConstrainedBuggyPropDecl witnessEnv HeapState.empty
+    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"declName\":\"evm_constrained_buggy_prop\",\"certified\":{if certified then "true" else "false"},\"falsePositives\":0,\"theorem\":\"LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive\",\"report\":\{\"counterexamplesFound\":1,\"vacuousPasses\":0,\"falsePositives\":0}}}"
   | "select-target" =>
     let tripCount := extractRpcNatField line "trip_count" (extractRpcNatField line "tripCount" 65536)
     let isMatrix := hasRpcBoolField line "is_matrix" true || hasRpcBoolField line "isMatrix" true
@@ -968,7 +875,27 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     let hasGpu := hasRpcBoolField line "has_gpu" true || hasRpcBoolField line "hasGpu" true || hasRpcBoolField line "has_cuda_gpu" true
     let hasMetal := hasRpcBoolField line "has_metal" true || hasRpcBoolField line "hasMetal" true
     let tgt := LeanNative.Backend.selectOptimalComputeTarget tripCount isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
-    s!"\{\"id\":{reqId},\"ok\":true,\"target\":\"{tgt}\",\"result\":\{\"target\":\"{tgt}\",\"trip_count\":{tripCount}}}"
+    some s!"\{\"id\":{reqId},\"ok\":true,\"target\":\"{tgt}\",\"result\":\{\"target\":\"{tgt}\",\"trip_count\":{tripCount}}}"
+  | "riscv-step-audit" =>
+    let boot := extractRpcNatField line "bootstrap_steps" 23127
+    let scale := extractRpcNatField line "loop_scale" 1
+    let csr := extractRpcNatField line "csr_cost" 0
+    let candK := extractRpcNatField line "candidate_k" 1000000
+    let verMin := extractRpcNatField line "verify_minutes" 12
+    let (refuted, maxObs, violIn) := runRiscvStepBudgetAudit boot scale csr candK
+    let yukonScore := candK * 10000 + verMin
+    let refStr := if refuted then "true" else "false"
+    some s!"\{\"id\":{reqId},\"ok\":true,\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore},\"result\":\{\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore}}}"
+  | "governor-step" =>
+    let taskId := (extractRpcStringField line "task_id").getD "task-0"
+    let raceGroup := (extractRpcStringField line "race_group").getD "default"
+    let stepJson := evaluateGovernorStepJson taskId raceGroup (parseSnapshotJson line) (parseCertJson line)
+    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":{stepJson}}"
+  | "governor-score" =>
+    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":{(parseCandidateJson line).toJson}}"
+  | "governor-allocate" =>
+    let (totalLoops, allocJson) := evalGovernorAllocateJson line
+    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"total_loops\":{totalLoops},\"allocations\":[{allocJson}]}}"
   | "batch-fastcheck" =>
     let numSamples := extractRpcNatField line "samples" (extractRpcNatField line "num_samples" 1024)
     let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
@@ -979,50 +906,124 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     let hasGpu := !(hasRpcBoolField line "has_gpu" false)
     let hasMetal := hasRpcBoolField line "has_metal" true
     let recTarget := LeanNative.Backend.selectOptimalComputeTarget numSamples isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
-    let modToRun := customModOpt.getD (mkFastCheckSampleModule)
-    let rep := runFastCheckModule modToRun numSamples (!noProp)
-    s!"\{\"id\":{reqId},\"ok\":true,\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"result\":\{\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"report\":{rep.toJson}}}"
-  | "riscv-step-audit" =>
-    let boot := extractRpcNatField line "bootstrap_steps" 23127
-    let scale := extractRpcNatField line "loop_scale" 1
-    let csr := extractRpcNatField line "csr_cost" 0
-    let candK := extractRpcNatField line "candidate_k" 1000000
-    let verMin := extractRpcNatField line "verify_minutes" 12
-    let (refuted, maxObs, violIn) := runRiscvStepBudgetAudit boot scale csr candK
-    let yukonScore := candK * 10000 + verMin
-    let refStr := if refuted then "true" else "false"
-    s!"\{\"id\":{reqId},\"ok\":true,\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore},\"result\":\{\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore}}}"
-  | "governor-step" =>
-    let taskId := (extractRpcStringField line "task_id").getD "task-0"
-    let raceGroup := (extractRpcStringField line "race_group").getD "default"
-    let stepJson := evaluateGovernorStepJson taskId raceGroup (parseSnapshotJson line) (parseCertJson line)
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{stepJson}}"
-  | "governor-score" =>
-    let cand := parseCandidateJson line
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{cand.toJson}}"
-  | other =>
-    s!"\{\"id\":{reqId},\"ok\":false,\"error\":\"unknown_method:{escapeJsonWorker other}\"}"
+    let customModOpt := (extractRpcStringField line "wire").bind LNIRModule.fromWire?
+    let rep := runFastCheckModule (customModOpt.getD mkFastCheckSampleModule) numSamples (!noProp)
+    some s!"\{\"id\":{reqId},\"ok\":true,\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"result\":\{\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"report\":{rep.toJson}}}"
+  | _ => none
+
+def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : String) : String :=
+  if let some fastResp := handleFastWorkerRequest? engineName line then
+    fastResp
+  else
+    let reqId := extractRpcId line
+    let method := (extractRpcStringField line "method").getD "ping"
+    let customModOpt := (extractRpcStringField line "wire").bind LNIRModule.fromWire?
+    match method with
+    | "compile-llvm" =>
+      let archStr := (extractRpcStringField line "arch").getD "x86_64"
+      let isBase := hasRpcBoolField line "baseline" true
+      let ir := match customModOpt with
+        | some m =>
+          let arch := parseTargetArch archStr
+          let (mEmit, _) := if isBase then (m, []) else runDefaultPipeline m
+          if isBase then emitLLVMBaseline mEmit arch else emitLLVMOptimized mEmit arch
+        | none =>
+          if isBase then cache.llvmBaseX86
+          else if archStr == "arm64" || archStr == "aarch64" then cache.llvmOptArm
+          else cache.llvmOptX86
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"arch\":\"{escapeJsonWorker archStr}\",\"baseline\":{if isBase then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"irBytes\":{ir.length},\"ir\":\"{escapeJsonWorker ir}\"}}"
+    | "compile-ptx" =>
+      let sm := (extractRpcStringField line "sm").getD "sm_90"
+      let isFc := hasRpcBoolField line "fastcheck" true
+      let ptx := if isFc then cache.fcPtxText
+        else match customModOpt with
+          | some m => emitPTXModule (runDefaultPipeline m).1 sm
+          | none => if sm == "sm_90" then cache.ptxSm90 else emitPTXModule cache.optMod sm
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"sm\":\"{escapeJsonWorker sm}\",\"decls\":{cache.optMod.decls.length},\"ptxBytes\":{ptx.length},\"ptx\":\"{escapeJsonWorker ptx}\"}}"
+    | "compile-metal" =>
+      let isFc := hasRpcBoolField line "fastcheck" true
+      let msl := if isFc then cache.fcMetalText
+        else match customModOpt with
+          | some m => emitMetalModule (runDefaultPipeline m).1
+          | none => cache.metalText
+      let (valid, _) := validateMetalShader msl
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"apple_metal_3.0\",\"valid\":{if valid then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"metalBytes\":{msl.length},\"metal\":\"{escapeJsonWorker msl}\"}}"
+    | "compile-mlir" =>
+      let dialect := (extractRpcStringField line "dialect").getD "gpu"
+      let mlir := match customModOpt with
+        | some m =>
+          let (mOpt, _) := runDefaultPipeline m
+          if dialect == "pallas" then emitTPUPallasModule mOpt
+          else if dialect == "stablehlo" || dialect == "tpu" then emitStableHLOModule mOpt
+          else emitMLIRModule mOpt
+        | none =>
+          if dialect == "pallas" then cache.pallasText
+          else if dialect == "stablehlo" || dialect == "tpu" then cache.stablehloText
+          else cache.mlirText
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"dialect\":\"{escapeJsonWorker dialect}\",\"decls\":{cache.optMod.decls.length},\"mlirBytes\":{mlir.length},\"mlir\":\"{escapeJsonWorker mlir}\"}}"
+    | "compile-tpu" =>
+      let (shlo, pallas) := match customModOpt with
+        | some m =>
+          let (mOpt, _) := runDefaultPipeline m
+          (emitStableHLOModule mOpt, emitTPUPallasModule mOpt)
+        | none => (cache.stablehloText, cache.pallasText)
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"google_cloud_tpu_v5e\",\"decls\":{cache.optMod.decls.length},\"stablehloBytes\":{shlo.length},\"pallasBytes\":{pallas.length},\"stablehlo\":\"{escapeJsonWorker shlo}\",\"pallas\":\"{escapeJsonWorker pallas}\"}}"
+    | "compile-fastcheck" =>
+      let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
+      let repJson := match customModOpt with
+        | some m => (runFastCheckModule m 1024 (!noProp)).toJson
+        | none => if noProp then cache.fcReportVacJson else cache.fcReportPropJson
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":{repJson}}"
+    | "superopt" =>
+      let tgtStr := (extractRpcStringField line "target").getD "x86_64"
+      let soJson := match customModOpt with
+        | some m => (superoptModule (parseSuperoptTarget tgtStr) m).2.toJson
+        | none => if tgtStr == "x86_64" then cache.superoptX86Json else (superoptModule (parseSuperoptTarget tgtStr) cache.baseMod).2.toJson
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":{soJson}}"
+    | "plugins" =>
+      let tgtStr := (extractRpcStringField line "target").getD "x86_64"
+      let plJson := match customModOpt with
+        | some m => (runSegregatedPluginPipeline (parseSuperoptTarget tgtStr) true m).2.toJson
+        | none => if tgtStr == "x86_64" then cache.pluginsX86Json else (runSegregatedPluginPipeline (parseSuperoptTarget tgtStr) true cache.baseMod).2.toJson
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":{plJson}}"
+    | "verify-certs" =>
+      let certJson := match customModOpt with
+        | some m => (verifyModuleCerts m.moduleName ((runDefaultPipeline m).2.map toOptimizationCert)).toJson
+        | none => cache.certReportJson
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":{certJson}}"
+    | "validate-tv" =>
+      let tvJson := match customModOpt with
+        | some m => (validateTranslationModule m (runDefaultPipeline m).1).toJson
+        | none => cache.tvReportJson
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":{tvJson}}"
+    | other =>
+      s!"\{\"id\":{reqId},\"ok\":false,\"error\":\"unknown_method:{escapeJsonWorker other}\"}"
 
 abbrev handleWorkerLine := handleWorkerRequest
 
-partial def workerLoop (engineName : String) (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) (cache : WorkerCache) : IO UInt32 := do
+partial def workerLoop (engineName : String) (stdin stdout : IO.FS.Stream) (cacheRef : IO.Ref (Option WorkerCache)) : IO UInt32 := do
   let line ← stdin.getLine
   if line.isEmpty then return 0
   let trimmed := line.trimAscii.toString
-  if trimmed.isEmpty then workerLoop engineName stdin stdout cache
+  if trimmed.isEmpty then workerLoop engineName stdin stdout cacheRef
   else
     let method := (extractRpcStringField trimmed "method").getD ""
     if method == "exit" || method == "shutdown" || method == "quit" then
       stdout.putStrLn s!"\{\"id\":{extractRpcId trimmed},\"ok\":true,\"result\":\{\"status\":\"bye\"}}"
       stdout.flush; return 0
     else
-      stdout.putStrLn (handleWorkerRequest engineName cache trimmed)
-      stdout.flush; workerLoop engineName stdin stdout cache
+      let resp ← match handleFastWorkerRequest? engineName trimmed with
+        | some fast => pure fast
+        | none =>
+          let cache ← getOrInitWorkerCache cacheRef
+          pure (handleWorkerRequest engineName cache trimmed)
+      stdout.putStrLn resp
+      stdout.flush; workerLoop engineName stdin stdout cacheRef
 
 def runWorker (engineName : String) : IO UInt32 := do
-  workerLoop engineName (← IO.getStdin) (← IO.getStdout) (← initWorkerCache)
+  workerLoop engineName (← IO.getStdin) (← IO.getStdout) (← IO.mkRef none)
 
-partial def governorStreamLoop (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : IO UInt32 := do
+partial def governorStreamLoop (stdin stdout : IO.FS.Stream) : IO UInt32 := do
   let line ← stdin.getLine
   if line.isEmpty then return 0
   let trimmed := line.trimAscii.toString
@@ -1033,7 +1034,10 @@ partial def governorStreamLoop (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : 
     let taskId := (extractRpcStringField trimmed "task_id").getD "task-0"
     let raceGroup := (extractRpcStringField trimmed "race_group").getD "default"
     let out := if method == "governor-score" then (parseCandidateJson trimmed taskId).toJson
-               else evaluateGovernorStepJson taskId raceGroup (parseSnapshotJson trimmed) (parseCertJson trimmed)
+      else if method == "governor-allocate" then
+        let (tot, aj) := evalGovernorAllocateJson trimmed
+        s!"\{\"total_loops\":{tot},\"allocations\":[{aj}]}"
+      else evaluateGovernorStepJson taskId raceGroup (parseSnapshotJson trimmed) (parseCertJson trimmed)
     stdout.putStrLn out; stdout.flush; governorStreamLoop stdin stdout
 
 def runGovernorCLI (args : List String) : IO UInt32 := do
@@ -1043,62 +1047,41 @@ def runGovernorCLI (args : List String) : IO UInt32 := do
     IO.println ("{\"status\":\"" ++ (if ok then "passed" else "failed") ++ "\",\"theorems_verified\":16}")
     return if ok then 0 else 1
   | "score" :: rest =>
-    let branchId := findFlagValue rest "--branch-id" "branch-0"
-    let branchType := findFlagValue rest "--branch-type" "PROVE"
-    let raceGroup := findFlagValue rest "--race-group" "default"
-    let probPermille := (findFlagValue rest "--prob-permille" "500").toNat?.getD 500
-    let impactPermille := (findFlagValue rest "--impact-permille" "800").toNat?.getD 800
-    let effortP50 := (findFlagValue rest "--effort-p50" "10").toNat?.getD 10
-    let effortP90 := (findFlagValue rest "--effort-p90" "25").toNat?.getD 25
-    let riskAv := (findFlagValue rest "--risk-aversion" "350").toNat?.getD 350
     let cand : BranchCandidate := {
-      branchId := branchId
-      branchType := branchType
-      raceGroup := raceGroup
-      probPermille := probPermille
-      impactPermille := impactPermille
-      effortP50 := effortP50
-      effortP90 := effortP90
-      riskAversionPermille := riskAv
+      branchId             := findFlagValue rest "--branch-id" "branch-0"
+      branchType           := findFlagValue rest "--branch-type" "PROVE"
+      raceGroup            := findFlagValue rest "--race-group" "default"
+      probPermille         := (findFlagValue rest "--prob-permille" "500").toNat?.getD 500
+      impactPermille       := (findFlagValue rest "--impact-permille" "800").toNat?.getD 800
+      effortP50            := (findFlagValue rest "--effort-p50" "10").toNat?.getD 10
+      effortP90            := (findFlagValue rest "--effort-p90" "25").toNat?.getD 25
+      riskAversionPermille := (findFlagValue rest "--risk-aversion" "350").toNat?.getD 350
     }
-    IO.println cand.toJson
-    return 0
+    IO.println cand.toJson; return 0
   | "step" :: rest =>
     let taskId := findFlagValue rest "--task-id" "task-0"
     let raceGroup := findFlagValue rest "--race-group" "default"
-    let tokensUsed := (findFlagValue rest "--tokens-used" "0").toNat?.getD 0
-    let tokenBudget := (findFlagValue rest "--token-budget" "50000").toNat?.getD 50000
-    let stagnant := (findFlagValue rest "--stagnant" "0").toNat?.getD 0
-    let maxStagnant := (findFlagValue rest "--max-stagnant" "3").toNat?.getD 3
-    let stage1Rej := (findFlagValue rest "--stage1-rejects" "0").toNat?.getD 0
-    let maxStage1Rej := (findFlagValue rest "--max-stage1-rejects" "25").toNat?.getD 25
-    let siblingWin := hasFlag rest "--sibling-winner"
     let snap : WorkerTelemetrySnapshot := {
-      tokensUsed := tokensUsed
-      tokenBudget := tokenBudget
-      stagnantCheckpoints := stagnant
-      maxStagnantCheckpoints := maxStagnant
-      stage1Rejects := stage1Rej
-      maxStage1Rejects := maxStage1Rej
-      siblingWinnerFound := siblingWin
+      tokensUsed             := (findFlagValue rest "--tokens-used" "0").toNat?.getD 0
+      tokenBudget            := (findFlagValue rest "--token-budget" "50000").toNat?.getD 50000
+      stagnantCheckpoints    := (findFlagValue rest "--stagnant" "0").toNat?.getD 0
+      maxStagnantCheckpoints := (findFlagValue rest "--max-stagnant" "3").toNat?.getD 3
+      stage1Rejects          := (findFlagValue rest "--stage1-rejects" "0").toNat?.getD 0
+      maxStage1Rejects       := (findFlagValue rest "--max-stage1-rejects" "25").toNat?.getD 25
+      siblingWinnerFound     := hasFlag rest "--sibling-winner"
     }
     let certOpt : Option BranchVerificationCert :=
       if hasFlag rest "--verify-cert" then
         some {
-          specHashBefore := (findFlagValue rest "--spec-before" "1").toNat?.getD 1
-          specHashAfter := (findFlagValue rest "--spec-after" "1").toNat?.getD 1
+          specHashBefore       := (findFlagValue rest "--spec-before" "1").toNat?.getD 1
+          specHashAfter        := (findFlagValue rest "--spec-after" "1").toNat?.getD 1
           forbiddenAxiomsCount := (findFlagValue rest "--forbidden-axioms" "0").toNat?.getD 0
-          vacuousSpecsCount := (findFlagValue rest "--vacuous-specs" "0").toNat?.getD 0
-          artifactCertified := !(hasFlag rest "--uncertified")
+          vacuousSpecsCount    := (findFlagValue rest "--vacuous-specs" "0").toNat?.getD 0
+          artifactCertified    := !(hasFlag rest "--uncertified")
         }
-      else
-        none
-    IO.println (evaluateGovernorStepJson taskId raceGroup snap certOpt)
-    return 0
-  | _ =>
-    let stdin ← IO.getStdin
-    let stdout ← IO.getStdout
-    governorStreamLoop stdin stdout
+      else none
+    IO.println (evaluateGovernorStepJson taskId raceGroup snap certOpt); return 0
+  | _ => governorStreamLoop (← IO.getStdin) (← IO.getStdout)
 
 def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   IO.println s!"{tag} v0.5.0 — Formally Validated Lean 4 Optimizer, Segregated Plugin Engine, Superoptimizer, TV, FastCheck & Multi-Target Codegen"

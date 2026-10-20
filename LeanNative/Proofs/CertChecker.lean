@@ -97,7 +97,9 @@ def verifiedTheoremRegistry : List String :=
     "matrix_contraction_prefers_tpu_mxu", "federated_node_effective_cost_monotone_in_queue",
     "composeAffineBudget_eval", "affine_step_budget_monotone",
     "bootstrap_shift_step_budget_sound", "empirical_high_water_refutes_loose_bound",
-    "evalLoopStepBudget_monotone", "riscv_div_by_zero_spec", "zisk_csr_atomic_step_budget"
+    "evalLoopStepBudget_monotone", "riscv_div_by_zero_spec", "zisk_csr_atomic_step_budget",
+    "evalPassChainBudget_cons", "sptLookup_insert_same", "pass_chain_two_passes_eval",
+    "spt_rom_fetch_deterministic"
   ]
   let gov := [
     "bayesian_effective_effort_pos", "bayesian_falsified_branch_score_zero",
