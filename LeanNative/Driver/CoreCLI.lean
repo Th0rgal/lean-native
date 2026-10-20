@@ -508,16 +508,7 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
 
 /-! ## Persistent Sub-Millisecond JSON-RPC Worker (`worker`) -/
 
-private def escapeJsonWorker (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonWorker := LeanNative.IR.jsonEscape
 
 private def extractRpcId (line : String) : String :=
   match line.splitOn "\"id\"" with

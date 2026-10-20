@@ -79,6 +79,8 @@ def verifiedTheoremRegistry : List String :=
   , "LeanNative.Proofs.eval_unboxTupleSROA_refines"
   , "LeanNative.Proofs.unboxTupleLetChain_refines"
   , "LeanNative.Proofs.unboxTupleLetChain1_refines"
+  , "LeanNative.Proofs.unboxTupleDeadElim_refines"
+  , "LeanNative.Proofs.LoopOptProofs.unboxTupleDeadElim_refines"
   , "LeanNative.Proofs.hoistExclusivity_sound"
   , "LeanNative.Proofs.eval_hoistExclusivity_refines"
   , "LeanNative.Proofs.hoistExclusivityPreheader_refines"
@@ -245,16 +247,7 @@ def verifyModuleCerts (moduleName : String) (certs : List OptimizationCert) : Mo
 
 /-! ## JSON Serialization -/
 
-private def escapeJsonString (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonString := LeanNative.IR.jsonEscape
 
 def OptimizationCert.toJson (c : OptimizationCert) : String :=
   "{" ++

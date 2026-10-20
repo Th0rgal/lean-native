@@ -91,7 +91,8 @@ def findLoopArrayCandidate (aliases : List VarId) : LNIRCode → Option LoopArra
     | none => findLoopArrayCandidate aliases e
   | _ => none
 
-/-- Check that none of the tracked array aliases escape via unknown function call or heap constructor in `stepBody`. -/
+/-- Check that none of the tracked array aliases escape via unknown function call, tuple packing,
+    heap constructor, or reference-count increment (`incRef`) in `stepBody`. -/
 def arrayAliasesNonEscaping (aliases : List VarId) : LNIRCode → Bool
   | .letBind dst _ (.sarrayEnsureExclusive arr _) k =>
     let aliases' := if aliases.contains arr then dst :: aliases else aliases
@@ -101,6 +102,9 @@ def arrayAliasesNonEscaping (aliases : List VarId) : LNIRCode → Bool
     else
       let aliases' := if aliases.contains arr then dst :: aliases else aliases
       arrayAliasesNonEscaping aliases' k
+  | .letBind _ _ (.mkTuple fs) k =>
+    if fs.any aliases.contains then false
+    else arrayAliasesNonEscaping aliases k
   | .letBind _ _ (.allocCtor _ os ss) k =>
     if os.any aliases.contains || ss.any aliases.contains then false
     else arrayAliasesNonEscaping aliases k
@@ -110,7 +114,8 @@ def arrayAliasesNonEscaping (aliases : List VarId) : LNIRCode → Bool
   | .letBind _ _ _ k => arrayAliasesNonEscaping aliases k
   | .rawStore _ _ val _ k =>
     if aliases.contains val then false else arrayAliasesNonEscaping aliases k
-  | .incRef _ _ k => arrayAliasesNonEscaping aliases k
+  | .incRef objVar _ k =>
+    if aliases.contains objVar then false else arrayAliasesNonEscaping aliases k
   | .decRef _ _ k => arrayAliasesNonEscaping aliases k
   | .ite _ t e => arrayAliasesNonEscaping aliases t && arrayAliasesNonEscaping aliases e
   | .seqFor _ _ _ _ _ _ body k =>

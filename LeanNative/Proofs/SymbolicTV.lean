@@ -805,16 +805,7 @@ end SymbolicTV
 
 /-! ## JSON & Human-Readable Formatting for `TVModuleReport` -/
 
-private def escapeJsonTV (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonTV := LeanNative.IR.jsonEscape
 
 def TVDeclResult.toJson (r : TVDeclResult) : String :=
   "{" ++

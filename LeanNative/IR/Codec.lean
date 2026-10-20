@@ -878,16 +878,7 @@ private def decodeDeclList (fuel : Nat) : Nat → List String → Option (List L
     let (ds, rest2) ← decodeDeclList fuel n rest1
     some (d :: ds, rest2)
 
-private def escapeJsonCodec (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonCodec := LeanNative.IR.jsonEscape
 
 private def extractJsonFieldCodec (json : String) (key : String) : Option String :=
   let pat := "\"" ++ key ++ "\":\""

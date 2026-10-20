@@ -270,140 +270,121 @@ def symExprToScalarExpr? : SymExpr → Option ScalarExpr
     some (.select c' t' e')
   | .tuple _ | .bufElem _ _ | .unit => none
 
-/-- Check if a 64-bit constant is a small power of two (`1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024`)
-    and return its base-2 shift exponent `k`. -/
+/-- Check if any 64-bit constant `d` is an exact power of two (`d != 0 && (d &&& (d - 1)) == 0`)
+    and return its base-2 shift exponent `k ∈ [0, 63]`. -/
 def powerOfTwoShift? (d : UInt64) : Option UInt64 :=
-  if d == 1 then some 0
-  else if d == 2 then some 1
-  else if d == 4 then some 2
-  else if d == 8 then some 3
-  else if d == 16 then some 4
-  else if d == 32 then some 5
-  else if d == 64 then some 6
-  else if d == 128 then some 7
-  else if d == 256 then some 8
-  else if d == 512 then some 9
-  else if d == 1024 then some 10
-  else none
+  if d == 0 || (d &&& (d - 1)) != 0 then none
+  else
+    (List.range 64).findSome? (fun k =>
+      let ku := k.toUInt64
+      if (1 : UInt64) <<< ku == d then some ku else none)
 
 /-- Deduplicate a list of `ScalarExpr` candidates while preserving order. -/
 def dedupScalarExprs (es : List ScalarExpr) : List ScalarExpr :=
   es.foldl (fun acc e => if acc.contains e then acc else acc ++ [e]) []
 
-/-- Enumerative algebraic, bitwise, shift-composition, FMA, and distributive synthesis templates
-    for a top-level `ScalarExpr`. -/
+/-- Declarative synthesis rule for the enumerative superoptimizer. -/
+structure SynthRule where
+  name  : String
+  apply : ScalarExpr → List ScalarExpr
+
+/-- Declarative table of algebraic, bitwise, shift-composition, FMA, and distributive synthesis rules. -/
+def superoptSynthRules : List SynthRule :=
+  [ { name := "const_fold_binop"
+      apply := fun
+        | .binOp op (.constU64 a) (.constU64 b) => [LeanNative.Proofs.rewriteConstFoldBinOp op a b]
+        | _ => [] }
+  , { name := "add_self_and_quad_shift"
+      apply := fun
+        | .binOp .add x y =>
+          let same := if x == y then [ScalarExpr.binOp .shl x (.constU64 1)] else []
+          let quad :=
+            match x, y with
+            | .binOp .mul x1 (.constU64 2), .binOp .mul x2 (.constU64 2)
+            | .binOp .shl x1 (.constU64 1), .binOp .shl x2 (.constU64 1) =>
+              if x1 == x2 then [ScalarExpr.binOp .shl x1 (.constU64 2)] else []
+            | _, _ => []
+          same ++ quad
+        | _ => [] }
+  , { name := "fma_contraction"
+      apply := fun
+        | .binOp .add x y =>
+          (match x with | .binOp .mul a b => [ScalarExpr.fma a b y] | _ => []) ++
+          (match y with | .binOp .mul a b => [ScalarExpr.fma a b x] | _ => [])
+        | _ => [] }
+  , { name := "distributive_factoring"
+      apply := fun
+        | .binOp .add (.binOp .mul x1 (.constU64 a)) (.binOp .mul x2 (.constU64 b)) =>
+          if x1 == x2 then
+            let mulCand := ScalarExpr.binOp .mul x1 (.constU64 (a + b))
+            [mulCand, LeanNative.Proofs.rewriteScalarPeephole mulCand]
+          else []
+        | .binOp .add (.binOp .mul x1 a) (.binOp .mul x2 b) =>
+          if x1 == x2 then
+            let mulCand := ScalarExpr.binOp .mul x1 (.binOp .add a b)
+            [mulCand, LeanNative.Proofs.rewriteScalarPeephole mulCand]
+          else []
+        | _ => [] }
+  , { name := "assoc_add_const"
+      apply := fun
+        | .binOp .add (.binOp .add inner (.constU64 c1)) (.constU64 c2)
+        | .binOp .add (.constU64 c1) (.binOp .add inner (.constU64 c2)) =>
+          let cSum := c1 + c2
+          if cSum == 0 then [inner] else [ScalarExpr.binOp .add inner (.constU64 cSum)]
+        | _ => [] }
+  , { name := "shift_composition"
+      apply := fun
+        | .binOp .shl (.binOp .shl x (.constU64 k1)) (.constU64 k2) =>
+          if k1 < 64 && k2 < 64 && (k1 + k2) < 64 then
+            if k1 + k2 == 0 then [x] else [ScalarExpr.binOp .shl x (.constU64 (k1 + k2))]
+          else []
+        | .binOp .shr (.binOp .shr x (.constU64 k1)) (.constU64 k2) =>
+          if k1 < 64 && k2 < 64 && (k1 + k2) < 64 then
+            if k1 + k2 == 0 then [x] else [ScalarExpr.binOp .shr x (.constU64 (k1 + k2))]
+          else []
+        | _ => [] }
+  , { name := "bitwise_mask_coalesce"
+      apply := fun
+        | .binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2) =>
+          let m := m1 &&& m2
+          if m == 0 then [.constU64 0] else [ScalarExpr.binOp .bitAnd x (.constU64 m)]
+        | .binOp .bitOr (.binOp .bitOr x (.constU64 m1)) (.constU64 m2) =>
+          let m := m1 ||| m2
+          if m == 0 then [x] else [ScalarExpr.binOp .bitOr x (.constU64 m)]
+        | .binOp .bitXor (.binOp .bitXor x (.constU64 m1)) (.constU64 m2) =>
+          let m := m1 ^^^ m2
+          if m == 0 then [x] else [ScalarExpr.binOp .bitXor x (.constU64 m)]
+        | _ => [] }
+  , { name := "pow2_strength_reduction"
+      apply := fun
+        | .binOp .div (.binOp .div x (.constU64 d1)) (.constU64 d2) =>
+          match powerOfTwoShift? d1, powerOfTwoShift? d2 with
+          | some k1, some k2 =>
+            if (k1 + k2) < 64 then
+              if k1 + k2 == 0 then [x] else [ScalarExpr.binOp .shr x (.constU64 (k1 + k2))]
+            else []
+          | _, _ => []
+        | .binOp .div x (.constU64 d) =>
+          match powerOfTwoShift? d with
+          | some 0 => [x]
+          | some k => [ScalarExpr.binOp .shr x (.constU64 k)]
+          | none => []
+        | .binOp .mod x (.constU64 d) =>
+          match powerOfTwoShift? d with
+          | some 0 => [.constU64 0]
+          | some _ => [ScalarExpr.binOp .bitAnd x (.constU64 (d - 1))]
+          | none => []
+        | .binOp .mul x (.constU64 d) | .binOp .mul (.constU64 d) x =>
+          match powerOfTwoShift? d with
+          | some 0 => [x]
+          | some k => [ScalarExpr.binOp .shl x (.constU64 k)]
+          | none => []
+        | _ => [] }
+  ]
+
+/-- Apply all declarative `superoptSynthRules` to a top-level `ScalarExpr`. -/
 def synthesizeTopLevelTemplates (e : ScalarExpr) : List ScalarExpr :=
-  let cands0 : List ScalarExpr :=
-    match e with
-    -- Constant folding via verified `rewriteConstFoldBinOp`
-    | .binOp op (.constU64 a) (.constU64 b) =>
-      [LeanNative.Proofs.rewriteConstFoldBinOp op a b]
-    | _ => []
-  let cands1 : List ScalarExpr :=
-    match e with
-    -- (x + x) -> x <<< 1
-    | .binOp .add x y =>
-      let sameShift := if x == y then [ScalarExpr.binOp .shl x (.constU64 1)] else []
-      -- (x * 2) + (x * 2) -> x <<< 2, or (x <<< 1) + (x <<< 1) -> x <<< 2
-      let quadShift :=
-        match x, y with
-        | .binOp .mul x1 (.constU64 2), .binOp .mul x2 (.constU64 2) =>
-          if x1 == x2 then [ScalarExpr.binOp .shl x1 (.constU64 2)] else []
-        | .binOp .shl x1 (.constU64 1), .binOp .shl x2 (.constU64 1) =>
-          if x1 == x2 then [ScalarExpr.binOp .shl x1 (.constU64 2)] else []
-        | _, _ => []
-      -- FMA contraction: (x * a) + c -> .fma x a c, and c + (x * a) -> .fma x a c
-      let fmaL :=
-        match x with
-        | .binOp .mul a b => [ScalarExpr.fma a b y]
-        | _ => []
-      let fmaR :=
-        match y with
-        | .binOp .mul a b => [ScalarExpr.fma a b x]
-        | _ => []
-      -- Distributive factoring: (x * a) + (x * b) -> x * (a + b)
-      let distFactor :=
-        match x, y with
-        | .binOp .mul x1 (.constU64 a), .binOp .mul x2 (.constU64 b) =>
-          if x1 == x2 then
-            let sumConst := a + b
-            let mulCand := ScalarExpr.binOp .mul x1 (.constU64 sumConst)
-            let peepCand := LeanNative.Proofs.rewriteScalarPeephole mulCand
-            [mulCand, peepCand]
-          else []
-        | .binOp .mul x1 a, .binOp .mul x2 b =>
-          if x1 == x2 then
-            [ScalarExpr.binOp .mul x1 (.binOp .add a b),
-             LeanNative.Proofs.rewriteScalarPeephole (ScalarExpr.binOp .mul x1 (.binOp .add a b))]
-          else []
-        | _, _ => []
-      -- Associative constant folding: (x + c1) + c2 -> x + (c1 + c2)
-      let assocAdd :=
-        match x, y with
-        | .binOp .add inner (.constU64 c1), .constU64 c2 =>
-          let cSum := c1 + c2
-          if cSum == 0 then [inner] else [ScalarExpr.binOp .add inner (.constU64 cSum)]
-        | .constU64 c1, .binOp .add inner (.constU64 c2) =>
-          let cSum := c1 + c2
-          if cSum == 0 then [inner] else [ScalarExpr.binOp .add inner (.constU64 cSum)]
-        | _, _ => []
-      sameShift ++ quadShift ++ fmaL ++ fmaR ++ distFactor ++ assocAdd
-
-    -- Shift composition: (x <<< k1) <<< k2 -> x <<< (k1 + k2) when k1 + k2 < 64
-    | .binOp .shl (.binOp .shl x (.constU64 k1)) (.constU64 k2) =>
-      if k1 < 64 && k2 < 64 && (k1 + k2) < 64 then
-        let kSum := k1 + k2
-        if kSum == 0 then [x] else [ScalarExpr.binOp .shl x (.constU64 kSum)]
-      else []
-    | .binOp .shr (.binOp .shr x (.constU64 k1)) (.constU64 k2) =>
-      if k1 < 64 && k2 < 64 && (k1 + k2) < 64 then
-        let kSum := k1 + k2
-        if kSum == 0 then [x] else [ScalarExpr.binOp .shr x (.constU64 kSum)]
-      else []
-
-    -- Bitwise mask coalescing: (x &&& m1) &&& m2 -> x &&& (m1 &&& m2)
-    | .binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2) =>
-      let m := m1 &&& m2
-      if m == 0 then [.constU64 0] else [ScalarExpr.binOp .bitAnd x (.constU64 m)]
-    | .binOp .bitOr (.binOp .bitOr x (.constU64 m1)) (.constU64 m2) =>
-      let m := m1 ||| m2
-      if m == 0 then [x] else [ScalarExpr.binOp .bitOr x (.constU64 m)]
-    | .binOp .bitXor (.binOp .bitXor x (.constU64 m1)) (.constU64 m2) =>
-      let m := m1 ^^^ m2
-      if m == 0 then [x] else [ScalarExpr.binOp .bitXor x (.constU64 m)]
-
-    -- Division by power-of-2 constants: (x / d1) / d2 -> x >>> (k1 + k2), or x / d -> x >>> k
-    | .binOp .div (.binOp .div x (.constU64 d1)) (.constU64 d2) =>
-      match powerOfTwoShift? d1, powerOfTwoShift? d2 with
-      | some k1, some k2 =>
-        if (k1 + k2) < 64 then
-          let kSum := k1 + k2
-          if kSum == 0 then [x]
-          else [ScalarExpr.binOp .shr x (.constU64 kSum)]
-        else []
-      | _, _ => []
-    | .binOp .div x (.constU64 d) =>
-      match powerOfTwoShift? d with
-      | some 0 => [x]
-      | some k => [ScalarExpr.binOp .shr x (.constU64 k)]
-      | none => []
-    | .binOp .mod x (.constU64 d) =>
-      match powerOfTwoShift? d with
-      | some 0 => [.constU64 0]
-      | some _ => [ScalarExpr.binOp .bitAnd x (.constU64 (d - 1))]
-      | none => []
-    | .binOp .mul x (.constU64 d) =>
-      match powerOfTwoShift? d with
-      | some 0 => [x]
-      | some k => [ScalarExpr.binOp .shl x (.constU64 k)]
-      | none => []
-    | .binOp .mul (.constU64 d) x =>
-      match powerOfTwoShift? d with
-      | some 0 => [x]
-      | some k => [ScalarExpr.binOp .shl x (.constU64 k)]
-      | none => []
-    | _ => []
-  cands0 ++ cands1
+  superoptSynthRules.foldl (fun acc rule => acc ++ rule.apply e) []
 
 /-- Collect all variable IDs referenced in a `ScalarExpr`. -/
 def collectScalarVars : ScalarExpr → List VarId
@@ -868,16 +849,7 @@ def superoptModuleWithProfile (p : HardwareCostProfile) (m : LNIRModule) : LNIRM
     records := allRecs
   })
 
-private def escapeJsonSO (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonSO := LeanNative.IR.jsonEscape
 
 def SuperoptRewriteRecord.toJson (r : SuperoptRewriteRecord) : String :=
   "{" ++

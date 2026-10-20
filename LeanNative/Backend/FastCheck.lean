@@ -362,9 +362,10 @@ theorem substSingleConstraint_sound (env : VarEnv) (x : VarId) (rhs : ScalarExpr
 theorem propagatePrecondition_letBind_sound (fuel : Nat) (env : VarEnv) (st : HeapState)
     (x : VarId) (ty : LNIRType) (rhs : ScalarExpr) (v : Val) (body : LNIRCode)
     (hrhs : evalScalarExpr env rhs = .ok v) :
-    evalCode (fuel + 1) env st (.letBind x ty (.scalar rhs) body) =
+    evalCode fuel env st (.letBind x ty (.scalar rhs) body) =
     evalCode fuel (env.bind x v) st body := by
-  simp only [evalCode, evalExpr, hrhs]
+  rw [evalCode]
+  simp only [evalExpr, hrhs]
 
 /-! ## 4. Precondition Satisfaction Tracking & Module FastCheck Runner -/
 
@@ -509,16 +510,7 @@ def runFastCheckModule (m : LNIRModule) (numSamples : Nat := 4096) (useConstrain
     falsePositives := 0
     declResults := results }
 
-private def escapeJsonFC (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonFC := LeanNative.IR.jsonEscape
 
 def FastCheckDeclResult.toJson (r : FastCheckDeclResult) : String :=
   "{" ++

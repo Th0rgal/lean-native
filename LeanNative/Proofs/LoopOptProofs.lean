@@ -336,24 +336,15 @@ theorem unboxTupleLetChain_refines
       (.letBind tVar tupTy (.mkTuple [v0, v1])
         (.letBind dst dstTy (.scalar (.var v0)) k)) := by
   intro fuel env st v st' hsrc
-  cases fuel with
-  | zero => exact hsrc
-  | succ fuel1 =>
-    cases fuel1 with
-    | zero =>
-      simp only [evalCode] at hsrc ⊢
+  simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
+  cases hv0 : env v0 with
+  | none => simp only [hv0] at hsrc; contradiction
+  | some val0 =>
+    cases hv1 : env v1 with
+    | none => simp only [hv0, hv1] at hsrc; contradiction
+    | some val1 =>
+      simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne] at hsrc ⊢
       exact hsrc
-    | succ fuel2 =>
-      simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
-      cases hv0 : env v0 with
-      | none => simp only [hv0] at hsrc; contradiction
-      | some val0 =>
-        cases hv1 : env v1 with
-        | none => simp only [hv0, hv1] at hsrc; contradiction
-        | some val1 =>
-          simp only [hv0, hv1] at hsrc ⊢
-          simp only [evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne, hv0] at hsrc ⊢
-          exact hsrc
 
 /-- End-to-end `CodeRefines` theorem for Tuple Unboxing / SROA on field 1 in a `letBind` chain (`unboxTupleLetChain1_refines`). -/
 theorem unboxTupleLetChain1_refines
@@ -365,24 +356,36 @@ theorem unboxTupleLetChain1_refines
       (.letBind tVar tupTy (.mkTuple [v0, v1])
         (.letBind dst dstTy (.scalar (.var v1)) k)) := by
   intro fuel env st v st' hsrc
-  cases fuel with
-  | zero => exact hsrc
-  | succ fuel1 =>
-    cases fuel1 with
-    | zero =>
-      simp only [evalCode] at hsrc ⊢
+  simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
+  cases hv0 : env v0 with
+  | none => simp only [hv0] at hsrc; contradiction
+  | some val0 =>
+    cases hv1 : env v1 with
+    | none => simp only [hv0, hv1] at hsrc; contradiction
+    | some val1 =>
+      simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne] at hsrc ⊢
       exact hsrc
-    | succ fuel2 =>
-      simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
-      cases hv0 : env v0 with
-      | none => simp only [hv0] at hsrc; contradiction
-      | some val0 =>
-        cases hv1 : env v1 with
-        | none => simp only [hv0, hv1] at hsrc; contradiction
-        | some val1 =>
-          simp only [hv0, hv1] at hsrc ⊢
-          simp only [evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne, hv1] at hsrc ⊢
-          exact hsrc
+
+/-- Full Tuple SROA Dead-Allocation Elimination (`unboxTupleDeadElim_refines`):
+    because `evalCode` recurses structurally on `LNIRCode` without `fuel = 0` truncation,
+    eliminating the intermediate `.letBind tVar tupTy (.mkTuple [v0, v1])` allocation altogether
+    when projecting field 0 and returning `dst` refines the original code. -/
+theorem unboxTupleDeadElim_refines
+    (tVar dst v0 v1 : VarId) (tupTy dstTy : LNIRType) :
+    CodeRefines
+      (.letBind tVar tupTy (.mkTuple [v0, v1])
+        (.letBind dst dstTy (.projTuple tVar 0) (.ret dst)))
+      (.letBind dst dstTy (.scalar (.var v0)) (.ret dst)) := by
+  intro fuel env st v st' hsrc
+  simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
+  cases hv0 : env v0 with
+  | none => simp only [hv0] at hsrc; contradiction
+  | some val0 =>
+    cases hv1 : env v1 with
+    | none => simp only [hv0, hv1] at hsrc; contradiction
+    | some val1 =>
+      simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self] at hsrc ⊢
+      exact hsrc
 
 theorem varEnv_bind_idem (env : VarEnv) (x : VarId) (v : Val) :
     (env.bind x v).bind x v = env.bind x v := by
@@ -406,48 +409,40 @@ theorem hoistExclusivityPreheader_refines
       (.letBind exclVar (.sarray elemTy) (.sarrayEnsureExclusive arrVar elemTy)
         (.rawStore exclVar idxVar valVar elemTy k)) := by
   intro fuel env st v st' hsrc
-  cases fuel with
-  | zero => exact hsrc
-  | succ fuel1 =>
-    cases fuel1 with
-    | zero =>
-      simp only [evalCode] at hsrc ⊢
-      exact hsrc
-    | succ fuel2 =>
-      simp only [evalCode, evalExpr] at hsrc ⊢
-      cases harr : env arrVar with
-      | none => simp only [harr] at hsrc; contradiction
-      | some aval =>
-        cases aval with
-        | sarrayId bufId =>
-          simp only [harr] at hsrc ⊢
-          cases hens : st.ensureExclusive bufId with
-          | error err => simp only [hens] at hsrc; contradiction
-          | ok st1 =>
-            simp only [hens] at hsrc ⊢
-            rcases ensureExclusive_post st st1 bufId hens with ⟨hexcl1, ⟨buf1, hfind1⟩⟩
-            have hens1 : st1.ensureExclusive bufId = .ok st1 :=
-              ensureExclusive_of_exclusive st1 bufId buf1 hfind1 hexcl1
-            simp only [VarEnv.bind_self] at hsrc ⊢
-            cases hidx : (env.bind exclVar (.sarrayId bufId)) idxVar with
-            | none => simp only [hidx] at hsrc; contradiction
-            | some ival =>
-              cases hval : (env.bind exclVar (.sarrayId bufId)) valVar with
-              | none => simp only [hidx, hval] at hsrc; contradiction
-              | some vval =>
-                cases ival with
-                | u64 idx =>
-                  cases vval with
-                  | u64 val =>
-                    simp only [hidx, hval, hens1] at hsrc ⊢
-                    cases hw : st1.writeElemExclusive bufId idx.toNat val with
-                    | error err => simp only [hw] at hsrc; contradiction
-                    | ok st2 =>
-                      simp only [hw, varEnv_bind_idem] at hsrc ⊢
-                      exact hsrc
-                  | _ => simp only [hidx, hval] at hsrc; contradiction
-                | _ => simp only [hidx, hval] at hsrc; contradiction
-        | _ => simp only [harr] at hsrc; contradiction
+  simp only [evalCode, evalExpr] at hsrc ⊢
+  cases harr : env arrVar with
+  | none => simp only [harr] at hsrc; contradiction
+  | some aval =>
+    cases aval with
+    | sarrayId bufId =>
+      simp only [harr] at hsrc ⊢
+      cases hens : st.ensureExclusive bufId with
+      | error err => simp only [hens] at hsrc; contradiction
+      | ok st1 =>
+        simp only [hens] at hsrc ⊢
+        rcases ensureExclusive_post st st1 bufId hens with ⟨hexcl1, ⟨buf1, hfind1⟩⟩
+        have hens1 : st1.ensureExclusive bufId = .ok st1 :=
+          ensureExclusive_of_exclusive st1 bufId buf1 hfind1 hexcl1
+        simp only [VarEnv.bind_self] at hsrc ⊢
+        cases hidx : (env.bind exclVar (.sarrayId bufId)) idxVar with
+        | none => simp only [hidx] at hsrc; contradiction
+        | some ival =>
+          cases hval : (env.bind exclVar (.sarrayId bufId)) valVar with
+          | none => simp only [hidx, hval] at hsrc; contradiction
+          | some vval =>
+            cases ival with
+            | u64 idx =>
+              cases vval with
+              | u64 val =>
+                simp only [hidx, hval, hens1] at hsrc ⊢
+                cases hw : st1.writeElemExclusive bufId idx.toNat val with
+                | error err => simp only [hw] at hsrc; contradiction
+                | ok st2 =>
+                  simp only [hw, varEnv_bind_idem] at hsrc ⊢
+                  exact hsrc
+              | _ => simp only [hidx, hval] at hsrc; contradiction
+            | _ => simp only [hidx, hval] at hsrc; contradiction
+    | _ => simp only [harr] at hsrc; contradiction
 
 namespace LoopOptProofs
   abbrev unboxTupleProj0_sound := @LeanNative.Proofs.unboxTupleProj0_sound
@@ -456,6 +451,7 @@ namespace LoopOptProofs
   abbrev eval_unboxTupleSROA_refines := @LeanNative.Proofs.eval_unboxTupleSROA_refines
   abbrev unboxTupleLetChain_refines := @LeanNative.Proofs.unboxTupleLetChain_refines
   abbrev unboxTupleLetChain1_refines := @LeanNative.Proofs.unboxTupleLetChain1_refines
+  abbrev unboxTupleDeadElim_refines := @LeanNative.Proofs.unboxTupleDeadElim_refines
   abbrev hoistExclusivity_sound := @LeanNative.Proofs.hoistExclusivity_sound
   abbrev eval_hoistExclusivity_refines := @LeanNative.Proofs.eval_hoistExclusivity_refines
   abbrev hoistExclusivityPreheader_refines := @LeanNative.Proofs.hoistExclusivityPreheader_refines

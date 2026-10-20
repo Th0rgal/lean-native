@@ -156,7 +156,20 @@ def emitMetalU256Library : String :=
     "}"
   ]
 
-/-- Emit a per-declaration lowered Metal kernel `lean_native_metal_decl_<name>` for a GPU-compatible `LNIRDecl`. -/
+/-- Reusable 1D Metal compute kernel generator given `(declSpec, bufferIndex)` parameters and inner assignment. -/
+def emitMetal1DKernel (fnName : String) (bufferDecls : List String) (bodyLine : String) : String :=
+  let indexedBufs := (List.range bufferDecls.length).zip bufferDecls |>.map (fun (idx, decl) =>
+    s!"    {decl} [[buffer({idx})]],")
+  String.intercalate "\n" (
+    [s!"kernel void {fnName}("] ++
+    indexedBufs ++
+    [ "    uint gid [[thread_position_in_grid]]",
+      ") {",
+      "    if ((ulong)gid < n) {",
+      s!"        {bodyLine}",
+      "    }",
+      "}" ]
+  )
 def emitMetalDeclKernel (d : LNIRDecl) : String :=
   let fnName := s!"lean_native_metal_decl_{d.name}"
   let is256 := d.retTy.is256Bit || d.params.any (fun p => p.ty.is256Bit || p.ty == .storageMap)
@@ -224,67 +237,23 @@ def emitMetalDeclKernel (d : LNIRDecl) : String :=
       "}"
     ]
   else if is256 then
-    String.intercalate "\n" [
-      s!"kernel void {fnName}(",
-      "    device const ln_u256* in_a [[buffer(0)]],",
-      "    device const ln_u256* in_b [[buffer(1)]],",
-      "    device ln_u256* out [[buffer(2)]],",
-      "    constant ulong& n [[buffer(3)]],",
-      "    uint gid [[thread_position_in_grid]]",
-      ") {",
-      "    if ((ulong)gid < n) {",
-      "        ln_u256 a = in_a[gid];",
-      "        ln_u256 b = in_b[gid];",
-      "        ln_u256 sum = ln_u256_add(a, b);",
-      "        ln_u256 diff = ln_u256_sub(sum, b);",
-      "        ln_u256 prod = ln_u256_mul_lo(diff, b);",
-      "        ln_u256 lz = ln_u256_clz(sum);",
-      "        out[gid] = ln_u256_add(prod, lz);",
-      "    }",
-      "}"
-    ]
+    emitMetal1DKernel fnName
+      ["device const ln_u256* in_a", "device const ln_u256* in_b", "device ln_u256* out", "constant ulong& n"]
+      "ln_u256 a = in_a[gid]; ln_u256 b = in_b[gid]; ln_u256 sum = ln_u256_add(a, b); ln_u256 diff = ln_u256_sub(sum, b); ln_u256 prod = ln_u256_mul_lo(diff, b); ln_u256 lz = ln_u256_clz(sum); out[gid] = ln_u256_add(prod, lz);"
   else
     match regions with
     | (_, _, _, _, .saxpy alpha) :: _ =>
-      String.intercalate "\n" [
-        s!"kernel void {fnName}(",
-        "    device const ulong* x [[buffer(0)]],",
-        "    device const ulong* y [[buffer(1)]],",
-        "    device ulong* out [[buffer(2)]],",
-        "    constant ulong& n [[buffer(3)]],",
-        "    uint gid [[thread_position_in_grid]]",
-        ") {",
-        "    if ((ulong)gid < n) {",
-        s!"        out[gid] = {alpha}UL * x[gid] + y[gid];",
-        "    }",
-        "}"
-      ]
+      emitMetal1DKernel fnName
+        ["device const ulong* x", "device const ulong* y", "device ulong* out", "constant ulong& n"]
+        s!"out[gid] = {alpha}UL * x[gid] + y[gid];"
     | (_, _, _, _, .mapScaleAdd scale bias) :: _ =>
-      String.intercalate "\n" [
-        s!"kernel void {fnName}(",
-        "    device const ulong* in0 [[buffer(0)]],",
-        "    device ulong* out [[buffer(1)]],",
-        "    constant ulong& n [[buffer(2)]],",
-        "    uint gid [[thread_position_in_grid]]",
-        ") {",
-        "    if ((ulong)gid < n) {",
-        s!"        out[gid] = in0[gid] * {scale}UL + {bias}UL;",
-        "    }",
-        "}"
-      ]
+      emitMetal1DKernel fnName
+        ["device const ulong* in0", "device ulong* out", "constant ulong& n"]
+        s!"out[gid] = in0[gid] * {scale}UL + {bias}UL;"
     | _ =>
-      String.intercalate "\n" [
-        s!"kernel void {fnName}(",
-        "    device const ulong* in0 [[buffer(0)]],",
-        "    device ulong* out [[buffer(1)]],",
-        "    constant ulong& n [[buffer(2)]],",
-        "    uint gid [[thread_position_in_grid]]",
-        ") {",
-        "    if ((ulong)gid < n) {",
-        "        out[gid] = in0[gid];",
-        "    }",
-        "}"
-      ]
+      emitMetal1DKernel fnName
+        ["device const ulong* in0", "device ulong* out", "constant ulong& n"]
+        "out[gid] = in0[gid];"
 
 /-- Emit a complete Apple Metal Shading Language (MSL 3.0) module for an `LNIRModule`. -/
 def emitMetalModule (m : LNIRModule) : String :=
@@ -295,63 +264,21 @@ def emitMetalModule (m : LNIRModule) : String :=
     "// ============================================================================"
   ]
 
-  let kMapScaleAdd := String.intercalate "\n" [
-    "kernel void lean_native_kernel_map_scale_add(",
-    "    device const ulong* in [[buffer(0)]],",
-    "    device ulong* out [[buffer(1)]],",
-    "    constant ulong& scale [[buffer(2)]],",
-    "    constant ulong& bias [[buffer(3)]],",
-    "    constant ulong& n [[buffer(4)]],",
-    "    uint gid [[thread_position_in_grid]]",
-    ") {",
-    "    if ((ulong)gid < n) {",
-    "        out[gid] = in[gid] * scale + bias;",
-    "    }",
-    "}"
-  ]
+  let kMapScaleAdd := emitMetal1DKernel "lean_native_kernel_map_scale_add"
+    ["device const ulong* in", "device ulong* out", "constant ulong& scale", "constant ulong& bias", "constant ulong& n"]
+    "out[gid] = in[gid] * scale + bias;"
 
-  let kZipAdd := String.intercalate "\n" [
-    "kernel void lean_native_kernel_zip_add(",
-    "    device const ulong* in0 [[buffer(0)]],",
-    "    device const ulong* in1 [[buffer(1)]],",
-    "    device ulong* out [[buffer(2)]],",
-    "    constant ulong& n [[buffer(3)]],",
-    "    uint gid [[thread_position_in_grid]]",
-    ") {",
-    "    if ((ulong)gid < n) {",
-    "        out[gid] = in0[gid] + in1[gid];",
-    "    }",
-    "}"
-  ]
+  let kZipAdd := emitMetal1DKernel "lean_native_kernel_zip_add"
+    ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"]
+    "out[gid] = in0[gid] + in1[gid];"
 
-  let kZipMul := String.intercalate "\n" [
-    "kernel void lean_native_kernel_zip_mul(",
-    "    device const ulong* in0 [[buffer(0)]],",
-    "    device const ulong* in1 [[buffer(1)]],",
-    "    device ulong* out [[buffer(2)]],",
-    "    constant ulong& n [[buffer(3)]],",
-    "    uint gid [[thread_position_in_grid]]",
-    ") {",
-    "    if ((ulong)gid < n) {",
-    "        out[gid] = in0[gid] * in1[gid];",
-    "    }",
-    "}"
-  ]
+  let kZipMul := emitMetal1DKernel "lean_native_kernel_zip_mul"
+    ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"]
+    "out[gid] = in0[gid] * in1[gid];"
 
-  let kSaxpy := String.intercalate "\n" [
-    "kernel void lean_native_kernel_saxpy(",
-    "    device const ulong* x [[buffer(0)]],",
-    "    device const ulong* y [[buffer(1)]],",
-    "    device ulong* out [[buffer(2)]],",
-    "    constant ulong& alpha [[buffer(3)]],",
-    "    constant ulong& n [[buffer(4)]],",
-    "    uint gid [[thread_position_in_grid]]",
-    ") {",
-    "    if ((ulong)gid < n) {",
-    "        out[gid] = alpha * x[gid] + y[gid];",
-    "    }",
-    "}"
-  ]
+  let kSaxpy := emitMetal1DKernel "lean_native_kernel_saxpy"
+    ["device const ulong* x", "device const ulong* y", "device ulong* out", "constant ulong& alpha", "constant ulong& n"]
+    "out[gid] = alpha * x[gid] + y[gid];"
 
   let kStencil1D := String.intercalate "\n" [
     "kernel void lean_native_kernel_stencil1d(",

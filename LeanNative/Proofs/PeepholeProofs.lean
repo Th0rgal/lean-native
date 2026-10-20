@@ -526,111 +526,90 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
   induction c with
   | letBind dst ty val k ih =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode, evalExpr_optimizeExpr_eq]
-      cases evalExpr env st val with
-      | error err => rfl
-      | ok pair => exact ih fuel' (env.bind dst pair.1) pair.2
+    rw [rewriteCodePeephole, evalCode, evalCode, evalExpr_optimizeExpr_eq]
+    cases evalExpr env st val with
+    | error err => rfl
+    | ok pair => exact ih fuel (env.bind dst pair.1) pair.2
   | rawStore ptrVar idxVar valVar elemTy k ih =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode]
-      cases env ptrVar with
-      | none => rfl
-      | some pval =>
-        cases env idxVar with
-        | none => cases pval <;> rfl
-        | some ival =>
-          cases env valVar with
-          | none => cases pval <;> cases ival <;> rfl
-          | some vval =>
-            cases pval <;> cases ival <;> cases vval <;> try rfl
-            all_goals
-              simp only
-              cases st.writeElemExclusive _ _ _ with
-              | error err => rfl
-              | ok st1 => exact ih fuel' env st1
+    rw [rewriteCodePeephole, evalCode, evalCode]
+    cases env ptrVar with
+    | none => rfl
+    | some pval =>
+      cases env idxVar with
+      | none => cases pval <;> rfl
+      | some ival =>
+        cases env valVar with
+        | none => cases pval <;> cases ival <;> rfl
+        | some vval =>
+          cases pval <;> cases ival <;> cases vval <;> try rfl
+          all_goals
+            simp only
+            cases st.writeElemExclusive _ _ _ with
+            | error err => rfl
+            | ok st1 => exact ih fuel env st1
   | incRef objVar count k ih =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode]
-      exact ih fuel' env st
+    rw [rewriteCodePeephole, evalCode, evalCode]
+    exact ih fuel env st
   | decRef objVar count k ih =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode]
-      exact ih fuel' env st
+    rw [rewriteCodePeephole, evalCode, evalCode]
+    exact ih fuel env st
   | ite condVar thenBranch elseBranch iht ihe =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode]
-      cases env condVar with
-      | none => rfl
-      | some cval =>
-        cases cval with
-        | bool b =>
-          cases b with
-          | true => exact iht fuel' env st
-          | false => exact ihe fuel' env st
-        | u64 n =>
-          simp only
-          by_cases hn : (n != 0) = true
-          · rw [if_pos hn, if_pos hn]; exact iht fuel' env st
-          · rw [if_neg hn, if_neg hn]; exact ihe fuel' env st
-        | u256 w =>
-          simp only
-          by_cases hw : (w != UInt256.zero) = true
-          · rw [if_pos hw, if_pos hw]; exact iht fuel' env st
-          · rw [if_neg hw, if_neg hw]; exact ihe fuel' env st
-        | _ => rfl
+    rw [rewriteCodePeephole, evalCode, evalCode]
+    cases env condVar with
+    | none => rfl
+    | some cval =>
+      cases cval with
+      | bool b =>
+        cases b with
+        | true => exact iht fuel env st
+        | false => exact ihe fuel env st
+      | u64 n =>
+        simp only
+        by_cases hn : (n != 0) = true
+        · rw [if_pos hn, if_pos hn]; exact iht fuel env st
+        · rw [if_neg hn, if_neg hn]; exact ihe fuel env st
+      | u256 w =>
+        simp only
+        by_cases hw : (w != UInt256.zero) = true
+        · rw [if_pos hw, if_pos hw]; exact iht fuel env st
+        · rw [if_neg hw, if_neg hw]; exact ihe fuel env st
+      | _ => rfl
   | seqFor idxVar loVar hiVar accVar accInit accTy stepBody k ihs ihk =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode]
-      have hstep : (fun stepEnv stepSt => evalCode fuel' stepEnv stepSt (rewriteCodePeephole stepBody)) =
-                   (fun stepEnv stepSt => evalCode fuel' stepEnv stepSt stepBody) := by
-        funext stepEnv stepSt
-        exact ihs fuel' stepEnv stepSt
-      rw [hstep]
-      cases env loVar with
-      | none => rfl
-      | some loval =>
-        cases env hiVar with
-        | none => cases loval <;> rfl
-        | some hival =>
-          cases env accInit with
-          | none => cases loval <;> cases hival <;> rfl
-          | some initVal =>
-            cases loval <;> cases hival <;> try rfl
-            simp only
-            cases evalSeqLoop _ _ idxVar accVar initVal env st (fun stepEnv stepSt => evalCode fuel' stepEnv stepSt stepBody) with
-            | error err => rfl
-            | ok pair => exact ihk fuel' (env.bind accVar pair.1) pair.2
+    rw [rewriteCodePeephole, evalCode, evalCode]
+    have hstep : (fun stepEnv stepSt => evalCode fuel stepEnv stepSt (rewriteCodePeephole stepBody)) =
+                 (fun stepEnv stepSt => evalCode fuel stepEnv stepSt stepBody) := by
+      funext stepEnv stepSt
+      exact ihs fuel stepEnv stepSt
+    rw [hstep]
+    cases env loVar with
+    | none => rfl
+    | some loval =>
+      cases env hiVar with
+      | none => cases loval <;> rfl
+      | some hival =>
+        cases env accInit with
+        | none => cases loval <;> cases hival <;> rfl
+        | some initVal =>
+          cases loval <;> cases hival <;> try rfl
+          simp only
+          cases evalSeqLoop _ _ idxVar accVar initVal env st (fun stepEnv stepSt => evalCode fuel stepEnv stepSt stepBody) with
+          | error err => rfl
+          | ok pair => exact ihk fuel (env.bind accVar pair.1) pair.2
   | parFor outVar lenVar inputs elemTy kernel k ih =>
     intro fuel env st
-    cases fuel with
-    | zero => rfl
-    | succ fuel' =>
-      simp only [rewriteCodePeephole, evalCode]
-      exact ih fuel' (env.bind outVar (.sarrayId 0)) st
+    rw [rewriteCodePeephole, evalCode, evalCode]
+    exact ih fuel (env.bind outVar (.sarrayId 0)) st
   | ret v =>
     intro fuel env st
-    cases fuel <;> rfl
+    rfl
   | unreachable =>
     intro fuel env st
-    cases fuel <;> rfl
+    rfl
 
 /-- End-to-end recursive `LNIRCode` pass refinement theorem (`rewriteCodePeephole_refines`):
     applying `rewriteCodePeephole` across an entire `LNIRCode` block refines the original code. -/

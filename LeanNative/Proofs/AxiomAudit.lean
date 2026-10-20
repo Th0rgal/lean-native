@@ -130,6 +130,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.meta_verified_contract_compose_sound
   , ``LeanNative.Spec.meta_validator_rejects_semantic_mutants
   , ``LeanNative.Spec.meta_limb256_mul_lo_homomorphism
+  , ``LeanNative.Spec.meta_unbox_tuple_full_elim_sound
+  , ``LeanNative.Proofs.unboxTupleDeadElim_refines
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
@@ -221,14 +223,7 @@ def verifiedAxiomAuditReport : AxiomAuditReport :=
     results := entries
     forbiddenAxiomsFound := [] }
 
-private def escapeJsonStr (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | other => acc.push other
-  ) ""
+private abbrev escapeJsonStr := LeanNative.IR.jsonEscape
 
 def TheoremAxiomAudit.toJson (t : TheoremAxiomAudit) : String :=
   let axs := String.intercalate "," (t.axiomsUsed.map (fun a => s!"\"{escapeJsonStr a}\""))

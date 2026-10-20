@@ -386,64 +386,63 @@ def evalSeqLoop (count : Nat) (curIdx : Nat) (idxVar accVar : VarId)
       evalSeqLoop count' (curIdx + 1) idxVar accVar nextAcc env st' evalStep
     | .error err => .error err
 
-/-- Total, fuel-bounded operational evaluator for structured `LNIRCode`. -/
-def evalCode : Nat → VarEnv → HeapState → LNIRCode → Except UBError (Val × HeapState)
-  | 0, _, st, _ => .ok (.unit, st)
-  | fuel + 1, env, st, code =>
-    match code with
-    | .letBind dst _ty val k =>
-      match evalExpr env st val with
-      | .ok (v, st') => evalCode fuel (env.bind dst v) st' k
+/-- Total operational evaluator for structured `LNIRCode` by direct structural recursion on `code`.
+    Because `LNIRCode` is a finite syntax tree and `seqFor` is bounded by `hi - lo`,
+    termination is structural on `code : LNIRCode` with no artificial `fuel = 0` truncation. -/
+def evalCode (fuel : Nat) : VarEnv → HeapState → LNIRCode → Except UBError (Val × HeapState)
+  | env, st, .letBind dst _ty val k =>
+    match evalExpr env st val with
+    | .ok (v, st') => evalCode fuel (env.bind dst v) st' k
+    | .error err => .error err
+  | env, st, .rawStore ptrVar idxVar valVar _elemTy k =>
+    match env ptrVar, env idxVar, env valVar with
+    | some (.rawPtrId bufId), some (.u64 idx), some (.u64 val) =>
+      match st.writeElemExclusive bufId idx.toNat val with
+      | .ok st' => evalCode fuel env st' k
       | .error err => .error err
-    | .rawStore ptrVar idxVar valVar _elemTy k =>
-      match env ptrVar, env idxVar, env valVar with
-      | some (.rawPtrId bufId), some (.u64 idx), some (.u64 val) =>
-        match st.writeElemExclusive bufId idx.toNat val with
-        | .ok st' => evalCode fuel env st' k
-        | .error err => .error err
-      | some (.sarrayId bufId), some (.u64 idx), some (.u64 val) =>
-        match st.writeElemExclusive bufId idx.toNat val with
-        | .ok st' => evalCode fuel env st' k
-        | .error err => .error err
-      | none, _, _ => .error (.unboundVar ptrVar)
-      | _, none, _ => .error (.unboundVar idxVar)
-      | _, _, none => .error (.unboundVar valVar)
-      | _, _, _ => .error (.typeError "rawStore requires rawPtrId/sarrayId and u64 index/value")
-    | .incRef _objVar _count k =>
-      evalCode fuel env st k
-    | .decRef _objVar _count k =>
-      evalCode fuel env st k
-    | .ite condVar thenBranch elseBranch =>
-      match env condVar with
-      | some (.bool true) => evalCode fuel env st thenBranch
-      | some (.bool false) => evalCode fuel env st elseBranch
-      | some (.u64 n) =>
-        if n != 0 then evalCode fuel env st thenBranch
-        else evalCode fuel env st elseBranch
-      | some (.u256 w) =>
-        if w != UInt256.zero then evalCode fuel env st thenBranch
-        else evalCode fuel env st elseBranch
-      | some _ => .error (.typeError "ite condition must be bool, u64, or u256")
-      | none => .error (.unboundVar condVar)
-    | .seqFor idxVar loVar hiVar accVar accInit _accTy stepBody k =>
-      match env loVar, env hiVar, env accInit with
-      | some (.u64 lo), some (.u64 hi), some initVal =>
-        let count := hi.toNat - lo.toNat
-        match evalSeqLoop count lo.toNat idxVar accVar initVal env st
-            (fun stepEnv stepSt => evalCode fuel stepEnv stepSt stepBody) with
-        | .ok (finalAcc, st') => evalCode fuel (env.bind accVar finalAcc) st' k
-        | .error err => .error err
-      | none, _, _ => .error (.unboundVar loVar)
-      | _, none, _ => .error (.unboundVar hiVar)
-      | _, _, none => .error (.unboundVar accInit)
-      | _, _, _ => .error (.typeError "seqFor bounds must be u64")
-    | .parFor outVar _lenVar _inputs _elemTy _kernel k =>
-      evalCode fuel (env.bind outVar (.sarrayId 0)) st k
-    | .ret v =>
-      match env v with
-      | some val => .ok (val, st)
-      | none => .error (.unboundVar v)
-    | .unreachable =>
-      .error (.typeError "reached unreachable code")
+    | some (.sarrayId bufId), some (.u64 idx), some (.u64 val) =>
+      match st.writeElemExclusive bufId idx.toNat val with
+      | .ok st' => evalCode fuel env st' k
+      | .error err => .error err
+    | none, _, _ => .error (.unboundVar ptrVar)
+    | _, none, _ => .error (.unboundVar idxVar)
+    | _, _, none => .error (.unboundVar valVar)
+    | _, _, _ => .error (.typeError "rawStore requires rawPtrId/sarrayId and u64 index/value")
+  | env, st, .incRef _objVar _count k =>
+    evalCode fuel env st k
+  | env, st, .decRef _objVar _count k =>
+    evalCode fuel env st k
+  | env, st, .ite condVar thenBranch elseBranch =>
+    match env condVar with
+    | some (.bool true) => evalCode fuel env st thenBranch
+    | some (.bool false) => evalCode fuel env st elseBranch
+    | some (.u64 n) =>
+      if n != 0 then evalCode fuel env st thenBranch
+      else evalCode fuel env st elseBranch
+    | some (.u256 w) =>
+      if w != UInt256.zero then evalCode fuel env st thenBranch
+      else evalCode fuel env st elseBranch
+    | some _ => .error (.typeError "ite condition must be bool, u64, or u256")
+    | none => .error (.unboundVar condVar)
+  | env, st, .seqFor idxVar loVar hiVar accVar accInit _accTy stepBody k =>
+    match env loVar, env hiVar, env accInit with
+    | some (.u64 lo), some (.u64 hi), some initVal =>
+      let count := hi.toNat - lo.toNat
+      match evalSeqLoop count lo.toNat idxVar accVar initVal env st
+          (fun stepEnv stepSt => evalCode fuel stepEnv stepSt stepBody) with
+      | .ok (finalAcc, st') => evalCode fuel (env.bind accVar finalAcc) st' k
+      | .error err => .error err
+    | none, _, _ => .error (.unboundVar loVar)
+    | _, none, _ => .error (.unboundVar hiVar)
+    | _, _, none => .error (.unboundVar accInit)
+    | _, _, _ => .error (.typeError "seqFor bounds must be u64")
+  | env, st, .parFor outVar _lenVar _inputs _elemTy _kernel k =>
+    evalCode fuel (env.bind outVar (.sarrayId 0)) st k
+  | env, st, .ret v =>
+    match env v with
+    | some val => .ok (val, st)
+    | none => .error (.unboundVar v)
+  | _, _, .unreachable =>
+    .error (.typeError "reached unreachable code")
 
 end LeanNative.Semantics

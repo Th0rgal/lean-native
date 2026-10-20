@@ -305,4 +305,20 @@ def isGpuCompatible : LNIRType → Bool
 
 end LNIRType
 
+/-- Shared RFC-8259 JSON string escaping utility used across all codecs, reports, and certificates. -/
+def jsonEscape (s : String) : String :=
+  s.foldl (fun acc c =>
+    match c with
+    | '"'  => acc ++ "\\\""
+    | '\\' => acc ++ "\\\\"
+    | '\n' => acc ++ "\\n"
+    | '\r' => acc ++ "\\r"
+    | '\t' => acc ++ "\\t"
+    | _    => acc.push c
+  ) ""
+
+/-- Format a string as a JSON quoted literal `"..."`. -/
+def jsonStr (s : String) : String :=
+  "\"" ++ jsonEscape s ++ "\""
+
 end LeanNative.IR
