@@ -140,6 +140,10 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.small_trip_prefers_cpu_simd
   , ``LeanNative.Spec.matrix_contraction_prefers_tpu_mxu
   , ``LeanNative.Spec.federated_node_effective_cost_monotone_in_queue
+  , ``LeanNative.Spec.composeAffineBudget_eval
+  , ``LeanNative.Spec.affine_step_budget_monotone
+  , ``LeanNative.Spec.bootstrap_shift_step_budget_sound
+  , ``LeanNative.Spec.empirical_high_water_refutes_loose_bound
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

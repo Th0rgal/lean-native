@@ -24,7 +24,7 @@ Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lea
    Executable decision gates, cost models, and hardware placement rules live in `Spec.lean` and `Hybrid.lean` (zero compiler-frontend dependencies, linked against `libleanrt.a` only) and emit unboxed C-ABI primitives directly callable by `turbo-lean` and native runtimes without shadow re-implementations.
 
 2. **Two-Layer Specification Compression (`Layer I` Meta-Specs vs. `Layer II` Corollaries ≤ 3 Lines)**:
-   - **Layer I (Universal Meta-Specifications & Combinators)**: Structural reasoning is factored into reusable combinators (`MetaGateSpec`, `MetaAlgorithmSpec`, `SpeculativeGate`, `VerifiedTransformContract`).
+   - **Layer I (Universal Meta-Specifications & Combinators)**: Structural reasoning is factored into reusable combinators (`MetaGateSpec`, `MetaAlgorithmSpec`, `SpeculativeGate`, `VerifiedTransformContract`, `ClockedStepBudget`).
    - **Layer II (Declarative Corollaries)**: Concrete pass, ABI, partitioner, and PR-gate properties are expressed as `MetaGateSpec` bundles or corollaries of **≤ 3 lines** instantiating Layer I.
 
 3. **Hermetic Segregation of Formal Kernel vs. `autoresearch` Plugins behind `SpeculativeGate`**:

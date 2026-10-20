@@ -24,49 +24,19 @@ theorem uint64_or_zero (a : UInt64) : a ||| (0 : UInt64) = a := UInt64.or_zero
 theorem uint64_zero_or (a : UInt64) : (0 : UInt64) ||| a = a := UInt64.zero_or
 
 theorem uint64_mul_two (a : UInt64) : a * (2 : UInt64) = a <<< (1 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    apply congrArg UInt64.ofBitVec
-    change bv * 2#64 = bv <<< (1#64).toNat
-    have h1 : (1#64).toNat = 1 := rfl
-    rw [h1, BitVec.shiftLeft_eq_mul_twoPow]
-    rfl
+  cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 2#64 = bv <<< 1; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
 
 theorem uint64_mul_four (a : UInt64) : a * (4 : UInt64) = a <<< (2 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    apply congrArg UInt64.ofBitVec
-    change bv * 4#64 = bv <<< (2#64).toNat
-    have h1 : (2#64).toNat = 2 := rfl
-    rw [h1, BitVec.shiftLeft_eq_mul_twoPow]
-    rfl
+  cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 4#64 = bv <<< 2; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
 
 theorem uint64_mul_eight (a : UInt64) : a * (8 : UInt64) = a <<< (3 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    apply congrArg UInt64.ofBitVec
-    change bv * 8#64 = bv <<< (3#64).toNat
-    have h1 : (3#64).toNat = 3 := rfl
-    rw [h1, BitVec.shiftLeft_eq_mul_twoPow]
-    rfl
+  cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 8#64 = bv <<< 3; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
 
 theorem uint64_mul_sixteen (a : UInt64) : a * (16 : UInt64) = a <<< (4 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    apply congrArg UInt64.ofBitVec
-    change bv * 16#64 = bv <<< (4#64).toNat
-    have h1 : (4#64).toNat = 4 := rfl
-    rw [h1, BitVec.shiftLeft_eq_mul_twoPow]
-    rfl
+  cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 16#64 = bv <<< 4; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
 
 theorem uint64_mul_thirtytwo (a : UInt64) : a * (32 : UInt64) = a <<< (5 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    apply congrArg UInt64.ofBitVec
-    change bv * 32#64 = bv <<< (5#64).toNat
-    have h1 : (5#64).toNat = 5 := rfl
-    rw [h1, BitVec.shiftLeft_eq_mul_twoPow]
-    rfl
+  cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 32#64 = bv <<< 5; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
 
 theorem uint64_two_mul (a : UInt64) : (2 : UInt64) * a = a <<< (1 : UInt64) := by
   rw [UInt64.mul_comm, uint64_mul_two]
@@ -78,70 +48,31 @@ theorem uint64_eight_mul (a : UInt64) : (8 : UInt64) * a = a <<< (3 : UInt64) :=
   rw [UInt64.mul_comm, uint64_mul_eight]
 
 theorem uint64_div_two (a : UInt64) : a / (2 : UInt64) = a >>> (1 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    rcases bv with ⟨n, hn⟩
-    apply congrArg UInt64.ofBitVec
-    apply BitVec.eq_of_toNat_eq
-    change n / 2 = n >>> 1
-    rw [Nat.shiftRight_eq_div_pow]
+  cases a with | ofBitVec bv => rcases bv with ⟨n, _⟩; exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by change n / 2 = n >>> 1; rw [Nat.shiftRight_eq_div_pow]))
 
 theorem uint64_div_four (a : UInt64) : a / (4 : UInt64) = a >>> (2 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    rcases bv with ⟨n, hn⟩
-    apply congrArg UInt64.ofBitVec
-    apply BitVec.eq_of_toNat_eq
-    change n / 4 = n >>> 2
-    rw [Nat.shiftRight_eq_div_pow]
+  cases a with | ofBitVec bv => rcases bv with ⟨n, _⟩; exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by change n / 4 = n >>> 2; rw [Nat.shiftRight_eq_div_pow]))
 
 theorem uint64_div_eight (a : UInt64) : a / (8 : UInt64) = a >>> (3 : UInt64) := by
-  cases a with
-  | ofBitVec bv =>
-    rcases bv with ⟨n, hn⟩
-    apply congrArg UInt64.ofBitVec
-    apply BitVec.eq_of_toNat_eq
-    change n / 8 = n >>> 3
-    rw [Nat.shiftRight_eq_div_pow]
+  cases a with | ofBitVec bv => rcases bv with ⟨n, _⟩; exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by change n / 8 = n >>> 3; rw [Nat.shiftRight_eq_div_pow]))
 
 theorem uint64_add_self_shl_one (a : UInt64) : a + a = a <<< (1 : UInt64) := by
-  rw [← uint64_mul_two]
-  cases a with
-  | ofBitVec bv =>
-    apply congrArg UInt64.ofBitVec
-    change bv + bv = bv * 2#64
-    rw [BitVec.mul_two]
+  rw [← uint64_mul_two]; cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv + bv = bv * 2#64; rw [BitVec.mul_two])
 
 theorem uint64_add_assoc_const (a c1 c2 : UInt64) : (a + c1) + c2 = a + (c1 + c2) :=
   UInt64.add_assoc a c1 c2
 
 theorem uint64_and_mask_coalesce (a m1 m2 : UInt64) : (a &&& m1) &&& m2 = a &&& (m1 &&& m2) := by
-  cases a with | ofBitVec bva =>
-  cases m1 with | ofBitVec bvm1 =>
-  cases m2 with | ofBitVec bvm2 =>
-    apply congrArg UInt64.ofBitVec
-    exact BitVec.and_assoc bva bvm1 bvm2
+  cases a; cases m1; cases m2; exact congrArg UInt64.ofBitVec (BitVec.and_assoc ..)
 
 theorem uint64_or_mask_coalesce (a m1 m2 : UInt64) : (a ||| m1) ||| m2 = a ||| (m1 ||| m2) := by
-  cases a with | ofBitVec bva =>
-  cases m1 with | ofBitVec bvm1 =>
-  cases m2 with | ofBitVec bvm2 =>
-    apply congrArg UInt64.ofBitVec
-    exact BitVec.or_assoc bva bvm1 bvm2
+  cases a; cases m1; cases m2; exact congrArg UInt64.ofBitVec (BitVec.or_assoc ..)
 
 theorem uint64_xor_mask_coalesce (a m1 m2 : UInt64) : (a ^^^ m1) ^^^ m2 = a ^^^ (m1 ^^^ m2) := by
-  cases a with | ofBitVec bva =>
-  cases m1 with | ofBitVec bvm1 =>
-  cases m2 with | ofBitVec bvm2 =>
-    apply congrArg UInt64.ofBitVec
-    exact BitVec.xor_assoc bva bvm1 bvm2
+  cases a; cases m1; cases m2; exact congrArg UInt64.ofBitVec (BitVec.xor_assoc ..)
 
 theorem uint64_mul_add_distrib_const (a b c : UInt64) : a * b + a * c = a * (b + c) := by
-  cases a with | ofBitVec bva =>
-  cases b with | ofBitVec bvb =>
-  cases c with | ofBitVec bvc =>
-    apply congrArg UInt64.ofBitVec
-    exact BitVec.mul_add.symm
+  cases a; cases b; cases c; exact congrArg UInt64.ofBitVec BitVec.mul_add.symm
 
 /-! ## Semantic Lemmas for `evalBinOp` -/
 
@@ -429,14 +360,7 @@ theorem rewriteBinOpStep_sound (op : BinOp) (lhs rhs : ScalarExpr) :
 
 theorem rewriteSelectStep_sound (cond thenVal elseVal : ScalarExpr) :
     ScalarExprEquiv (.select cond thenVal elseVal) (rewriteSelectStep cond thenVal elseVal) := by
-  intro env
-  simp only [rewriteSelectStep]
-  by_cases h1 : cond = .constBool true
-  · subst h1; simp [evalScalarExpr]
-  · rw [if_neg h1]
-    by_cases h2 : cond = .constBool false
-    · subst h2; simp [evalScalarExpr]
-    · rw [if_neg h2]
+  intro env; unfold rewriteSelectStep; split <;> first | (subst ‹_›; simp [evalScalarExpr]) | (split <;> first | (subst ‹_›; simp [evalScalarExpr]) | rfl)
 
 theorem rewriteScalarPeepholeStep_sound (e : ScalarExpr) :
     ScalarExprEquiv e (rewriteScalarPeepholeStep e) := by

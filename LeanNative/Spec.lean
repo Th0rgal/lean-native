@@ -5,10 +5,10 @@
 
   Architecture (Harmonized 2-Layer Symbiosis with `TurboLean.Spec`):
   - Layer I  : Universal Meta-Specifications (`MetaGateSpec`, `SpeculativeGate`,
-               `VerifiedTransformContract`, and multi-step refinement composition).
+               `VerifiedTransformContract`, `ClockedStepBudget`, and multi-step refinement composition).
   - Layer II : Declarative `MetaGateSpec` bundles and ≤ 3-line Mathlib4-style corollaries
                governing FastCheck non-vacuity, C-ABI scalar tagging, PR spec-pinning,
-               256-bit 4-limb GPU carry homomorphisms, and 4-target hardware routing.
+               256-bit 4-limb GPU carry homomorphisms, 4-target hardware routing, and RISC-V step budgets.
 -/
 import LeanNative.IR.Types
 import LeanNative.IR.AST
@@ -18,31 +18,23 @@ import LeanNative.Semantics.Refinement
 import LeanNative.Backend.Hybrid
 
 namespace LeanNative.Spec
-
-open LeanNative.IR
-open LeanNative.Semantics
-open LeanNative.Backend.Hybrid
+open LeanNative.IR LeanNative.Semantics LeanNative.Backend.Hybrid
 
 /-! ============================================================================
-    LAYER I: META-SPECIFICATIONS (`MetaGateSpec`, `SpeculativeGate`, `VerifiedTransformContract`)
+    LAYER I: META-SPECIFICATIONS (`MetaGateSpec`, `SpeculativeGate`, `VerifiedTransformContract`, `ClockedStepBudget`)
     ============================================================================ -/
 
-/-- Meta-Specification of a Boolean decision gate `gate : Input → Bool` with respect to `Safe : Input → Prop`. -/
 structure MetaGateSpec (Input : Type) (Safe : Input → Prop) where
-  gate       : Input → Bool
-  sound      : ∀ x, gate x = true → Safe x
-  complete   : ∀ x, Safe x → gate x = true
+  gate : Input → Bool
+  sound : ∀ x, gate x = true → Safe x
+  complete : ∀ x, Safe x → gate x = true
   posWitness : Input
   negWitness : Input
   nonVacuous : gate posWitness = true
-  tight      : gate negWitness = false
+  tight : gate negWitness = false
 
-/-- Universal `SpeculativeGate`: execute an untrusted optimization plugin `plugin` under
-    a formal verification gate `verifyGate`, falling back to `d` on timeout or rejection. -/
 def evalWithUntrustedOptPlugin {Decl Cert : Type}
-    (plugin : Decl → Option (Decl × Cert))
-    (verifyGate : Decl → Decl → Cert → Bool)
-    (d : Decl) : Decl :=
+    (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool) (d : Decl) : Decl :=
   match plugin d with
   | some (cand, cert) => if verifyGate d cand cert then cand else d
   | none => d
@@ -102,6 +94,23 @@ theorem opt_pipeline_chain_refines
     exact CodeRefines.trans (h_steps hd (.head tl) c)
       (ih (fun s hs x => h_steps s (.tail hd hs) x) (hd c))
 
+structure AffineStepBudget where
+  scale  : Nat
+  offset : Nat
+  deriving Repr, DecidableEq, BEq
+
+def AffineStepBudget.eval (b : AffineStepBudget) (steps : Nat) : Nat := b.scale * steps + b.offset
+
+def composeAffineBudget (outer inner : AffineStepBudget) : AffineStepBudget :=
+  { scale := outer.scale * inner.scale, offset := outer.scale * inner.offset + outer.offset }
+
+theorem composeAffineBudget_eval (outer inner : AffineStepBudget) (steps : Nat) :
+    (composeAffineBudget outer inner).eval steps = outer.eval (inner.eval steps) := by
+  simp [composeAffineBudget, AffineStepBudget.eval, Nat.mul_add, Nat.mul_assoc, Nat.add_assoc]
+
+theorem affine_step_budget_monotone (b : AffineStepBudget) {s1 s2 : Nat} (h : s1 ≤ s2) :
+    b.eval s1 ≤ b.eval s2 :=
+  Nat.add_le_add_right (Nat.mul_le_mul_left b.scale h) b.offset
 
 /-! ============================================================================
     LAYER II: DECLARATIVE COROLLARIES (≤ 3 LINES) & `MetaGateSpec` BUNDLES
@@ -143,25 +152,23 @@ theorem fastcheck_rejects_vacuous_precondition (cex : Nat) (cert : Bool) :
     isNonVacuousCertifiedVerdict ⟨0, cex, cert⟩ = false := rfl
 
 theorem fastcheck_non_vacuous_tightness_law (v : FastCheckSpecVerdict) :
-    isNonVacuousCertifiedVerdict v = true ↔
-      (v.satisfiedPreconditions > 0 ∧ v.allCertifiedByEval = true) := by
+    isNonVacuousCertifiedVerdict v = true ↔ (v.satisfiedPreconditions > 0 ∧ v.allCertifiedByEval = true) := by
   simp [isNonVacuousCertifiedVerdict, Bool.and_eq_true, decide_eq_true_eq]
 
 def fastcheckMetaSpec : MetaGateSpec FastCheckSpecVerdict
     (fun v => v.satisfiedPreconditions > 0 ∧ v.allCertifiedByEval = true) where
-  gate       := isNonVacuousCertifiedVerdict
-  sound      := fun v => (fastcheck_non_vacuous_tightness_law v).mp
-  complete   := fun v => (fastcheck_non_vacuous_tightness_law v).mpr
+  gate := isNonVacuousCertifiedVerdict
+  sound := fun v => (fastcheck_non_vacuous_tightness_law v).mp
+  complete := fun v => (fastcheck_non_vacuous_tightness_law v).mpr
   posWitness := ⟨1, 0, true⟩
   negWitness := ⟨0, 0, true⟩
   nonVacuous := rfl
-  tight      := rfl
+  tight := rfl
 
 /-! ## 3. Lean 4 C-ABI Scalar Boxing / Unboxing Invariance (`@lean_native_abi_*`) -/
 
 def leanBoxScalar (x : UInt64) : UInt64 := (x <<< 1) ||| 1
 def leanUnboxScalar (tagged : UInt64) : UInt64 := tagged >>> 1
-
 theorem c_abi_box_zero_eq_one : leanBoxScalar 0 = 1 := rfl
 theorem c_abi_unbox_box_zero : leanUnboxScalar (leanBoxScalar 0) = 0 := rfl
 theorem c_abi_unbox_box_one : leanUnboxScalar (leanBoxScalar 1) = 1 := rfl
@@ -178,46 +185,34 @@ structure PRVerificationInput where
   deriving Repr, DecidableEq, BEq
 
 def checkPRVerificationGate (inp : PRVerificationInput) : Bool :=
-  decide (inp.expectedSpecHash = inp.actualSpecHash) &&
-  decide (inp.expectedTestSuiteHash = inp.actualTestSuiteHash) &&
-  decide (inp.forbiddenAxiomsCount = 0) &&
-  inp.tvAllPassed
+  decide (inp.expectedSpecHash = inp.actualSpecHash) && decide (inp.expectedTestSuiteHash = inp.actualTestSuiteHash) &&
+  decide (inp.forbiddenAxiomsCount = 0) && inp.tvAllPassed
 
-theorem pr_spec_pinning_blocks_spec_tampering (inp : PRVerificationInput)
-    (h_tamper : inp.expectedSpecHash ≠ inp.actualSpecHash) :
-    checkPRVerificationGate inp = false := by
-  simp [checkPRVerificationGate, h_tamper]
+theorem pr_spec_pinning_blocks_spec_tampering (inp : PRVerificationInput) (h_tamper : inp.expectedSpecHash ≠ inp.actualSpecHash) :
+    checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_tamper]
 
-theorem pr_spec_pinning_blocks_test_tampering (inp : PRVerificationInput)
-    (h_tamper : inp.expectedTestSuiteHash ≠ inp.actualTestSuiteHash) :
-    checkPRVerificationGate inp = false := by
-  simp [checkPRVerificationGate, h_tamper]
+theorem pr_spec_pinning_blocks_test_tampering (inp : PRVerificationInput) (h_tamper : inp.expectedTestSuiteHash ≠ inp.actualTestSuiteHash) :
+    checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_tamper]
 
-theorem pr_spec_pinning_blocks_forbidden_axioms (inp : PRVerificationInput)
-    (h_ax : inp.forbiddenAxiomsCount ≠ 0) :
-    checkPRVerificationGate inp = false := by
-  simp [checkPRVerificationGate, h_ax]
+theorem pr_spec_pinning_blocks_forbidden_axioms (inp : PRVerificationInput) (h_ax : inp.forbiddenAxiomsCount ≠ 0) :
+    checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_ax]
 
 theorem pr_spec_pinning_gate_sound (inp : PRVerificationInput) :
     checkPRVerificationGate inp = true ↔
-      (inp.expectedSpecHash = inp.actualSpecHash ∧
-       inp.expectedTestSuiteHash = inp.actualTestSuiteHash ∧
-       inp.forbiddenAxiomsCount = 0 ∧
-       inp.tvAllPassed = true) := by
+      (inp.expectedSpecHash = inp.actualSpecHash ∧ inp.expectedTestSuiteHash = inp.actualTestSuiteHash ∧
+       inp.forbiddenAxiomsCount = 0 ∧ inp.tvAllPassed = true) := by
   simp [checkPRVerificationGate, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
 
 def prVerificationMetaSpec : MetaGateSpec PRVerificationInput
-    (fun inp => inp.expectedSpecHash = inp.actualSpecHash ∧
-                inp.expectedTestSuiteHash = inp.actualTestSuiteHash ∧
-                inp.forbiddenAxiomsCount = 0 ∧
-                inp.tvAllPassed = true) where
-  gate       := checkPRVerificationGate
-  sound      := fun inp => (pr_spec_pinning_gate_sound inp).mp
-  complete   := fun inp => (pr_spec_pinning_gate_sound inp).mpr
+    (fun inp => inp.expectedSpecHash = inp.actualSpecHash ∧ inp.expectedTestSuiteHash = inp.actualTestSuiteHash ∧
+                inp.forbiddenAxiomsCount = 0 ∧ inp.tvAllPassed = true) where
+  gate := checkPRVerificationGate
+  sound := fun inp => (pr_spec_pinning_gate_sound inp).mp
+  complete := fun inp => (pr_spec_pinning_gate_sound inp).mpr
   posWitness := ⟨1, 1, 1, 1, 0, true⟩
   negWitness := ⟨1, 2, 1, 1, 0, true⟩
   nonVacuous := rfl
-  tight      := rfl
+  tight := rfl
 
 /-! ## 5. Semantic Mutant Discrimination & 4-Limb 256-Bit Lowering Homomorphism -/
 
@@ -270,7 +265,6 @@ def checkAllSemanticMutantsDiscriminated : Bool :=
   c1 && c2 && c3 && c4 && c5
 
 theorem meta_validator_rejects_semantic_mutants : checkAllSemanticMutantsDiscriminated = true := rfl
-
 theorem meta_limb256_mul_lo_homomorphism : evalLimbMul256Lo UInt256.max UInt256.max = ⟨1, 0, 0, 0⟩ := rfl
 
 def checkUnboxTupleDeadElimCanary : Bool :=
@@ -278,7 +272,6 @@ def checkUnboxTupleDeadElimCanary : Bool :=
   exceptValEq
     ((evalCode 0 env HeapState.empty (.letBind 10 (.tuple [.i64, .i64]) (.mkTuple [0, 1]) (.letBind 11 .i64 (.projTuple 10 0) (.ret 11)))).map Prod.fst)
     ((evalCode 0 env HeapState.empty (.letBind 11 .i64 (.scalar (.var 0)) (.ret 11))).map Prod.fst)
-
 theorem meta_unbox_tuple_full_elim_sound : checkUnboxTupleDeadElimCanary = true := rfl
 
 def checkSuperoptShiftMaskAndFmaCanary : Bool :=
@@ -288,7 +281,6 @@ def checkSuperoptShiftMaskAndFmaCanary : Bool :=
   let cFma := exceptValEq (evalScalarExpr env (.binOp .add (.binOp .mul (.var 0) (.var 1)) (.var 2))) (evalScalarExpr env (.fma (.var 0) (.var 1) (.var 2)))
   let cRotl := ((x <<< 13) ||| (x >>> 51)) == ((x >>> 51) ||| (x <<< 13))
   cShiftMask && cFma && cRotl
-
 theorem meta_double_shift_mask_and_fma_sound : checkSuperoptShiftMaskAndFmaCanary = true := rfl
 
 /-! ## 6. Verified 4-Target Hardware Partitioner & Queue-Aware Federated Routing -/
@@ -310,5 +302,12 @@ theorem matrix_contraction_prefers_tpu_mxu (tripCount : Nat)
 theorem federated_node_effective_cost_monotone_in_queue (rtt q1 q2 exec conc : Nat) (h_q : q1 ≤ q2) :
     rtt + ((q1 + 1) * exec) / max 1 conc ≤ rtt + ((q2 + 1) * exec) / max 1 conc :=
   Nat.add_le_add_left (Nat.div_le_div_right (Nat.mul_le_mul_right exec (Nat.add_le_add_right h_q 1))) rtt
+
+theorem bootstrap_shift_step_budget_sound (boot targetSteps boundK : Nat) (h : targetSteps ≤ boundK) :
+    ({ scale := 1, offset := boot } : AffineStepBudget).eval targetSteps ≤ boot + boundK := by
+  simpa [AffineStepBudget.eval, Nat.add_comm] using Nat.add_le_add_left h boot
+
+theorem empirical_high_water_refutes_loose_bound (obsMax candK : Nat) (h_gt : candK < obsMax) :
+    ¬ (obsMax ≤ candK) := Nat.not_le.mpr h_gt
 
 end LeanNative.Spec
