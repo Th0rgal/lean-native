@@ -250,6 +250,36 @@ def BranchCandidate.effectiveEffort (c : BranchCandidate) : Nat :=
 def BranchCandidate.scorePermille (c : BranchCandidate) : Nat :=
   computeBayesianScorePermille c.probPermille c.impactPermille c.effortP50 c.tailSpread c.riskAversionPermille
 
+abbrev computeCandidateScore := BranchCandidate.scorePermille
+
+@[inline, export lean_gov_bayesian_score]
+def bayesianScoreC (probPermille impactPermille effortP50 effortP90 riskLambdaPermille : UInt64) : UInt64 :=
+  (computeBayesianScorePermille probPermille.toNat impactPermille.toNat effortP50.toNat effortP90.toNat riskLambdaPermille.toNat).toUInt64
+
+@[inline, export lean_gov_check_acceptance_gate]
+def checkAcceptanceGateC (specHashBefore specHashAfter forbiddenAxioms vacuousSpecs : UInt64) (artifactCertified : Bool) : Bool :=
+  checkBranchAcceptanceGate ⟨specHashBefore.toNat, specHashAfter.toNat, forbiddenAxioms.toNat, vacuousSpecs.toNat, artifactCertified⟩
+
+@[inline, export lean_gov_decide_worker_action]
+def decideWorkerActionC (tokensUsed tokenBudget stagnantCheckpoints stage1Rejects : UInt64) (siblingWonRace : Bool) : UInt8 :=
+  match decideWorkerAction ⟨tokensUsed.toNat, tokenBudget.toNat, stagnantCheckpoints.toNat, 3, stage1Rejects.toNat, 25, siblingWonRace⟩ with
+  | .keepRunning => 0
+  | .cancelRaceLost => 1
+  | .cancelBudgetExceeded => 2
+  | .cancelSurvivalHazard => 3
+
+def stepArm (s : WorkerTelemetrySnapshot) : GovernorDecision :=
+  decideWorkerAction s
+
+def pruneArm (minScorePermille : Nat) (cand : BranchCandidate) (snap : WorkerTelemetrySnapshot) : Bool :=
+  decide (decideWorkerAction snap != .keepRunning) || decide (computeCandidateScore cand < minScorePermille)
+
+theorem pruneArm_falsified_true (minScore : Nat) (c : BranchCandidate) (s : WorkerTelemetrySnapshot)
+    (h_pos : 0 < minScore) (h_false : c.probPermille = 0) : pruneArm minScore c s = true := by
+  simp [pruneArm, computeCandidateScore, BranchCandidate.scorePermille, h_false, bayesian_falsified_branch_score_zero, h_pos]
+
+theorem decideWorkerActionC_sibling_won (tu tb sc sr : UInt64) : decideWorkerActionC tu tb sc sr true = 1 := rfl
+
 def BranchCandidate.toJson (c : BranchCandidate) : String :=
   "{" ++
   s!"\"branch_id\":\"{jsonEscape c.branchId}\"," ++
@@ -274,6 +304,19 @@ def insertCandidateDesc (c : BranchCandidate) : List BranchCandidate → List Br
 
 def rankCandidates (cs : List BranchCandidate) : List BranchCandidate :=
   cs.foldl (fun acc c => insertCandidateDesc c acc) []
+
+def allocateLoops (totalBudget minScorePermille : Nat) (cands : List BranchCandidate) : List (String × Nat) :=
+  let ranked := rankCandidates cands
+  let active := ranked.filter (fun c => decide (c.probPermille > 0) && decide (computeCandidateScore c >= minScorePermille))
+  let k := active.length
+  let perArm := if k > 0 then totalBudget / k else 0
+  let rem := if k > 0 then totalBudget % k else 0
+  let topId := (active.head?.map (·.branchId)).getD ""
+  cands.map (fun c =>
+    if c.probPermille == 0 || computeCandidateScore c < minScorePermille then
+      (c.branchId, 0)
+    else
+      (c.branchId, perArm + (if c.branchId == topId then rem else 0)))
 
 /-- Evaluate a single JSON step event and return the JSON response with the verified Governor decision. -/
 def evaluateGovernorStepJson
@@ -363,7 +406,12 @@ def runGovernorSelfTest : Bool :=
     decideWorkerAction normalSnap == .keepRunning &&
     decideWorkerAction raceLostSnap == .cancelRaceLost &&
     decideWorkerAction overBudgetSnap == .cancelBudgetExceeded &&
-    decideWorkerAction hazardSnap == .cancelSurvivalHazard
+    decideWorkerAction hazardSnap == .cancelSurvivalHazard &&
+    pruneArm 10 falsifiedCand normalSnap &&
+    decideWorkerActionC 12000 50000 1 4 true == 1 &&
+    checkAcceptanceGateC 101 101 0 0 true &&
+    bayesianScoreC 0 900 10 20 350 == 0 &&
+    (allocateLoops 10 10 [probeCand, falsifiedCand]).contains ("prove-falsified", 0)
 
   rankOk && gateOk && decisionOk
 

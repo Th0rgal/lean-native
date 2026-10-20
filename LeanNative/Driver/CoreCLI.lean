@@ -742,6 +742,42 @@ private def extractRpcNatField (line : String) (key : String) (defaultVal : Nat)
     | _ => defaultVal
   | _ => defaultVal
 
+private def parseSnapshotJson (line : String) : WorkerTelemetrySnapshot := {
+  tokensUsed             := extractRpcNatField line "tokens_used" 0
+  tokenBudget            := extractRpcNatField line "token_budget" 50000
+  stagnantCheckpoints    := extractRpcNatField line "stagnant_checkpoints" 0
+  maxStagnantCheckpoints := extractRpcNatField line "max_stagnant_checkpoints" 3
+  stage1Rejects          := extractRpcNatField line "stage1_rejects" 0
+  maxStage1Rejects       := extractRpcNatField line "max_stage1_rejects" 25
+  siblingWinnerFound     := hasRpcBoolField line "sibling_winner_found" true
+}
+
+private def parseCertJson (line : String) : Option BranchVerificationCert :=
+  if hasRpcBoolField line "has_cert" true then
+    some {
+      specHashBefore       := extractRpcNatField line "spec_hash_before" 1
+      specHashAfter        := extractRpcNatField line "spec_hash_after" 1
+      forbiddenAxiomsCount := extractRpcNatField line "forbidden_axioms_count" 0
+      vacuousSpecsCount    := extractRpcNatField line "vacuous_specs_count" 0
+      artifactCertified    := !(hasRpcBoolField line "artifact_certified" false)
+    }
+  else none
+
+private def parseCandidateJson (line : String) (defaultBranchId : String := "branch-0") : BranchCandidate :=
+  let defaultProb := computeBetaPosteriorPermille
+    (extractRpcNatField line "alpha0" 2) (extractRpcNatField line "beta0" 2)
+    (extractRpcNatField line "successes" 0) (extractRpcNatField line "failures" 0)
+  {
+    branchId             := (extractRpcStringField line "branch_id").getD defaultBranchId
+    branchType           := (extractRpcStringField line "branch_type").getD "PROVE"
+    raceGroup            := (extractRpcStringField line "race_group").getD "default"
+    probPermille         := extractRpcNatField line "prob_permille" defaultProb
+    impactPermille       := extractRpcNatField line "impact_permille" 500
+    effortP50            := extractRpcNatField line "effort_p50" 10
+    effortP90            := extractRpcNatField line "effort_p90" 25
+    riskAversionPermille := extractRpcNatField line "risk_aversion_permille" 350
+  }
+
 structure WorkerCache where
   baseMod          : LNIRModule
   optMod           : LNIRModule
@@ -959,60 +995,10 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
   | "governor-step" =>
     let taskId := (extractRpcStringField line "task_id").getD "task-0"
     let raceGroup := (extractRpcStringField line "race_group").getD "default"
-    let tokensUsed := extractRpcNatField line "tokens_used" 0
-    let tokenBudget := extractRpcNatField line "token_budget" 50000
-    let stagnant := extractRpcNatField line "stagnant_checkpoints" 0
-    let maxStagnant := extractRpcNatField line "max_stagnant_checkpoints" 3
-    let stage1Rej := extractRpcNatField line "stage1_rejects" 0
-    let maxStage1Rej := extractRpcNatField line "max_stage1_rejects" 25
-    let siblingWin := hasRpcBoolField line "sibling_winner_found" true
-    let hasCert := hasRpcBoolField line "has_cert" true
-    let snap : WorkerTelemetrySnapshot := {
-      tokensUsed := tokensUsed
-      tokenBudget := tokenBudget
-      stagnantCheckpoints := stagnant
-      maxStagnantCheckpoints := maxStagnant
-      stage1Rejects := stage1Rej
-      maxStage1Rejects := maxStage1Rej
-      siblingWinnerFound := siblingWin
-    }
-    let certOpt : Option BranchVerificationCert :=
-      if hasCert then
-        some {
-          specHashBefore := extractRpcNatField line "spec_hash_before" 1
-          specHashAfter := extractRpcNatField line "spec_hash_after" 1
-          forbiddenAxiomsCount := extractRpcNatField line "forbidden_axioms_count" 0
-          vacuousSpecsCount := extractRpcNatField line "vacuous_specs_count" 0
-          artifactCertified := !(hasRpcBoolField line "artifact_certified" false)
-        }
-      else
-        none
-    let stepJson := evaluateGovernorStepJson taskId raceGroup snap certOpt
+    let stepJson := evaluateGovernorStepJson taskId raceGroup (parseSnapshotJson line) (parseCertJson line)
     s!"\{\"id\":{reqId},\"ok\":true,\"result\":{stepJson}}"
   | "governor-score" =>
-    let branchId := (extractRpcStringField line "branch_id").getD "branch-0"
-    let branchType := (extractRpcStringField line "branch_type").getD "PROVE"
-    let raceGroup := (extractRpcStringField line "race_group").getD "default"
-    let alpha0 := extractRpcNatField line "alpha0" 2
-    let beta0 := extractRpcNatField line "beta0" 2
-    let succ := extractRpcNatField line "successes" 0
-    let fail := extractRpcNatField line "failures" 0
-    let defaultProb := computeBetaPosteriorPermille alpha0 beta0 succ fail
-    let probPermille := extractRpcNatField line "prob_permille" defaultProb
-    let impactPermille := extractRpcNatField line "impact_permille" 500
-    let effortP50 := extractRpcNatField line "effort_p50" 10
-    let effortP90 := extractRpcNatField line "effort_p90" 25
-    let riskAv := extractRpcNatField line "risk_aversion_permille" 350
-    let cand : BranchCandidate := {
-      branchId := branchId
-      branchType := branchType
-      raceGroup := raceGroup
-      probPermille := probPermille
-      impactPermille := impactPermille
-      effortP50 := effortP50
-      effortP90 := effortP90
-      riskAversionPermille := riskAv
-    }
+    let cand := parseCandidateJson line
     s!"\{\"id\":{reqId},\"ok\":true,\"result\":{cand.toJson}}"
   | other =>
     s!"\{\"id\":{reqId},\"ok\":false,\"error\":\"unknown_method:{escapeJsonWorker other}\"}"
@@ -1021,107 +1007,40 @@ abbrev handleWorkerLine := handleWorkerRequest
 
 partial def workerLoop (engineName : String) (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) (cache : WorkerCache) : IO UInt32 := do
   let line ← stdin.getLine
-  if line.isEmpty then
-    return 0
+  if line.isEmpty then return 0
   let trimmed := line.trimAscii.toString
-  if trimmed.isEmpty then
-    workerLoop engineName stdin stdout cache
+  if trimmed.isEmpty then workerLoop engineName stdin stdout cache
   else
     let method := (extractRpcStringField trimmed "method").getD ""
     if method == "exit" || method == "shutdown" || method == "quit" then
-      let reqId := extractRpcId trimmed
-      stdout.putStrLn s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"status\":\"bye\"}}"
-      stdout.flush
-      return 0
+      stdout.putStrLn s!"\{\"id\":{extractRpcId trimmed},\"ok\":true,\"result\":\{\"status\":\"bye\"}}"
+      stdout.flush; return 0
     else
-      let resp := handleWorkerRequest engineName cache trimmed
-      stdout.putStrLn resp
-      stdout.flush
-      workerLoop engineName stdin stdout cache
+      stdout.putStrLn (handleWorkerRequest engineName cache trimmed)
+      stdout.flush; workerLoop engineName stdin stdout cache
 
 def runWorker (engineName : String) : IO UInt32 := do
-  let cache ← initWorkerCache
-  let stdin ← IO.getStdin
-  let stdout ← IO.getStdout
-  workerLoop engineName stdin stdout cache
+  workerLoop engineName (← IO.getStdin) (← IO.getStdout) (← initWorkerCache)
 
 partial def governorStreamLoop (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : IO UInt32 := do
   let line ← stdin.getLine
-  if line.isEmpty then
-    return 0
+  if line.isEmpty then return 0
   let trimmed := line.trimAscii.toString
-  if trimmed.isEmpty then
-    governorStreamLoop stdin stdout
+  if trimmed.isEmpty then governorStreamLoop stdin stdout
   else
     let method := (extractRpcStringField trimmed "method").getD "governor-step"
-    if method == "exit" || method == "shutdown" || method == "quit" then
-      return 0
+    if method == "exit" || method == "shutdown" || method == "quit" then return 0
     let taskId := (extractRpcStringField trimmed "task_id").getD "task-0"
     let raceGroup := (extractRpcStringField trimmed "race_group").getD "default"
-    if method == "governor-score" then
-      let branchId := (extractRpcStringField trimmed "branch_id").getD taskId
-      let branchType := (extractRpcStringField trimmed "branch_type").getD "PROVE"
-      let alpha0 := extractRpcNatField trimmed "alpha0" 2
-      let beta0 := extractRpcNatField trimmed "beta0" 2
-      let succ := extractRpcNatField trimmed "successes" 0
-      let fail := extractRpcNatField trimmed "failures" 0
-      let defaultProb := computeBetaPosteriorPermille alpha0 beta0 succ fail
-      let probPermille := extractRpcNatField trimmed "prob_permille" defaultProb
-      let impactPermille := extractRpcNatField trimmed "impact_permille" 500
-      let effortP50 := extractRpcNatField trimmed "effort_p50" 10
-      let effortP90 := extractRpcNatField trimmed "effort_p90" 25
-      let riskAv := extractRpcNatField trimmed "risk_aversion_permille" 350
-      let cand : BranchCandidate := {
-        branchId := branchId
-        branchType := branchType
-        raceGroup := raceGroup
-        probPermille := probPermille
-        impactPermille := impactPermille
-        effortP50 := effortP50
-        effortP90 := effortP90
-        riskAversionPermille := riskAv
-      }
-      stdout.putStrLn cand.toJson
-      stdout.flush
-      governorStreamLoop stdin stdout
-    else
-      let tokensUsed := extractRpcNatField trimmed "tokens_used" 0
-      let tokenBudget := extractRpcNatField trimmed "token_budget" 50000
-      let stagnant := extractRpcNatField trimmed "stagnant_checkpoints" 0
-      let maxStagnant := extractRpcNatField trimmed "max_stagnant_checkpoints" 3
-      let stage1Rej := extractRpcNatField trimmed "stage1_rejects" 0
-      let maxStage1Rej := extractRpcNatField trimmed "max_stage1_rejects" 25
-      let siblingWin := hasRpcBoolField trimmed "sibling_winner_found" true
-      let hasCert := hasRpcBoolField trimmed "has_cert" true
-      let snap : WorkerTelemetrySnapshot := {
-        tokensUsed := tokensUsed
-        tokenBudget := tokenBudget
-        stagnantCheckpoints := stagnant
-        maxStagnantCheckpoints := maxStagnant
-        stage1Rejects := stage1Rej
-        maxStage1Rejects := maxStage1Rej
-        siblingWinnerFound := siblingWin
-      }
-      let certOpt : Option BranchVerificationCert :=
-        if hasCert then
-          some {
-            specHashBefore := extractRpcNatField trimmed "spec_hash_before" 1
-            specHashAfter := extractRpcNatField trimmed "spec_hash_after" 1
-            forbiddenAxiomsCount := extractRpcNatField trimmed "forbidden_axioms_count" 0
-            vacuousSpecsCount := extractRpcNatField trimmed "vacuous_specs_count" 0
-            artifactCertified := !(hasRpcBoolField trimmed "artifact_certified" false)
-          }
-        else
-          none
-      stdout.putStrLn (evaluateGovernorStepJson taskId raceGroup snap certOpt)
-      stdout.flush
-      governorStreamLoop stdin stdout
+    let out := if method == "governor-score" then (parseCandidateJson trimmed taskId).toJson
+               else evaluateGovernorStepJson taskId raceGroup (parseSnapshotJson trimmed) (parseCertJson trimmed)
+    stdout.putStrLn out; stdout.flush; governorStreamLoop stdin stdout
 
 def runGovernorCLI (args : List String) : IO UInt32 := do
   match args with
   | "self-test" :: _ =>
     let ok := runGovernorSelfTest
-    IO.println ("{\"status\":\"" ++ (if ok then "passed" else "failed") ++ "\",\"theorems_verified\":14}")
+    IO.println ("{\"status\":\"" ++ (if ok then "passed" else "failed") ++ "\",\"theorems_verified\":16}")
     return if ok then 0 else 1
   | "score" :: rest =>
     let branchId := findFlagValue rest "--branch-id" "branch-0"

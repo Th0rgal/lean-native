@@ -162,6 +162,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.ResearchGovernor.governor_budget_exceeded_never_continues
   , ``LeanNative.ResearchGovernor.governor_survival_stagnation_never_continues
   , ``LeanNative.ResearchGovernor.governor_continue_implies_within_budget_and_no_winner
+  , ``LeanNative.ResearchGovernor.pruneArm_falsified_true
+  , ``LeanNative.ResearchGovernor.decideWorkerActionC_sibling_won
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

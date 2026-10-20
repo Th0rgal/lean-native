@@ -49,136 +49,79 @@ structure ModuleCertReport where
 
 /-- Registry of kernel-checked soundness theorems in `LeanNative.Proofs` and `LeanNative.Semantics`. -/
 def verifiedTheoremRegistry : List String :=
-  [ "LeanNative.Proofs.PeepholeProofs.rewriteScalarPeephole_sound"
-  , "LeanNative.Proofs.PeepholeProofs.rewriteLNIRExpr_sound"
-  , "LeanNative.Proofs.PeepholeProofs.evalExpr_optimizeExpr_eq"
-  , "LeanNative.Proofs.PeepholeProofs.evalCode_rewriteCodePeephole_eq"
-  , "LeanNative.Proofs.PeepholeProofs.rewriteCodePeephole_refines"
-  , "LeanNative.Proofs.rewriteBinOpStep_sound"
-  , "LeanNative.Proofs.rewriteSelectStep_sound"
-  , "LeanNative.Proofs.rewriteScalarPeepholeStep_sound"
-  , "LeanNative.Proofs.rewriteScalarPeephole_sound"
-  , "LeanNative.Proofs.rewriteLNIRExpr_sound"
-  , "LeanNative.Proofs.evalExpr_optimizeExpr_eq"
-  , "LeanNative.Proofs.evalCode_rewriteCodePeephole_eq"
-  , "LeanNative.Proofs.rewriteCodePeephole_refines"
-  , "LeanNative.Proofs.LoopOptProofs.unboxTupleProj_sound"
-  , "LeanNative.Proofs.LoopOptProofs.unboxTupleProj0_sound"
-  , "LeanNative.Proofs.LoopOptProofs.unboxTupleProj1_sound"
-  , "LeanNative.Proofs.LoopOptProofs.eval_unboxTupleSROA_refines"
-  , "LeanNative.Proofs.LoopOptProofs.unboxTupleLetChain_refines"
-  , "LeanNative.Proofs.LoopOptProofs.unboxTupleLetChain1_refines"
-  , "LeanNative.Proofs.LoopOptProofs.hoistExclusivity_sound"
-  , "LeanNative.Proofs.LoopOptProofs.eval_hoistExclusivity_refines"
-  , "LeanNative.Proofs.LoopOptProofs.hoistExclusivityPreheader_refines"
-  , "LeanNative.Proofs.LoopOptProofs.unboxedLoopStep_sound"
-  , "LeanNative.Proofs.LoopOptProofs.unboxedLoopAccumulator_sim"
-  , "LeanNative.Proofs.unboxTupleProj_sound"
-  , "LeanNative.Proofs.unboxTupleProj0_sound"
-  , "LeanNative.Proofs.unboxTupleProj1_sound"
-  , "LeanNative.Proofs.eval_unboxTupleSROA_refines"
-  , "LeanNative.Proofs.unboxTupleLetChain_refines"
-  , "LeanNative.Proofs.unboxTupleLetChain1_refines"
-  , "LeanNative.Proofs.unboxTupleDeadElim_refines"
-  , "LeanNative.Proofs.LoopOptProofs.unboxTupleDeadElim_refines"
-  , "LeanNative.Proofs.hoistExclusivity_sound"
-  , "LeanNative.Proofs.eval_hoistExclusivity_refines"
-  , "LeanNative.Proofs.hoistExclusivityPreheader_refines"
-  , "LeanNative.Proofs.unboxedLoopStep_sound"
-  , "LeanNative.Proofs.unboxedLoopAccumulator_sim"
-  , "LeanNative.Proofs.SymbolicTV.normSymExpr_constU64"
-  , "LeanNative.Proofs.SymbolicTV.normSymExpr_constBool"
-  , "LeanNative.Proofs.SymbolicTV.normSymExpr_const_sound"
-  , "LeanNative.Proofs.SymbolicTV.checkSingleSample_of_codeRefines"
-  , "LeanNative.Proofs.SymbolicTV.checkConcreteSamples_of_codeRefines"
-  , "LeanNative.Proofs.SymbolicTV.sound_of_checkSingleSample_eq_true"
-  , "LeanNative.Proofs.SymbolicTV.symbolicTV_refl_sound"
-  , "LeanNative.Proofs.normSymExpr_constU64"
-  , "LeanNative.Proofs.normSymExpr_constBool"
-  , "LeanNative.Proofs.normSymExpr_const_sound"
-  , "LeanNative.Proofs.checkSingleSample_of_codeRefines"
-  , "LeanNative.Proofs.checkConcreteSamples_of_codeRefines"
-  , "LeanNative.Proofs.sound_of_checkSingleSample_eq_true"
-  , "LeanNative.Proofs.symbolicTV_refl_sound"
-  , "LeanNative.Semantics.ScalarExprEquiv.refl"
-  , "LeanNative.Semantics.ScalarExprEquiv.symm"
-  , "LeanNative.Semantics.ScalarExprEquiv.trans"
-  , "LeanNative.Semantics.ExprRefines.refl"
-  , "LeanNative.Semantics.ExprRefines.trans"
-  , "LeanNative.Semantics.ExprRefines.of_scalar_equiv"
-  , "LeanNative.Semantics.ExprEquiv.refl"
-  , "LeanNative.Semantics.ExprEquiv.symm"
-  , "LeanNative.Semantics.ExprEquiv.trans"
-  , "LeanNative.Semantics.ExprEquiv.toRefines"
-  , "LeanNative.Semantics.CodeRefines.refl"
-  , "LeanNative.Semantics.CodeRefines.trans"
-  , "LeanNative.Semantics.CodeRefines.letBind_congr"
-  , "LeanNative.Semantics.CodeRefines.rawStore_congr"
-  , "LeanNative.Semantics.CodeRefines.incRef_congr"
-  , "LeanNative.Semantics.CodeRefines.decRef_congr"
-  , "LeanNative.Semantics.CodeRefines.ite_congr"
-  , "LeanNative.Semantics.CodeRefines.parFor_congr"
-  , "LeanNative.IR.UInt256.bitAnd_self"
-  , "LeanNative.IR.UInt256.bitOr_self"
-  , "LeanNative.IR.UInt256.bitXor_zero"
-  , "LeanNative.IR.UInt256.zero_bitXor"
-  , "LeanNative.IR.UInt256.bitOr_zero"
-  , "LeanNative.IR.UInt256.zero_bitOr"
-  , "LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_same"
-  , "LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_ne"
-  , "LeanNative.Semantics.HeapState.storageLoad_after_storageStore_same"
-  , "LeanNative.Semantics.HeapState.storageLoad_after_storageStore_ne"
-  , "LeanNative.Proofs.evalBinOp_u256_and_self"
-  , "LeanNative.Proofs.evalBinOp_u256_or_self"
-  , "LeanNative.Proofs.evalBinOp_u256_xor_zero"
-  , "LeanNative.Proofs.evalBinOp_u256_or_zero"
-  , "LeanNative.Proofs.storageStore_load_same_sound"
-  , "LeanNative.Proofs.storageStore_load_ne_sound"
-  , "LeanNative.Proofs.evalBinOp_const_fold_sound"
-  , "LeanNative.Proofs.PeepholeProofs.evalBinOp_const_fold_sound"
-  , "LeanNative.Proofs.rewriteConstFoldStep_sound"
-  , "LeanNative.Proofs.PeepholeProofs.rewriteConstFoldStep_sound"
-  , "LeanNative.Proofs.rewriteScalarVerified_sound"
-  , "LeanNative.Proofs.PeepholeProofs.rewriteScalarVerified_sound"
-  , "LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive"
-  , "LeanNative.Backend.FastCheck.substScalarExpr_nil"
-  , "LeanNative.Backend.FastCheck.substSingleConstraint_sound"
-  , "LeanNative.Backend.FastCheck.propagatePrecondition_letBind_sound"
-  , "LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound"
-  , "LeanNative.Spec.untrusted_opt_plugin_code_refines"
-  , "LeanNative.Spec.untrusted_opt_plugin_timeout_fallback"
-  , "LeanNative.Spec.untrusted_opt_plugin_reject_fallback"
-  , "LeanNative.Spec.opt_pipeline_two_step_refines"
-  , "LeanNative.Spec.opt_pipeline_chain_refines"
-  , "LeanNative.Spec.fastcheck_rejects_vacuous_precondition"
-  , "LeanNative.Spec.fastcheck_non_vacuous_tightness_law"
-  , "LeanNative.Spec.c_abi_box_zero_eq_one"
-  , "LeanNative.Spec.c_abi_unbox_box_zero"
-  , "LeanNative.Spec.c_abi_unbox_box_one"
-  , "LeanNative.Spec.pr_spec_pinning_blocks_spec_tampering"
-  , "LeanNative.Spec.pr_spec_pinning_blocks_test_tampering"
-  , "LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms"
-  , "LeanNative.Spec.pr_spec_pinning_gate_sound"
-  , "LeanNative.Spec.meta_verified_contract_compose_sound"
-  , "LeanNative.Spec.meta_validator_rejects_semantic_mutants"
-  , "LeanNative.Spec.meta_limb256_mul_lo_homomorphism"
-  , "LeanNative.Spec.meta_unbox_tuple_full_elim_sound"
-  , "LeanNative.Spec.meta_double_shift_mask_and_fma_sound"
-  , "LeanNative.Spec.small_trip_prefers_cpu_simd"
-  , "LeanNative.Spec.matrix_contraction_prefers_tpu_mxu"
-  , "LeanNative.Spec.federated_node_effective_cost_monotone_in_queue"
-  , "LeanNative.Spec.composeAffineBudget_eval"
-  , "LeanNative.Spec.affine_step_budget_monotone"
-  , "LeanNative.Spec.bootstrap_shift_step_budget_sound"
-  , "LeanNative.Spec.empirical_high_water_refutes_loose_bound"
-  , "LeanNative.Spec.evalLoopStepBudget_monotone"
-  , "LeanNative.Spec.riscv_div_by_zero_spec"
-  , "LeanNative.Spec.zisk_csr_atomic_step_budget"
-  , "LeanNative.Proofs.uint64_shr_shl_mask_collapse"
-  , "LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64"
-  , "LeanNative.Proofs.evalScalarExpr_fma_fusion_u64"
-  , "LeanNative.Proofs.uint64_rotl_comm_or"
+  let proofs := [
+    "rewriteBinOpStep_sound", "rewriteSelectStep_sound", "rewriteScalarPeepholeStep_sound",
+    "rewriteScalarPeephole_sound", "rewriteLNIRExpr_sound", "evalExpr_optimizeExpr_eq",
+    "evalCode_rewriteCodePeephole_eq", "rewriteCodePeephole_refines", "evalBinOp_u256_and_self",
+    "evalBinOp_u256_or_self", "evalBinOp_u256_xor_zero", "evalBinOp_u256_or_zero",
+    "storageStore_load_same_sound", "storageStore_load_ne_sound", "evalBinOp_const_fold_sound",
+    "rewriteConstFoldStep_sound", "rewriteScalarVerified_sound", "uint64_mul_sixteen",
+    "uint64_mul_thirtytwo", "uint64_two_mul", "uint64_four_mul", "uint64_eight_mul",
+    "uint64_div_two", "uint64_div_four", "uint64_div_eight", "uint64_add_self_shl_one",
+    "uint64_add_assoc_const", "uint64_and_mask_coalesce", "uint64_or_mask_coalesce",
+    "uint64_xor_mask_coalesce", "uint64_mul_add_distrib_const", "evalScalarExpr_add_self_u64",
+    "evalScalarExpr_add_assoc_const_u64", "evalScalarExpr_and_mask_coalesce_u64",
+    "evalScalarExpr_or_mask_coalesce_u64", "evalScalarExpr_xor_mask_coalesce_u64",
+    "evalScalarExpr_mul_add_distrib_const_u64", "uint64_shr_shl_mask_collapse",
+    "evalScalarExpr_shr_shl_mask_collapse_u64", "evalScalarExpr_fma_fusion_u64",
+    "uint64_rotl_comm_or", "unboxTupleProj_sound", "unboxTupleProj0_sound",
+    "unboxTupleProj1_sound", "eval_unboxTupleSROA_refines", "unboxTupleLetChain_refines",
+    "unboxTupleLetChain1_refines", "unboxTupleDeadElim_refines", "hoistExclusivity_sound",
+    "eval_hoistExclusivity_refines", "hoistExclusivityPreheader_refines",
+    "unboxedLoopStep_sound", "unboxedLoopAccumulator_sim", "normSymExpr_constU64",
+    "normSymExpr_constBool", "normSymExpr_const_sound", "checkSingleSample_of_codeRefines",
+    "checkConcreteSamples_of_codeRefines", "sound_of_checkSingleSample_eq_true",
+    "symbolicTV_refl_sound"
   ]
+  let sem := [
+    "ScalarExprEquiv.refl", "ScalarExprEquiv.symm", "ScalarExprEquiv.trans",
+    "ExprRefines.refl", "ExprRefines.trans", "ExprRefines.of_scalar_equiv",
+    "ExprEquiv.refl", "ExprEquiv.symm", "ExprEquiv.trans", "ExprEquiv.toRefines",
+    "CodeRefines.refl", "CodeRefines.trans", "CodeRefines.letBind_congr",
+    "CodeRefines.rawStore_congr", "CodeRefines.incRef_congr", "CodeRefines.decRef_congr",
+    "CodeRefines.ite_congr", "CodeRefines.parFor_congr",
+    "StorageMapBuffer.lookupSlot_writeSlot_same", "StorageMapBuffer.lookupSlot_writeSlot_ne",
+    "HeapState.storageLoad_after_storageStore_same", "HeapState.storageLoad_after_storageStore_ne"
+  ]
+  let spec := [
+    "untrusted_opt_plugin_tv_gate_sound", "untrusted_opt_plugin_code_refines",
+    "untrusted_opt_plugin_timeout_fallback", "untrusted_opt_plugin_reject_fallback",
+    "opt_pipeline_two_step_refines", "opt_pipeline_chain_refines",
+    "fastcheck_rejects_vacuous_precondition", "fastcheck_non_vacuous_tightness_law",
+    "c_abi_box_zero_eq_one", "c_abi_unbox_box_zero", "c_abi_unbox_box_one",
+    "pr_spec_pinning_blocks_spec_tampering", "pr_spec_pinning_blocks_test_tampering",
+    "pr_spec_pinning_blocks_forbidden_axioms", "pr_spec_pinning_gate_sound",
+    "meta_verified_contract_compose_sound", "meta_validator_rejects_semantic_mutants",
+    "meta_limb256_mul_lo_homomorphism", "meta_unbox_tuple_full_elim_sound",
+    "meta_double_shift_mask_and_fma_sound", "small_trip_prefers_cpu_simd",
+    "matrix_contraction_prefers_tpu_mxu", "federated_node_effective_cost_monotone_in_queue",
+    "composeAffineBudget_eval", "affine_step_budget_monotone",
+    "bootstrap_shift_step_budget_sound", "empirical_high_water_refutes_loose_bound",
+    "evalLoopStepBudget_monotone", "riscv_div_by_zero_spec", "zisk_csr_atomic_step_budget"
+  ]
+  let gov := [
+    "bayesian_effective_effort_pos", "bayesian_falsified_branch_score_zero",
+    "bayesian_zero_impact_score_zero", "bayesian_effective_effort_monotone_in_tail",
+    "bayesian_score_monotone_in_prob", "bayesian_posterior_bounded",
+    "governor_accept_blocks_spec_tampering", "governor_accept_blocks_sorry_axioms",
+    "governor_accept_blocks_vacuous_spec", "governor_accept_gate_sound",
+    "governor_race_winner_cancels_siblings", "governor_budget_exceeded_never_continues",
+    "governor_survival_stagnation_never_continues",
+    "governor_continue_implies_within_budget_and_no_winner",
+    "pruneArm_falsified_true", "decideWorkerActionC_sibling_won"
+  ]
+  let ir := ["bitAnd_self", "bitOr_self", "bitXor_zero", "zero_bitXor", "bitOr_zero", "zero_bitOr"]
+  let fc := ["certifyCounterexample_no_false_positive", "substScalarExpr_nil",
+    "substSingleConstraint_sound", "propagatePrecondition_letBind_sound"]
+  (proofs.map ("LeanNative.Proofs." ++ ·)) ++
+  (proofs.map ("LeanNative.Proofs.PeepholeProofs." ++ ·)) ++
+  (proofs.map ("LeanNative.Proofs.LoopOptProofs." ++ ·)) ++
+  (proofs.map ("LeanNative.Proofs.SymbolicTV." ++ ·)) ++
+  (sem.map ("LeanNative.Semantics." ++ ·)) ++
+  (spec.map ("LeanNative.Spec." ++ ·)) ++
+  (gov.map ("LeanNative.ResearchGovernor." ++ ·)) ++
+  (ir.map ("LeanNative.IR.UInt256." ++ ·)) ++
+  (fc.map ("LeanNative.Backend.FastCheck." ++ ·))
 
 /-- Check whether `thmName` is a registered kernel-checked theorem in `LeanNative.Proofs`. -/
 def isRegisteredTheorem (thmName : String) : Bool :=

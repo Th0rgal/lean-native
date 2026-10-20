@@ -261,102 +261,33 @@ private theorem liftBinOpIdem (op : BinOp)
 theorem rewriteBinOpStep_sound (op : BinOp) (lhs rhs : ScalarExpr) :
     ScalarExprEquiv (.binOp op lhs rhs) (rewriteBinOpStep op lhs rhs) := by
   intro env
-  cases op with
-  | add =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [liftBinOpIdR .add 0 evalBinOp_add_zero]
-    · rw [if_neg h1]
-      by_cases h2 : lhs = .constU64 0
-      · subst h2; simp [liftBinOpIdL .add 0 evalBinOp_zero_add]
-      · rw [if_neg h2]
-  | sub =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [liftBinOpIdR .sub 0 evalBinOp_sub_zero]
-    · rw [if_neg h1]
-  | mul =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 1
-    · subst h1; simp [liftBinOpIdR .mul 1 evalBinOp_mul_one]
-    · rw [if_neg h1]
-      by_cases h2 : lhs = .constU64 1
-      · subst h2; simp [liftBinOpIdL .mul 1 evalBinOp_one_mul]
-      · rw [if_neg h2]
-        by_cases h3 : rhs = .constU64 2
-        · subst h3; simp [liftBinOpShiftR .mul .shl 2 1 evalBinOp_mul_two]
-        · rw [if_neg h3]
-          by_cases h4 : rhs = .constU64 4
-          · subst h4; simp [liftBinOpShiftR .mul .shl 4 2 evalBinOp_mul_four]
-          · rw [if_neg h4]
-            by_cases h5 : rhs = .constU64 8
-            · subst h5; simp [liftBinOpShiftR .mul .shl 8 3 evalBinOp_mul_eight]
-            · rw [if_neg h5]
-              by_cases h6 : rhs = .constU64 16
-              · subst h6; simp [liftBinOpShiftR .mul .shl 16 4 evalBinOp_mul_sixteen]
-              · rw [if_neg h6]
-                by_cases h7 : rhs = .constU64 32
-                · subst h7; simp [liftBinOpShiftR .mul .shl 32 5 evalBinOp_mul_thirtytwo]
-                · rw [if_neg h7]
-                  by_cases h8 : lhs = .constU64 2
-                  · subst h8; simp [liftBinOpShiftL .mul .shl 2 1 evalBinOp_two_mul]
-                  · rw [if_neg h8]
-                    by_cases h9 : lhs = .constU64 4
-                    · subst h9; simp [liftBinOpShiftL .mul .shl 4 2 evalBinOp_four_mul]
-                    · rw [if_neg h9]
-                      by_cases h10 : lhs = .constU64 8
-                      · subst h10; simp [liftBinOpShiftL .mul .shl 8 3 evalBinOp_eight_mul]
-                      · rw [if_neg h10]
-  | div =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 1
-    · subst h1; simp [liftBinOpIdR .div 1 evalBinOp_div_one]
-    · rw [if_neg h1]
-      by_cases h2 : rhs = .constU64 2
-      · subst h2; simp [liftBinOpShiftR .div .shr 2 1 evalBinOp_div_two]
-      · rw [if_neg h2]
-        by_cases h3 : rhs = .constU64 4
-        · subst h3; simp [liftBinOpShiftR .div .shr 4 2 evalBinOp_div_four]
-        · rw [if_neg h3]
-          by_cases h4 : rhs = .constU64 8
-          · subst h4; simp [liftBinOpShiftR .div .shr 8 3 evalBinOp_div_eight]
-          · rw [if_neg h4]
-  | shl =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [liftBinOpIdR .shl 0 evalBinOp_shl_zero]
-    · rw [if_neg h1]
-  | shr =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [liftBinOpIdR .shr 0 evalBinOp_shr_zero]
-    · rw [if_neg h1]
-  | bitXor =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [liftBinOpIdR .bitXor 0 evalBinOp_xor_zero]
-    · rw [if_neg h1]
-      by_cases h2 : lhs = .constU64 0
-      · subst h2; simp [liftBinOpIdL .bitXor 0 evalBinOp_zero_xor]
-      · rw [if_neg h2]
-  | bitAnd =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : lhs = rhs
-    · subst h1; simp [liftBinOpIdem .bitAnd evalBinOp_and_self]
-    · rw [if_neg h1]
-  | bitOr =>
-    simp only [rewriteBinOpStep]
-    by_cases h1 : lhs = rhs
-    · subst h1; simp [liftBinOpIdem .bitOr evalBinOp_or_self]
-    · rw [if_neg h1]
-      by_cases h2 : rhs = .constU64 0
-      · subst h2; simp [liftBinOpIdR .bitOr 0 evalBinOp_or_zero]
-      · rw [if_neg h2]
-        by_cases h3 : lhs = .constU64 0
-        · subst h3; simp [liftBinOpIdL .bitOr 0 evalBinOp_zero_or]
-        · rw [if_neg h3]
-  | mod | sar | eq | lt | le | addChecked256 | subChecked256 | mulChecked256 =>
-    rfl
+  have h1 := liftBinOpIdR .add 0 evalBinOp_add_zero env lhs
+  have h2 := liftBinOpIdL .add 0 evalBinOp_zero_add env rhs
+  have h3 := liftBinOpIdR .sub 0 evalBinOp_sub_zero env lhs
+  have h4 := liftBinOpIdR .mul 1 evalBinOp_mul_one env lhs
+  have h5 := liftBinOpIdL .mul 1 evalBinOp_one_mul env rhs
+  have h6 := liftBinOpShiftR .mul .shl 2 1 evalBinOp_mul_two env lhs
+  have h7 := liftBinOpShiftR .mul .shl 4 2 evalBinOp_mul_four env lhs
+  have h8 := liftBinOpShiftR .mul .shl 8 3 evalBinOp_mul_eight env lhs
+  have h9 := liftBinOpShiftR .mul .shl 16 4 evalBinOp_mul_sixteen env lhs
+  have h10 := liftBinOpShiftR .mul .shl 32 5 evalBinOp_mul_thirtytwo env lhs
+  have h11 := liftBinOpShiftL .mul .shl 2 1 evalBinOp_two_mul env rhs
+  have h12 := liftBinOpShiftL .mul .shl 4 2 evalBinOp_four_mul env rhs
+  have h13 := liftBinOpShiftL .mul .shl 8 3 evalBinOp_eight_mul env rhs
+  have h14 := liftBinOpIdR .div 1 evalBinOp_div_one env lhs
+  have h15 := liftBinOpShiftR .div .shr 2 1 evalBinOp_div_two env lhs
+  have h16 := liftBinOpShiftR .div .shr 4 2 evalBinOp_div_four env lhs
+  have h17 := liftBinOpShiftR .div .shr 8 3 evalBinOp_div_eight env lhs
+  have h18 := liftBinOpIdR .shl 0 evalBinOp_shl_zero env lhs
+  have h19 := liftBinOpIdR .shr 0 evalBinOp_shr_zero env lhs
+  have h20 := liftBinOpIdR .bitXor 0 evalBinOp_xor_zero env lhs
+  have h21 := liftBinOpIdL .bitXor 0 evalBinOp_zero_xor env rhs
+  have h22 := liftBinOpIdem .bitAnd evalBinOp_and_self env lhs
+  have h23 := liftBinOpIdem .bitOr evalBinOp_or_self env lhs
+  have h24 := liftBinOpIdR .bitOr 0 evalBinOp_or_zero env lhs
+  have h25 := liftBinOpIdL .bitOr 0 evalBinOp_zero_or env rhs
+  cases op <;> simp only [rewriteBinOpStep] <;>
+    repeat (first | rfl | (split <;> first | (subst ‹_›; assumption) | skip))
 
 theorem rewriteSelectStep_sound (cond thenVal elseVal : ScalarExpr) :
     ScalarExprEquiv (.select cond thenVal elseVal) (rewriteSelectStep cond thenVal elseVal) := by
@@ -449,91 +380,49 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
       evalCode fuel env st (rewriteCodePeephole c) = evalCode fuel env st c := by
   induction c with
   | letBind dst ty val k ih =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode, evalExpr_optimizeExpr_eq]
-    cases evalExpr env st val with
-    | error err => rfl
-    | ok pair => exact ih fuel (env.bind dst pair.1) pair.2
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode, evalExpr_optimizeExpr_eq]
+    cases evalExpr env st val with | error _ => rfl | ok pair => exact ih fuel (env.bind dst pair.1) pair.2
   | rawStore ptrVar idxVar valVar elemTy k ih =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode]
-    cases env ptrVar with
-    | none => rfl
-    | some pval =>
-      cases env idxVar with
-      | none => cases pval <;> rfl
-      | some ival =>
-        cases env valVar with
-        | none => cases pval <;> cases ival <;> rfl
-        | some vval =>
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
+    cases env ptrVar with | none => rfl | some pval =>
+      cases env idxVar with | none => cases pval <;> rfl | some ival =>
+        cases env valVar with | none => cases pval <;> cases ival <;> rfl | some vval =>
           cases pval <;> cases ival <;> cases vval <;> try rfl
-          all_goals
-            simp only
-            cases st.writeElemExclusive _ _ _ with
-            | error err => rfl
-            | ok st1 => exact ih fuel env st1
+          all_goals (simp only; cases st.writeElemExclusive _ _ _ with | error _ => rfl | ok st1 => exact ih fuel env st1)
   | incRef objVar count k ih =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode]
-    exact ih fuel env st
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel env st
   | decRef objVar count k ih =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode]
-    exact ih fuel env st
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel env st
   | ite condVar thenBranch elseBranch iht ihe =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode]
-    cases env condVar with
-    | none => rfl
-    | some cval =>
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
+    cases env condVar with | none => rfl | some cval =>
       cases cval with
-      | bool b =>
-        cases b with
-        | true => exact iht fuel env st
-        | false => exact ihe fuel env st
+      | bool b => cases b with | true => exact iht fuel env st | false => exact ihe fuel env st
       | u64 n =>
-        simp only
-        by_cases hn : (n != 0) = true
+        simp only; by_cases hn : (n != 0) = true
         · rw [if_pos hn, if_pos hn]; exact iht fuel env st
         · rw [if_neg hn, if_neg hn]; exact ihe fuel env st
       | u256 w =>
-        simp only
-        by_cases hw : (w != UInt256.zero) = true
+        simp only; by_cases hw : (w != UInt256.zero) = true
         · rw [if_pos hw, if_pos hw]; exact iht fuel env st
         · rw [if_neg hw, if_neg hw]; exact ihe fuel env st
       | _ => rfl
   | seqFor idxVar loVar hiVar accVar accInit accTy stepBody k ihs ihk =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode]
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
     have hstep : (fun stepEnv stepSt => evalCode fuel stepEnv stepSt (rewriteCodePeephole stepBody)) =
                  (fun stepEnv stepSt => evalCode fuel stepEnv stepSt stepBody) := by
-      funext stepEnv stepSt
-      exact ihs fuel stepEnv stepSt
+      funext stepEnv stepSt; exact ihs fuel stepEnv stepSt
     rw [hstep]
-    cases env loVar with
-    | none => rfl
-    | some loval =>
-      cases env hiVar with
-      | none => cases loval <;> rfl
-      | some hival =>
-        cases env accInit with
-        | none => cases loval <;> cases hival <;> rfl
-        | some initVal =>
+    cases env loVar with | none => rfl | some loval =>
+      cases env hiVar with | none => cases loval <;> rfl | some hival =>
+        cases env accInit with | none => cases loval <;> cases hival <;> rfl | some initVal =>
           cases loval <;> cases hival <;> try rfl
-          simp only
-          cases evalSeqLoop _ _ idxVar accVar initVal env st (fun stepEnv stepSt => evalCode fuel stepEnv stepSt stepBody) with
-          | error err => rfl
-          | ok pair => exact ihk fuel (env.bind accVar pair.1) pair.2
+          simp only; cases evalSeqLoop _ _ idxVar accVar initVal env st _ with
+          | error _ => rfl | ok pair => exact ihk fuel (env.bind accVar pair.1) pair.2
   | parFor outVar lenVar inputs elemTy kernel k ih =>
-    intro fuel env st
-    rw [rewriteCodePeephole, evalCode, evalCode]
-    exact ih fuel (env.bind outVar (.sarrayId 0)) st
-  | ret v =>
-    intro fuel env st
-    rfl
-  | unreachable =>
-    intro fuel env st
-    rfl
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel (env.bind outVar (.sarrayId 0)) st
+  | ret _ => intro _ _ _; rfl
+  | unreachable => intro _ _ _; rfl
 
 /-- End-to-end recursive `LNIRCode` pass refinement theorem (`rewriteCodePeephole_refines`):
     applying `rewriteCodePeephole` across an entire `LNIRCode` block refines the original code. -/

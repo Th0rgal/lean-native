@@ -305,315 +305,139 @@ partial def scalarExprIs256Bit : ScalarExpr → EmitM Bool
     let bc ← scalarExprIs256Bit c
     return ba || bb || bc
 
-/-- Lower a `ScalarExpr` into `i256` SSA instructions, returning the resulting `i256` SSA value string. -/
-partial def emitScalarExpr256 (e : ScalarExpr) : EmitM String := do
+abbrev LNIRScalarExpr := ScalarExpr
+
+private def emitChecked256Op (opName pfx lVal rVal res : String) : EmitM String := do
+  let ov ← freshTmp (pfx ++ "_ov")
+  let flag ← freshTmp (pfx ++ "_flag")
+  let trapLbl ← freshLabel (pfx ++ "_trap")
+  let okLbl ← freshLabel (pfx ++ "_ok")
+  emitLine s!"  {ov} = call \{ i256, i1 } @llvm.{opName}.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+  emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
+  emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
+  emitLine s!"{trapLbl}:"
+  emitLine "  call void @llvm.trap()"
+  emitLine "  unreachable"
+  emitLine s!"{okLbl}:"
+  emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
+  return res
+
+partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : LNIRScalarExpr) : EmitM String := do
+  let is256 := tyStr == "i256"
+  let sfx := if is256 then "256" else ""
+  let emitSub (x : LNIRScalarExpr) : EmitM String := emitScalarExprWithWidth tyStr shiftMask x
+  let emit256 (x : LNIRScalarExpr) : EmitM String := emitScalarExprWithWidth "i256" "255" x
   match e with
   | .constU64 v =>
-    let res ← freshTmp "c256"
-    emitLine s!"  {res} = add i256 0, {v}"
-    return res
+    if is256 then
+      let res ← freshTmp "c256"
+      emitLine s!"  {res} = add i256 0, {v}"
+      return res
+    else return s!"{v}"
   | .constBool b =>
     let bit := if b then "1" else "0"
-    let res ← freshTmp "b256"
-    emitLine s!"  {res} = add i256 0, {bit}"
-    return res
+    if is256 then
+      let res ← freshTmp "b256"
+      emitLine s!"  {res} = add i256 0, {bit}"
+      return res
+    else return bit
   | .var id =>
-    loadVarAsI256 id
+    if is256 then loadVarAsI256 id else loadVarAsI64 id
   | .binOp op lhs rhs =>
-    let lVal ← emitScalarExpr256 lhs
-    let rVal ← emitScalarExpr256 rhs
-    let res ← freshTmp "alu256"
+    let lVal ← emitSub lhs
+    let rVal ← emitSub rhs
+    let res ← freshTmp ("alu" ++ sfx)
+    let emitDivRem (llvmOp pfx : String) : EmitM String := do
+      match is256, rhs with
+      | false, .constU64 d =>
+        if d != 0 then emitLine s!"  {res} = {llvmOp} i64 {lVal}, {rVal}"
+        else emitLine s!"  {res} = add i64 0, 0"
+        return res
+      | _, _ =>
+        let safeR ← freshTmp (pfx ++ sfx ++ "_rhs")
+        let isZero ← freshTmp (pfx ++ sfx ++ "_z")
+        emitLine s!"  {isZero} = icmp eq {tyStr} {rVal}, 0"
+        emitLine s!"  {safeR} = select i1 {isZero}, {tyStr} 1, {tyStr} {rVal}"
+        emitLine s!"  {res} = {llvmOp} {tyStr} {lVal}, {safeR}"
+        return res
+    let emitShift (llvmOp pfx : String) : EmitM String := do
+      match is256, rhs with
+      | false, .constU64 k =>
+        emitLine s!"  {res} = {llvmOp} i64 {lVal}, {k &&& 63}"
+        return res
+      | _, _ =>
+        let masked ← freshTmp (pfx ++ sfx ++ "_amt")
+        emitLine s!"  {masked} = and {tyStr} {rVal}, {shiftMask}"
+        emitLine s!"  {res} = {llvmOp} {tyStr} {lVal}, {masked}"
+        return res
+    let emitCmp (pred sfxCmp : String) : EmitM String := do
+      let cmp ← freshTmp ("cmp" ++ sfx ++ "_" ++ sfxCmp)
+      emitLine s!"  {cmp} = icmp {pred} {tyStr} {lVal}, {rVal}"
+      emitLine s!"  {res} = zext i1 {cmp} to {tyStr}"
+      return res
     match op with
-    | .add =>
-      emitLine s!"  {res} = add i256 {lVal}, {rVal}"
-      return res
-    | .sub =>
-      emitLine s!"  {res} = sub i256 {lVal}, {rVal}"
-      return res
-    | .mul =>
-      emitLine s!"  {res} = mul i256 {lVal}, {rVal}"
-      return res
-    | .div =>
-      let safeR ← freshTmp "div256_rhs"
-      let isZero ← freshTmp "div256_z"
-      emitLine s!"  {isZero} = icmp eq i256 {rVal}, 0"
-      emitLine s!"  {safeR} = select i1 {isZero}, i256 1, i256 {rVal}"
-      emitLine s!"  {res} = udiv i256 {lVal}, {safeR}"
-      return res
-    | .mod =>
-      let safeR ← freshTmp "mod256_rhs"
-      let isZero ← freshTmp "mod256_z"
-      emitLine s!"  {isZero} = icmp eq i256 {rVal}, 0"
-      emitLine s!"  {safeR} = select i1 {isZero}, i256 1, i256 {rVal}"
-      emitLine s!"  {res} = urem i256 {lVal}, {safeR}"
-      return res
-    | .bitAnd =>
-      emitLine s!"  {res} = and i256 {lVal}, {rVal}"
-      return res
-    | .bitOr =>
-      emitLine s!"  {res} = or i256 {lVal}, {rVal}"
-      return res
-    | .bitXor =>
-      emitLine s!"  {res} = xor i256 {lVal}, {rVal}"
-      return res
-    | .shl =>
-      let masked ← freshTmp "sh256_amt"
-      emitLine s!"  {masked} = and i256 {rVal}, 255"
-      emitLine s!"  {res} = shl i256 {lVal}, {masked}"
-      return res
-    | .shr =>
-      let masked ← freshTmp "sh256_amt"
-      emitLine s!"  {masked} = and i256 {rVal}, 255"
-      emitLine s!"  {res} = lshr i256 {lVal}, {masked}"
-      return res
-    | .sar =>
-      let masked ← freshTmp "sar256_amt"
-      emitLine s!"  {masked} = and i256 {rVal}, 255"
-      emitLine s!"  {res} = ashr i256 {lVal}, {masked}"
-      return res
-    | .eq =>
-      let cmp ← freshTmp "cmp256_eq"
-      emitLine s!"  {cmp} = icmp eq i256 {lVal}, {rVal}"
-      emitLine s!"  {res} = zext i1 {cmp} to i256"
-      return res
-    | .lt =>
-      let cmp ← freshTmp "cmp256_lt"
-      emitLine s!"  {cmp} = icmp ult i256 {lVal}, {rVal}"
-      emitLine s!"  {res} = zext i1 {cmp} to i256"
-      return res
-    | .le =>
-      let cmp ← freshTmp "cmp256_le"
-      emitLine s!"  {cmp} = icmp ule i256 {lVal}, {rVal}"
-      emitLine s!"  {res} = zext i1 {cmp} to i256"
-      return res
+    | .add    => emitLine s!"  {res} = add {tyStr} {lVal}, {rVal}"; return res
+    | .sub    => emitLine s!"  {res} = sub {tyStr} {lVal}, {rVal}"; return res
+    | .mul    => emitLine s!"  {res} = mul {tyStr} {lVal}, {rVal}"; return res
+    | .bitAnd => emitLine s!"  {res} = and {tyStr} {lVal}, {rVal}"; return res
+    | .bitOr  => emitLine s!"  {res} = or {tyStr} {lVal}, {rVal}"; return res
+    | .bitXor => emitLine s!"  {res} = xor {tyStr} {lVal}, {rVal}"; return res
+    | .div    => emitDivRem "udiv" "div"
+    | .mod    => emitDivRem "urem" "mod"
+    | .shl    => emitShift "shl" "sh"
+    | .shr    => emitShift "lshr" "sh"
+    | .sar    => emitShift "ashr" "sar"
+    | .eq     => emitCmp "eq" "eq"
+    | .lt     => emitCmp "ult" "lt"
+    | .le     => emitCmp "ule" "le"
     | .addChecked256 =>
-      let ov ← freshTmp "uadd_ov"
-      let flag ← freshTmp "uadd_flag"
-      let trapLbl ← freshLabel "uadd_trap"
-      let okLbl ← freshLabel "uadd_ok"
-      emitLine s!"  {ov} = call \{ i256, i1 } @llvm.uadd.with.overflow.i256(i256 {lVal}, i256 {rVal})"
-      emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
-      emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
-      emitLine s!"{trapLbl}:"
-      emitLine "  call void @llvm.trap()"
-      emitLine "  unreachable"
-      emitLine s!"{okLbl}:"
-      emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
-      return res
+      if is256 then emitChecked256Op "uadd" "uadd" lVal rVal res
+      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
     | .subChecked256 =>
-      let ov ← freshTmp "usub_ov"
-      let flag ← freshTmp "usub_flag"
-      let trapLbl ← freshLabel "usub_trap"
-      let okLbl ← freshLabel "usub_ok"
-      emitLine s!"  {ov} = call \{ i256, i1 } @llvm.usub.with.overflow.i256(i256 {lVal}, i256 {rVal})"
-      emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
-      emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
-      emitLine s!"{trapLbl}:"
-      emitLine "  call void @llvm.trap()"
-      emitLine "  unreachable"
-      emitLine s!"{okLbl}:"
-      emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
-      return res
+      if is256 then emitChecked256Op "usub" "usub" lVal rVal res
+      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
     | .mulChecked256 =>
-      let ov ← freshTmp "umul_ov"
-      let flag ← freshTmp "umul_flag"
-      let trapLbl ← freshLabel "umul_trap"
-      let okLbl ← freshLabel "umul_ok"
-      emitLine s!"  {ov} = call \{ i256, i1 } @llvm.umul.with.overflow.i256(i256 {lVal}, i256 {rVal})"
-      emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
-      emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
-      emitLine s!"{trapLbl}:"
-      emitLine "  call void @llvm.trap()"
-      emitLine "  unreachable"
-      emitLine s!"{okLbl}:"
-      emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
-      return res
+      if is256 then emitChecked256Op "umul" "umul" lVal rVal res
+      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
   | .unaryOp op arg =>
-    let aVal ← emitScalarExpr256 arg
-    let res ← freshTmp "un256"
-    match op with
-    | .not =>
-      emitLine s!"  {res} = xor i256 {aVal}, -1"
+    if !is256 && op == .clz256 then
+      let v256 ← emit256 e
+      let res ← freshTmp "un"
+      emitLine s!"  {res} = trunc i256 {v256} to i64"
       return res
-    | .neg =>
-      emitLine s!"  {res} = sub i256 0, {aVal}"
-      return res
-    | .clz256 =>
-      emitLine s!"  {res} = call i256 @llvm.ctlz.i256(i256 {aVal}, i1 false)"
-      return res
+    else
+      let aVal ← emitSub arg
+      let res ← freshTmp ("un" ++ sfx)
+      match op with
+      | .not    => emitLine s!"  {res} = xor {tyStr} {aVal}, -1"; return res
+      | .neg    => emitLine s!"  {res} = sub {tyStr} 0, {aVal}"; return res
+      | .clz256 => emitLine s!"  {res} = call i256 @llvm.ctlz.i256(i256 {aVal}, i1 false)"; return res
   | .select cond thenVal elseVal =>
-    let cVal ← emitScalarExpr256 cond
-    let tVal ← emitScalarExpr256 thenVal
-    let eVal ← emitScalarExpr256 elseVal
-    let cBool ← freshTmp "sel256_cond"
-    let res ← freshTmp "sel256"
-    emitLine s!"  {cBool} = icmp ne i256 {cVal}, 0"
-    emitLine s!"  {res} = select i1 {cBool}, i256 {tVal}, i256 {eVal}"
+    let cVal ← emitSub cond
+    let tVal ← emitSub thenVal
+    let eVal ← emitSub elseVal
+    let cBool ← freshTmp ("sel" ++ sfx ++ "_cond")
+    let res ← freshTmp ("sel" ++ sfx)
+    emitLine s!"  {cBool} = icmp ne {tyStr} {cVal}, 0"
+    emitLine s!"  {res} = select i1 {cBool}, {tyStr} {tVal}, {tyStr} {eVal}"
     return res
   | .fma a b c =>
-    let aVal ← emitScalarExpr256 a
-    let bVal ← emitScalarExpr256 b
-    let cVal ← emitScalarExpr256 c
-    let mulTmp ← freshTmp "fma256_mul"
-    let res ← freshTmp "fma256_add"
-    emitLine s!"  {mulTmp} = mul i256 {aVal}, {bVal}"
-    emitLine s!"  {res} = add i256 {mulTmp}, {cVal}"
+    let aVal ← emitSub a
+    let bVal ← emitSub b
+    let cVal ← emitSub c
+    let mulTmp ← freshTmp ("fma" ++ sfx ++ "_mul")
+    let res ← freshTmp ("fma" ++ sfx ++ "_add")
+    emitLine s!"  {mulTmp} = mul {tyStr} {aVal}, {bVal}"
+    emitLine s!"  {res} = add {tyStr} {mulTmp}, {cVal}"
     return res
 
+/-- Lower a `ScalarExpr` into `i256` SSA instructions, returning the resulting `i256` SSA value string. -/
+def emitScalarExpr256 (e : LNIRScalarExpr) (s : EmitState) : String × EmitState :=
+  emitScalarExprWithWidth "i256" "255" e s
+
 /-- Lower a `ScalarExpr` into `i64` SSA instructions, returning the resulting `i64` SSA value string. -/
-partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
-  let st ← get
-  let opt := st.optimized
-  match e with
-  | .constU64 v =>
-    return s!"{v}"
-  | .constBool b =>
-    return if b then "1" else "0"
-  | .var id =>
-    loadVarAsI64 id
-  | .binOp op lhs rhs =>
-    let lVal ← emitScalarExpr lhs
-    let rVal ← emitScalarExpr rhs
-    let res ← freshTmp "alu"
-    match op with
-    | .add =>
-      emitLine s!"  {res} = add i64 {lVal}, {rVal}"
-      return res
-    | .sub =>
-      emitLine s!"  {res} = sub i64 {lVal}, {rVal}"
-      return res
-    | .mul =>
-      emitLine s!"  {res} = mul i64 {lVal}, {rVal}"
-      return res
-    | .div =>
-      match rhs with
-      | .constU64 d =>
-        if d != 0 then
-          emitLine s!"  {res} = udiv i64 {lVal}, {rVal}"
-          return res
-        else
-          emitLine s!"  {res} = add i64 0, 0"
-          return res
-      | _ =>
-        let safeR ← freshTmp "div_rhs"
-        let isZero ← freshTmp "div_z"
-        emitLine s!"  {isZero} = icmp eq i64 {rVal}, 0"
-        emitLine s!"  {safeR} = select i1 {isZero}, i64 1, i64 {rVal}"
-        emitLine s!"  {res} = udiv i64 {lVal}, {safeR}"
-        return res
-    | .mod =>
-      match rhs with
-      | .constU64 d =>
-        if d != 0 then
-          emitLine s!"  {res} = urem i64 {lVal}, {rVal}"
-          return res
-        else
-          emitLine s!"  {res} = add i64 0, 0"
-          return res
-      | _ =>
-        let safeR ← freshTmp "mod_rhs"
-        let isZero ← freshTmp "mod_z"
-        emitLine s!"  {isZero} = icmp eq i64 {rVal}, 0"
-        emitLine s!"  {safeR} = select i1 {isZero}, i64 1, i64 {rVal}"
-        emitLine s!"  {res} = urem i64 {lVal}, {safeR}"
-        return res
-    | .bitAnd =>
-      emitLine s!"  {res} = and i64 {lVal}, {rVal}"
-      return res
-    | .bitOr =>
-      emitLine s!"  {res} = or i64 {lVal}, {rVal}"
-      return res
-    | .bitXor =>
-      emitLine s!"  {res} = xor i64 {lVal}, {rVal}"
-      return res
-    | .shl =>
-      match rhs with
-      | .constU64 k =>
-        let sh := k &&& 63
-        emitLine s!"  {res} = shl i64 {lVal}, {sh}"
-        return res
-      | _ =>
-        let masked ← freshTmp "sh_amt"
-        emitLine s!"  {masked} = and i64 {rVal}, 63"
-        emitLine s!"  {res} = shl i64 {lVal}, {masked}"
-        return res
-    | .shr =>
-      match rhs with
-      | .constU64 k =>
-        let sh := k &&& 63
-        emitLine s!"  {res} = lshr i64 {lVal}, {sh}"
-        return res
-      | _ =>
-        let masked ← freshTmp "sh_amt"
-        emitLine s!"  {masked} = and i64 {rVal}, 63"
-        emitLine s!"  {res} = lshr i64 {lVal}, {masked}"
-        return res
-    | .sar =>
-      match rhs with
-      | .constU64 k =>
-        let sh := k &&& 63
-        emitLine s!"  {res} = ashr i64 {lVal}, {sh}"
-        return res
-      | _ =>
-        let masked ← freshTmp "sar_amt"
-        emitLine s!"  {masked} = and i64 {rVal}, 63"
-        emitLine s!"  {res} = ashr i64 {lVal}, {masked}"
-        return res
-    | .eq =>
-      let cmp ← freshTmp "cmp_eq"
-      emitLine s!"  {cmp} = icmp eq i64 {lVal}, {rVal}"
-      emitLine s!"  {res} = zext i1 {cmp} to i64"
-      return res
-    | .lt =>
-      let cmp ← freshTmp "cmp_lt"
-      emitLine s!"  {cmp} = icmp ult i64 {lVal}, {rVal}"
-      emitLine s!"  {res} = zext i1 {cmp} to i64"
-      return res
-    | .le =>
-      let cmp ← freshTmp "cmp_le"
-      emitLine s!"  {cmp} = icmp ule i64 {lVal}, {rVal}"
-      emitLine s!"  {res} = zext i1 {cmp} to i64"
-      return res
-    | .addChecked256 | .subChecked256 | .mulChecked256 =>
-      let v256 ← emitScalarExpr256 e
-      emitLine s!"  {res} = trunc i256 {v256} to i64"
-      return res
-  | .unaryOp op arg =>
-    match op with
-    | .not =>
-      let aVal ← emitScalarExpr arg
-      let res ← freshTmp "un"
-      emitLine s!"  {res} = xor i64 {aVal}, -1"
-      return res
-    | .neg =>
-      let aVal ← emitScalarExpr arg
-      let res ← freshTmp "un"
-      emitLine s!"  {res} = sub i64 0, {aVal}"
-      return res
-    | .clz256 =>
-      let v256 ← emitScalarExpr256 e
-      let res ← freshTmp "un"
-      emitLine s!"  {res} = trunc i256 {v256} to i64"
-      return res
-  | .select cond thenVal elseVal =>
-    let cVal ← emitScalarExpr cond
-    let tVal ← emitScalarExpr thenVal
-    let eVal ← emitScalarExpr elseVal
-    let cBool ← freshTmp "sel_cond"
-    let res ← freshTmp "sel"
-    emitLine s!"  {cBool} = icmp ne i64 {cVal}, 0"
-    emitLine s!"  {res} = select i1 {cBool}, i64 {tVal}, i64 {eVal}"
-    return res
-  | .fma a b c =>
-    let aVal ← emitScalarExpr a
-    let bVal ← emitScalarExpr b
-    let cVal ← emitScalarExpr c
-    let mulTmp ← freshTmp "fma_mul"
-    let res ← freshTmp "fma_add"
-    let mulFlags := if opt then "mul i64" else "mul i64"
-    emitLine s!"  {mulTmp} = {mulFlags} {aVal}, {bVal}"
-    emitLine s!"  {res} = add i64 {mulTmp}, {cVal}"
-    return res
+def emitScalarExpr (e : LNIRScalarExpr) (s : EmitState) : String × EmitState :=
+  emitScalarExprWithWidth "i64" "63" e s
 
 /-- Lower an `LNIRExpr` and store its result into `%slot_v{dst}`. -/
 def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := do

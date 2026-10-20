@@ -41,12 +41,12 @@ if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> turbo-lean audit-spec: 30/30 tight in Spec.lean & 0 vacuous specs in ResearchGovernor.lean!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (136 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (138 theorems) & Self-Tests..."
 $CORE_BIN self-test
 $CORE_BIN governor self-test
 $FULL_BIN self-test
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 136" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 138" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."

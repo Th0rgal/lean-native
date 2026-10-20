@@ -324,47 +324,46 @@ theorem unboxedLoopAccumulator_sim (count curIdx : Nat) (idxVar accVar : VarId)
 
 /-! ## 4. End-to-End `CodeRefines` Theorems for Tuple SROA & Preheader Exclusivity Hoisting -/
 
-/-- End-to-end `CodeRefines` theorem for Tuple Unboxing / SROA on field 0 in a `letBind` chain (`unboxTupleLetChain_refines`):
-    forwarding `.projTuple tVar 0` to `.scalar (.var v0)` after `.mkTuple [v0, v1]` refines the original `LNIRCode` block
-    for any continuation `k` whenever `(v0 == tVar) = false`. -/
+private theorem unboxTupleLetChain_gen
+    (tVar dst v0 v1 targetVar : VarId) (idx : Nat) (tupTy dstTy : LNIRType) (k : LNIRCode)
+    (hstep : ∀ (env : VarEnv) (st : HeapState) (val0 val1 : Val),
+      env v0 = some val0 → env v1 = some val1 →
+      evalExpr (env.bind tVar (.tuple [val0, val1])) st (.projTuple tVar idx) =
+      evalExpr (env.bind tVar (.tuple [val0, val1])) st (.scalar (.var targetVar))) :
+    CodeRefines
+      (.letBind tVar tupTy (.mkTuple [v0, v1]) (.letBind dst dstTy (.projTuple tVar idx) k))
+      (.letBind tVar tupTy (.mkTuple [v0, v1]) (.letBind dst dstTy (.scalar (.var targetVar)) k)) := by
+  intro fuel env st v st' hsrc
+  cases hv0 : env v0
+  · simp only [evalCode, evalExpr, evalVarList, hv0] at hsrc; contradiction
+  · cases hv1 : env v1
+    · simp only [evalCode, evalExpr, evalVarList, hv0, hv1] at hsrc; contradiction
+    · rename_i val0 val1
+      simp only [evalCode] at hsrc ⊢
+      have hmk : evalExpr env st (.mkTuple [v0, v1]) = .ok (.tuple [val0, val1], st) := by
+        simp only [evalExpr, evalVarList, hv0, hv1]
+      rw [hmk] at hsrc ⊢; simp only at hsrc ⊢
+      rw [← hstep env st val0 val1 hv0 hv1]; exact hsrc
+
+/-- End-to-end `CodeRefines` theorem for Tuple Unboxing / SROA on field 0 in a `letBind` chain (`unboxTupleLetChain_refines`). -/
 theorem unboxTupleLetChain_refines
     (tVar dst v0 v1 : VarId) (tupTy dstTy : LNIRType) (k : LNIRCode)
     (hne : (v0 == tVar) = false) :
     CodeRefines
-      (.letBind tVar tupTy (.mkTuple [v0, v1])
-        (.letBind dst dstTy (.projTuple tVar 0) k))
-      (.letBind tVar tupTy (.mkTuple [v0, v1])
-        (.letBind dst dstTy (.scalar (.var v0)) k)) := by
-  intro fuel env st v st' hsrc
-  simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
-  cases hv0 : env v0 with
-  | none => simp only [hv0] at hsrc; contradiction
-  | some val0 =>
-    cases hv1 : env v1 with
-    | none => simp only [hv0, hv1] at hsrc; contradiction
-    | some val1 =>
-      simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne] at hsrc ⊢
-      exact hsrc
+      (.letBind tVar tupTy (.mkTuple [v0, v1]) (.letBind dst dstTy (.projTuple tVar 0) k))
+      (.letBind tVar tupTy (.mkTuple [v0, v1]) (.letBind dst dstTy (.scalar (.var v0)) k)) :=
+  unboxTupleLetChain_gen tVar dst v0 v1 v0 0 tupTy dstTy k fun env _ val0 _ hv0 _ => by
+    simp only [evalExpr, evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne, hv0]; rfl
 
 /-- End-to-end `CodeRefines` theorem for Tuple Unboxing / SROA on field 1 in a `letBind` chain (`unboxTupleLetChain1_refines`). -/
 theorem unboxTupleLetChain1_refines
     (tVar dst v0 v1 : VarId) (tupTy dstTy : LNIRType) (k : LNIRCode)
     (hne : (v1 == tVar) = false) :
     CodeRefines
-      (.letBind tVar tupTy (.mkTuple [v0, v1])
-        (.letBind dst dstTy (.projTuple tVar 1) k))
-      (.letBind tVar tupTy (.mkTuple [v0, v1])
-        (.letBind dst dstTy (.scalar (.var v1)) k)) := by
-  intro fuel env st v st' hsrc
-  simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
-  cases hv0 : env v0 with
-  | none => simp only [hv0] at hsrc; contradiction
-  | some val0 =>
-    cases hv1 : env v1 with
-    | none => simp only [hv0, hv1] at hsrc; contradiction
-    | some val1 =>
-      simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne] at hsrc ⊢
-      exact hsrc
+      (.letBind tVar tupTy (.mkTuple [v0, v1]) (.letBind dst dstTy (.projTuple tVar 1) k))
+      (.letBind tVar tupTy (.mkTuple [v0, v1]) (.letBind dst dstTy (.scalar (.var v1)) k)) :=
+  unboxTupleLetChain_gen tVar dst v0 v1 v1 1 tupTy dstTy k fun env _ _ val1 _ hv1 => by
+    simp only [evalExpr, evalScalarExpr, VarEnv.bind_self, VarEnv.bind_ne _ _ _ _ hne, hv1]; rfl
 
 /-- Full Tuple SROA Dead-Allocation Elimination (`unboxTupleDeadElim_refines`):
     because `evalCode` recurses structurally on `LNIRCode` without `fuel = 0` truncation,
@@ -413,36 +412,23 @@ theorem hoistExclusivityPreheader_refines
   cases harr : env arrVar with
   | none => simp only [harr] at hsrc; contradiction
   | some aval =>
-    cases aval with
-    | sarrayId bufId =>
-      simp only [harr] at hsrc ⊢
-      cases hens : st.ensureExclusive bufId with
-      | error err => simp only [hens] at hsrc; contradiction
-      | ok st1 =>
-        simp only [hens] at hsrc ⊢
-        rcases ensureExclusive_post st st1 bufId hens with ⟨hexcl1, ⟨buf1, hfind1⟩⟩
-        have hens1 : st1.ensureExclusive bufId = .ok st1 :=
-          ensureExclusive_of_exclusive st1 bufId buf1 hfind1 hexcl1
-        simp only [VarEnv.bind_self] at hsrc ⊢
-        cases hidx : (env.bind exclVar (.sarrayId bufId)) idxVar with
-        | none => simp only [hidx] at hsrc; contradiction
-        | some ival =>
-          cases hval : (env.bind exclVar (.sarrayId bufId)) valVar with
-          | none => simp only [hidx, hval] at hsrc; contradiction
-          | some vval =>
-            cases ival with
-            | u64 idx =>
-              cases vval with
-              | u64 val =>
-                simp only [hidx, hval, hens1] at hsrc ⊢
-                cases hw : st1.writeElemExclusive bufId idx.toNat val with
-                | error err => simp only [hw] at hsrc; contradiction
-                | ok st2 =>
-                  simp only [hw, varEnv_bind_idem] at hsrc ⊢
-                  exact hsrc
-              | _ => simp only [hidx, hval] at hsrc; contradiction
-            | _ => simp only [hidx, hval] at hsrc; contradiction
-    | _ => simp only [harr] at hsrc; contradiction
+    cases aval <;> try (simp only [harr] at hsrc; contradiction)
+    rename_i bufId; simp only [harr] at hsrc ⊢
+    cases hens : st.ensureExclusive bufId with
+    | error _ => simp only [hens] at hsrc; contradiction
+    | ok st1 =>
+      rcases ensureExclusive_post st st1 bufId hens with ⟨hexcl1, ⟨buf1, hfind1⟩⟩
+      have hens1 := ensureExclusive_of_exclusive st1 bufId buf1 hfind1 hexcl1
+      simp only [hens, VarEnv.bind_self] at hsrc ⊢
+      cases hidx : (env.bind exclVar (.sarrayId bufId)) idxVar with
+      | none => simp only [hidx] at hsrc; contradiction
+      | some ival =>
+        cases hval : (env.bind exclVar (.sarrayId bufId)) valVar with
+        | none => simp only [hidx, hval] at hsrc; contradiction
+        | some vval =>
+          cases ival <;> cases vval <;> try (simp only [hidx, hval] at hsrc; contradiction)
+          simp only [hidx, hval, hens1] at hsrc ⊢
+          cases hw : st1.writeElemExclusive _ _ _ <;> simp only [hw, varEnv_bind_idem] at hsrc ⊢ <;> exact hsrc
 
 namespace LoopOptProofs
   abbrev unboxTupleProj0_sound := @LeanNative.Proofs.unboxTupleProj0_sound
