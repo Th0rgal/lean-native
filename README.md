@@ -1,6 +1,6 @@
 # Lean Native (`lean-native` v0.5)
 
-**Lean Native (`lean-native`)** is a high-performance, formally validated, self-optimizing native compiler and counterexample engine for **Lean 4** (`leanprover/lean4:v4.31.0`) targeting **x86-64**, **ARM64**, **NVIDIA CUDA (MLIR / NVVM / PTX 8.0)**, and **Apple Metal (MSL 3.0)** with native **256-bit EVM/Verity (`u256`/`i256`/`StorageMap`)** support, achieving performance approaching or exceeding optimized Rust/C++ while preserving Lean's semantics through **82 machine-checked kernel proofs** (`0 sorryAx`), a **pinned formal executable specification ([`LeanNative/Spec.lean`](LeanNative/Spec.lean))**, **segregated optimization plugins ([`LeanNative/Transform/Plugins.lean`](LeanNative/Transform/Plugins.lean))**, and **Season 8 `turbo-lean` integration**.
+**Lean Native (`lean-native`)** is a high-performance, formally validated, self-optimizing native compiler and counterexample engine for **Lean 4** (`leanprover/lean4:v4.31.0`) targeting **x86-64**, **ARM64**, **NVIDIA CUDA (MLIR / NVVM / PTX 8.0)**, and **Apple Metal (MSL 3.0)** with native **256-bit EVM/Verity (`u256`/`i256`/`StorageMap`)** support, achieving performance approaching or exceeding optimized Rust/C++ while preserving Lean's semantics through **96 machine-checked kernel proofs** (`0 sorryAx`, `178` total repo theorems verified by `turbo-lean pr-verify`), a **pinned formal executable specification ([`LeanNative/Spec.lean`](LeanNative/Spec.lean))**, **segregated optimization plugins ([`LeanNative/Transform/Plugins.lean`](LeanNative/Transform/Plugins.lean))**, and **Season 8 `turbo-lean` integration**.
 
 ---
 
@@ -32,7 +32,7 @@ See [`benchmarks/BENCHMARK_REPORT.md`](benchmarks/BENCHMARK_REPORT.md) and [`ben
 
 `lean-native` v0.5 adopts the **"Pinned Formal Spec vs. Segregated Optimization Plugin"** architecture of [`Th0rgal/turbo-lean`](https://github.com/Th0rgal/turbo-lean) (Season 8) so any contributor PR or autonomous `autoresearch` experiment can aggressively optimize compiler passes without ever risking soundness regressions:
 
-1. **Pinned Formal Executable Specification ([`LeanNative/Spec.lean`](LeanNative/Spec.lean)) — 15 Laws Theorems (82 Total Kernel Proofs)**:
+1. **Pinned Formal Executable Specification ([`LeanNative/Spec.lean`](LeanNative/Spec.lean)) — 15 Laws Theorems (96 In-Kernel Audited Proofs / 178 Total Repo Theorems)**:
    - Zero `import Lean`, zero `sorryAx`, audited in `0.14 ms` as **15/15 non-vacuous and tight** by `turbo-lean audit-spec LeanNative/Spec.lean`:
      - **Law 1 (Untrusted Optimization Plugin Soundness)**: `untrusted_opt_plugin_tv_gate_sound`, `untrusted_opt_plugin_code_refines`, `untrusted_opt_plugin_timeout_fallback`, `untrusted_opt_plugin_reject_fallback`.
      - **Law 2 (Optimization Pipeline Composition)**: `opt_pipeline_two_step_refines`, `opt_pipeline_chain_refines`.
@@ -46,7 +46,7 @@ See [`benchmarks/BENCHMARK_REPORT.md`](benchmarks/BENCHMARK_REPORT.md) and [`ben
    - Exposes `lean-native-core turbo-plugin` speaking `turbo-lean`'s `ExternalProcessAccelerator` JSONL-stdio protocol (`counterexample_found` / `rewritten_proof` certificates in `< 1 ms`).
    - Integrates `turbo-lean pr-verify --mode untrusted`, `turbo-lean audit-spec`, and `turbo-lean agent-step` into `lean-native pr-verify`.
 4. **Automated 5-Gate CI & Contributor PR Verification ([`.github/workflows/ci.yml`](.github/workflows/ci.yml), [`scripts/ci_verify.sh`](scripts/ci_verify.sh))**:
-   - Automatically verifies: (1) Spec & Test Suite Pinning (`--disallow-spec-changes` on PRs) + `turbo-lean audit-spec`, (2) 82-Theorem In-Kernel Transitive Axiom Audit (`0 sorryAx`), (3) Segregated Optimization Plugins & Adversarial Rejection Gate, (4) Multi-Backend Codegen (`opt -O3`, Apple Metal MSL 3.0, NVIDIA PTX 8.0 `ptxas`), and (5) Orthogonal Native Executable Test Suite (`tests/test_runner.lean`) & Showcase Examples (`examples/*.lean`).
+   - Automatically verifies: (1) Spec & Test Suite Pinning (`--disallow-spec-changes` on PRs) + `turbo-lean audit-spec`, (2) 96-Theorem In-Kernel Transitive Axiom Audit (`0 sorryAx`), (3) Segregated Optimization Plugins & Adversarial Rejection Gate, (4) Multi-Backend Codegen (`opt -O3`, Apple Metal MSL 3.0, NVIDIA PTX 8.0 `ptxas`), and (5) Orthogonal Native Executable Test Suite (`tests/test_runner.lean`) & Showcase Examples (`examples/*.lean`).
 5. **Unified GPU Kernel IR (`GPUIR.lean`), NVIDIA PTX 8.0 (`MLIRGPU.lean`), Apple Metal MSL 3.0 (`Metal.lean`) & 256-Bit EVM Support**:
    - Shared `GPUKernelDescriptor` across CUDA PTX 8.0, MLIR, and Apple Metal 3.0 (`18` kernels including `threadgroup` shared-memory reduction, 16×16 tiled MatMul, 4-limb `ln_u256` EVM batch arithmetic, and parallel FastCheck fuzzing).
 6. **Autonomous Multi-Agent Optimization Loop ([`autoresearch/`](autoresearch/))**:
