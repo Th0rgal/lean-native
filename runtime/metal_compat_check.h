@@ -51,6 +51,15 @@ inline void threadgroup_barrier(int flags) {
     (void)flags;
 }
 
+inline ulong simd_sum(ulong val) {
+    return val;
+}
+
+inline ulong simd_shuffle_xor(ulong val, ushort mask) {
+    (void)mask;
+    return val;
+}
+
 inline uint atomic_fetch_add_explicit(atomic_uint* obj, uint operand, memory_order order) {
     (void)order;
     uint prev = obj ? obj->val : 0u;

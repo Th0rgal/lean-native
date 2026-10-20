@@ -696,7 +696,7 @@ def codeScalarCost (target : SuperoptTarget) : LNIRCode → Nat
   | .rawStore _ _ _ _ k => codeScalarCost target k
   | .incRef _ _ k => codeScalarCost target k
   | .decRef _ _ k => codeScalarCost target k
-  | .ite _ t e => codeScalarCost target t + codeScalarCost target e
+  | .ite _ t e => 4 + codeScalarCost target t + codeScalarCost target e
   | .seqFor _ _ _ _ _ _ step k => codeScalarCost target step + codeScalarCost target k
   | .parFor _ _ _ _ (.customScalar _ _ body) k => scalarExprCost target body + codeScalarCost target k
   | .parFor _ _ _ _ _ k => codeScalarCost target k
@@ -820,7 +820,7 @@ def superoptModuleWithProfile (p : HardwareCostProfile) (m : LNIRModule) : LNIRM
     | .rawStore _ _ _ _ k => codeCostProf k
     | .incRef _ _ k => codeCostProf k
     | .decRef _ _ k => codeCostProf k
-    | .ite _ t e => codeCostProf t + codeCostProf e
+    | .ite _ t e => 4 + codeCostProf t + codeCostProf e
     | .seqFor _ _ _ _ _ _ step k => codeCostProf step + codeCostProf k
     | .parFor _ _ _ _ (.customScalar _ _ body) k => scalarExprCostWithProfile p body + codeCostProf k
     | .parFor _ _ _ _ _ k => codeCostProf k

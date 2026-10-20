@@ -1,0 +1,38 @@
+{
+  "schema_version": "lean-native-hardware-profile-v1",
+  "profile_id": "apple_silicon_m2_metal",
+  "target": "apple_metal",
+  "llvm_target_cpu": "neoverse-v2",
+  "sm_arch": "sm_121",
+  "hardware_metadata": {
+    "host_os": "linux",
+    "host_arch": "aarch64",
+    "cpu_model": "aarch64",
+    "gpu_model": "NVIDIA GB10"
+  },
+  "add_sub_cost": 1,
+  "bitwise_cost": 1,
+  "shift_cost": 1,
+  "cmp_cost": 1,
+  "mul_cost": 5,
+  "div_mod_cost": 36,
+  "fma_cost": 2,
+  "select_cost": 1,
+  "clz256_cost": 2,
+  "add_sub_checked256_cost": 3,
+  "mul_checked256_cost": 5,
+  "min_gpu_elements": 32768,
+  "gpu_block_threads": 256,
+  "matmul_tile_dim": 16,
+  "calibration_receipt": {
+    "measured_ns": {
+      "add_ns": 1.0749,
+      "mul_ns": 0.9844,
+      "div_ns": 5.0215,
+      "fma_ns": 0.5113,
+      "select_ns": 1.0303
+    },
+    "payload_digest_blake2b256": "42786ff45e5c780d1a133bbcc70d766913dfe00d36b56d6bd1e3efb3b28a6a9f",
+    "calibrated_at_utc": "2026-10-20T08:05:45Z"
+  }
+}

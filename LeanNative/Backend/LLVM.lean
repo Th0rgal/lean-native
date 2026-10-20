@@ -486,19 +486,37 @@ partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
       emitLine s!"  {res} = mul i64 {lVal}, {rVal}"
       return res
     | .div =>
-      let safeR ← freshTmp "div_rhs"
-      let isZero ← freshTmp "div_z"
-      emitLine s!"  {isZero} = icmp eq i64 {rVal}, 0"
-      emitLine s!"  {safeR} = select i1 {isZero}, i64 1, i64 {rVal}"
-      emitLine s!"  {res} = udiv i64 {lVal}, {safeR}"
-      return res
+      match rhs with
+      | .constU64 d =>
+        if d != 0 then
+          emitLine s!"  {res} = udiv i64 {lVal}, {rVal}"
+          return res
+        else
+          emitLine s!"  {res} = add i64 0, 0"
+          return res
+      | _ =>
+        let safeR ← freshTmp "div_rhs"
+        let isZero ← freshTmp "div_z"
+        emitLine s!"  {isZero} = icmp eq i64 {rVal}, 0"
+        emitLine s!"  {safeR} = select i1 {isZero}, i64 1, i64 {rVal}"
+        emitLine s!"  {res} = udiv i64 {lVal}, {safeR}"
+        return res
     | .mod =>
-      let safeR ← freshTmp "mod_rhs"
-      let isZero ← freshTmp "mod_z"
-      emitLine s!"  {isZero} = icmp eq i64 {rVal}, 0"
-      emitLine s!"  {safeR} = select i1 {isZero}, i64 1, i64 {rVal}"
-      emitLine s!"  {res} = urem i64 {lVal}, {safeR}"
-      return res
+      match rhs with
+      | .constU64 d =>
+        if d != 0 then
+          emitLine s!"  {res} = urem i64 {lVal}, {rVal}"
+          return res
+        else
+          emitLine s!"  {res} = add i64 0, 0"
+          return res
+      | _ =>
+        let safeR ← freshTmp "mod_rhs"
+        let isZero ← freshTmp "mod_z"
+        emitLine s!"  {isZero} = icmp eq i64 {rVal}, 0"
+        emitLine s!"  {safeR} = select i1 {isZero}, i64 1, i64 {rVal}"
+        emitLine s!"  {res} = urem i64 {lVal}, {safeR}"
+        return res
     | .bitAnd =>
       emitLine s!"  {res} = and i64 {lVal}, {rVal}"
       return res
@@ -1387,24 +1405,32 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
     "}"
   ]
 
-/-- Emit LLVM 18 loop vectorization & attribute metadata footer. -/
+/-- Emit LLVM 18 loop vectorization & attribute metadata footer.
+    Uses 4-way loop interleaving (`!llvm.loop.interleave.count = 4`) and fixed-width SIMD
+    vectorization so `LoopVectorize` emits 4 independent SIMD accumulators without
+    scalar-unroll `shufflevector` overhead. -/
 def emitMetadataFooter (target : TargetArch) : String :=
   let cpuAttr := match target with
     | .arm64 => "\"target-cpu\"=\"neoverse-v2\""
     | _      => "\"target-cpu\"=\"x86-64-v3\""
+  let vecModeMeta := match target with
+    | .arm64 => "!8 = !{!\"llvm.loop.vectorize.scalable.enable\", i1 false}"
+    | _      => "!8 = !{!\"llvm.loop.vectorize.width\", i32 4}"
   String.intercalate "\n" [
     s!"attributes #0 = \{ nounwind uwtable {cpuAttr} }",
     "attributes #1 = { noinline nounwind optnone uwtable }",
     "attributes #2 = { nocallback nofree nosync nounwind willreturn memory(none) }",
     "",
     "!llvm.ident = !{!4}",
-    "!0 = distinct !{!0, !1, !2}",
+    "!0 = distinct !{!0, !1, !7, !8}",
     "!1 = !{!\"llvm.loop.vectorize.enable\", i1 true}",
     "!2 = !{!\"llvm.loop.unroll.count\", i32 4}",
     "!3 = distinct !{!3, !5}",
     "!4 = !{!\"lean-native LLVM 18 verified backend\"}",
     "!5 = !{!\"llvm.loop.vectorize.enable\", i1 false}",
-    "!6 = distinct !{!6, !2}"
+    "!6 = distinct !{!6, !2}",
+    "!7 = !{!\"llvm.loop.interleave.count\", i32 4}",
+    vecModeMeta
   ]
 
 /-- Check whether an `LNIRType` is a scalar integer type boxed/unboxed as a tagged Lean scalar pointer. -/

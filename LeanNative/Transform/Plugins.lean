@@ -80,7 +80,9 @@ def verifyOptPluginGate
     (requireStrictCost : Bool)
     (src cand : LNIRDecl)
     (_cert : OptPluginCertificate) : Bool :=
-  let sigOk := (src.params == cand.params) && (src.retTy == cand.retTy)
+  let sigOk :=
+    (src.params.map (fun p => (p.id, p.ty)) == cand.params.map (fun p => (p.id, p.ty))) &&
+    (src.retTy == cand.retTy)
   let tvRes := validateTranslationDecl src cand 64
   let costSrc := declScalarCost target src
   let costCand := declScalarCost target cand
@@ -169,6 +171,58 @@ def builtinSuperoptPlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNI
       costBefore := declScalarCost target d
       costAfter := declScalarCost target d'
       notes := s!"Synthesized {rewrites.length} cost-guided rewrites"
+    })
+
+/-- Check that a `ScalarExpr` contains no division or modulo operations so eager evaluation inside
+    a branchless `.select` (`csel`/`cmov`) is trap-free. -/
+def noScalarDivMod : ScalarExpr → Bool
+  | .constU64 _ | .constBool _ | .var _ => true
+  | .unaryOp _ a => noScalarDivMod a
+  | .binOp op l r => op != .div && op != .mod && noScalarDivMod l && noScalarDivMod r
+  | .select c t f => noScalarDivMod c && noScalarDivMod t && noScalarDivMod f
+  | .fma a b c => noScalarDivMod a && noScalarDivMod b && noScalarDivMod c
+
+/-- Convert diamond conditional `ite` branches returning division-free scalars into branchless
+    `ScalarExpr.select` (`csel` on ARM64/M2, `cmov` on x86-64). -/
+def branchlessSelectOptCode : LNIRCode → LNIRCode
+  | .letBind dst ty val k =>
+    .letBind dst ty val (branchlessSelectOptCode k)
+  | .rawStore p i v ety k =>
+    .rawStore p i v ety (branchlessSelectOptCode k)
+  | .incRef v c k =>
+    .incRef v c (branchlessSelectOptCode k)
+  | .decRef v c k =>
+    .decRef v c (branchlessSelectOptCode k)
+  | .ite cond t e =>
+    let t' := branchlessSelectOptCode t
+    let e' := branchlessSelectOptCode e
+    match t', e' with
+    | .letBind d1 ty1 (.scalar e1) (.ret r1),
+      .letBind d2 ty2 (.scalar e2) (.ret r2) =>
+      if d1 == r1 && d2 == r2 && ty1 == ty2 && noScalarDivMod e1 && noScalarDivMod e2 then
+        .letBind d1 ty1 (.scalar (.select (.var cond) e1 e2)) (.ret d1)
+      else
+        .ite cond t' e'
+    | _, _ => .ite cond t' e'
+  | .seqFor idx lo hi acc init accTy step k =>
+    .seqFor idx lo hi acc init accTy (branchlessSelectOptCode step) (branchlessSelectOptCode k)
+  | .parFor out len ins ety kern k =>
+    .parFor out len ins ety kern (branchlessSelectOptCode k)
+  | .ret v => .ret v
+  | .unreachable => .unreachable
+
+def builtinBranchlessSelectPlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNIRDecl × OptPluginCertificate) :=
+  let body' := branchlessSelectOptCode d.body
+  if body' == d.body then none
+  else
+    let d' : LNIRDecl := { d with body := body' }
+    some (d', {
+      pluginName := "builtin:branchless-select"
+      kind := "builtin_verified"
+      theoremOrRule := "LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound"
+      costBefore := declScalarCost target d
+      costAfter := declScalarCost target d'
+      notes := "Converts division-free diamond ite branches into branchless ScalarExpr.select (csel/cmov)"
     })
 
 /-- Intentionally unsound adversarial plugin (`x + y -> x ^^^ y` and `x * y -> x + y`)
@@ -338,6 +392,7 @@ def runSegregatedPluginPipeline
     , ("builtin:unbox-tuple-sroa", builtinUnboxTuplePlugin target)
     , ("builtin:hoist-exclusivity", builtinHoistExclusivityPlugin target)
     , ("builtin:loop-vectorize", builtinLoopVectorizePlugin target)
+    , ("builtin:branchless-select", builtinBranchlessSelectPlugin target)
     , ("builtin:enumerative-superopt", builtinSuperoptPlugin target)
     ] ++ (if includeAdversarialTest then [("adversarial:unsound-alu-corruptor", adversarialBuggyPlugin target)] else [])
 

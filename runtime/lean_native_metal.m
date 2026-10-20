@@ -132,6 +132,29 @@ int lean_native_metal_validate_msl(const char* msl_src) {
     return 1;
 }
 
+static int lean_native_metal_is_page_aligned_16k(const void* ptr, size_t bytes) {
+    const uintptr_t page_mask = 16384u - 1u; /* Apple Silicon (M1/M2/M3/M4) 16 KB vm_page_size */
+    return (((uintptr_t)ptr & page_mask) == 0u) && ((bytes & page_mask) == 0u) && (bytes > 0u);
+}
+
+static id<MTLBuffer> lean_native_create_shared_buffer(const void* host_ptr, size_t bytes, int is_output_only, int* out_nocopy) {
+    if (lean_native_metal_is_page_aligned_16k(host_ptr, bytes)) {
+        id<MTLBuffer> buf = [g_mtl_device newBufferWithBytesNoCopy:(void*)host_ptr
+                                                            length:bytes
+                                                           options:MTLResourceStorageModeShared
+                                                       deallocator:nil];
+        if (buf != nil) {
+            if (out_nocopy) *out_nocopy = 1;
+            return buf;
+        }
+    }
+    if (out_nocopy) *out_nocopy = 0;
+    if (is_output_only) {
+        return [g_mtl_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    }
+    return [g_mtl_device newBufferWithBytes:host_ptr length:bytes options:MTLResourceStorageModeShared];
+}
+
 int lean_native_metal_launch_saxpy_u64(
     uint64_t* out,
     const uint64_t* x,
@@ -148,25 +171,10 @@ int lean_native_metal_launch_saxpy_u64(
     if (lean_native_ensure_metal_initialized() && g_mtl_saxpy_pso != nil) {
         @autoreleasepool {
             size_t bytes = n * sizeof(uint64_t);
-            /* Zero-copy unified-memory buffers on Apple Silicon (M1/M2/M3/M4) when page-aligned */
-            id<MTLBuffer> buf_x = [g_mtl_device newBufferWithBytesNoCopy:(void*)x
-                                                                  length:bytes
-                                                                 options:MTLResourceStorageModeShared
-                                                             deallocator:nil];
-            id<MTLBuffer> buf_y = [g_mtl_device newBufferWithBytesNoCopy:(void*)y
-                                                                  length:bytes
-                                                                 options:MTLResourceStorageModeShared
-                                                             deallocator:nil];
-            id<MTLBuffer> buf_out = [g_mtl_device newBufferWithBytesNoCopy:(void*)out
-                                                                    length:bytes
-                                                                   options:MTLResourceStorageModeShared
-                                                               deallocator:nil];
-            int used_nocopy = (buf_x != nil && buf_y != nil && buf_out != nil);
-            if (!used_nocopy) {
-                buf_x = [g_mtl_device newBufferWithBytes:x length:bytes options:MTLResourceStorageModeShared];
-                buf_y = [g_mtl_device newBufferWithBytes:y length:bytes options:MTLResourceStorageModeShared];
-                buf_out = [g_mtl_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
-            }
+            int nocopy_x = 0, nocopy_y = 0, nocopy_out = 0;
+            id<MTLBuffer> buf_x = lean_native_create_shared_buffer(x, bytes, 0, &nocopy_x);
+            id<MTLBuffer> buf_y = lean_native_create_shared_buffer(y, bytes, 0, &nocopy_y);
+            id<MTLBuffer> buf_out = lean_native_create_shared_buffer(out, bytes, 1, &nocopy_out);
             if (buf_x && buf_y && buf_out) {
                 uint64_t n_u64 = (uint64_t)n;
                 id<MTLCommandBuffer> cmd = [g_mtl_queue commandBuffer];
@@ -185,7 +193,7 @@ int lean_native_metal_launch_saxpy_u64(
                 [enc endEncoding];
                 [cmd commit];
                 [cmd waitUntilCompleted];
-                if (!used_nocopy) {
+                if (!nocopy_out) {
                     memcpy(out, [buf_out contents], bytes);
                 }
                 return 0;
@@ -213,24 +221,10 @@ int lean_native_metal_launch_matmul_u64(
     if (m == n && n == k && lean_native_ensure_metal_initialized() && g_mtl_matmul_pso != nil) {
         @autoreleasepool {
             size_t bytes = m * n * sizeof(uint64_t);
-            id<MTLBuffer> buf_a = [g_mtl_device newBufferWithBytesNoCopy:(void*)a
-                                                                  length:bytes
-                                                                 options:MTLResourceStorageModeShared
-                                                             deallocator:nil];
-            id<MTLBuffer> buf_b = [g_mtl_device newBufferWithBytesNoCopy:(void*)b
-                                                                  length:bytes
-                                                                 options:MTLResourceStorageModeShared
-                                                             deallocator:nil];
-            id<MTLBuffer> buf_c = [g_mtl_device newBufferWithBytesNoCopy:(void*)c
-                                                                  length:bytes
-                                                                 options:MTLResourceStorageModeShared
-                                                             deallocator:nil];
-            int used_nocopy = (buf_a != nil && buf_b != nil && buf_c != nil);
-            if (!used_nocopy) {
-                buf_a = [g_mtl_device newBufferWithBytes:a length:bytes options:MTLResourceStorageModeShared];
-                buf_b = [g_mtl_device newBufferWithBytes:b length:bytes options:MTLResourceStorageModeShared];
-                buf_c = [g_mtl_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
-            }
+            int nocopy_a = 0, nocopy_b = 0, nocopy_c = 0;
+            id<MTLBuffer> buf_a = lean_native_create_shared_buffer(a, bytes, 0, &nocopy_a);
+            id<MTLBuffer> buf_b = lean_native_create_shared_buffer(b, bytes, 0, &nocopy_b);
+            id<MTLBuffer> buf_c = lean_native_create_shared_buffer(c, bytes, 1, &nocopy_c);
             if (buf_a && buf_b && buf_c) {
                 uint64_t dim_u64 = (uint64_t)m;
                 id<MTLCommandBuffer> cmd = [g_mtl_queue commandBuffer];
@@ -248,7 +242,7 @@ int lean_native_metal_launch_matmul_u64(
                 [enc endEncoding];
                 [cmd commit];
                 [cmd waitUntilCompleted];
-                if (!used_nocopy) {
+                if (!nocopy_c) {
                     memcpy(c, [buf_c contents], bytes);
                 }
                 return 0;
