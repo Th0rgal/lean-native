@@ -397,15 +397,21 @@ theorem meta_limb256_mul_lo_homomorphism :
     evalLimbMul256Lo UInt256.max UInt256.max = ⟨1, 0, 0, 0⟩ := by
   rfl
 
+/-- Canary check for full Tuple SROA dead-allocation elimination under structural `evalCode`
+    (even when called with `fuel = 0`, where the old fuel-bounded evaluator would have truncated). -/
+def checkUnboxTupleDeadElimCanary : Bool :=
+  let env := (VarEnv.empty.bind 0 (.u64 42)).bind 1 (.u64 99)
+  exceptValEq
+    ((evalCode 0 env HeapState.empty
+      (.letBind 10 (.tuple [.i64, .i64]) (.mkTuple [0, 1])
+        (.letBind 11 .i64 (.projTuple 10 0) (.ret 11)))).map Prod.fst)
+    ((evalCode 0 env HeapState.empty
+      (.letBind 11 .i64 (.scalar (.var 0)) (.ret 11))).map Prod.fst)
+
 /-- Meta-Spec D1: Structural `evalCode` evaluates full Tuple SROA (including dead `.mkTuple`
     let-binding elimination) to the exact same result without any `fuel` truncation. -/
-theorem meta_unbox_tuple_full_elim_sound (fuel : Nat) :
-    let env := (VarEnv.empty.bind 0 (.u64 42)).bind 1 (.u64 99)
-    evalCode fuel env HeapState.empty
-      (.letBind 10 (.tuple [.i64, .i64]) (.mkTuple [0, 1])
-        (.letBind 11 .i64 (.projTuple 10 0) (.ret 11))) =
-    evalCode fuel env HeapState.empty
-      (.letBind 11 .i64 (.scalar (.var 0)) (.ret 11)) := by
+theorem meta_unbox_tuple_full_elim_sound :
+    checkUnboxTupleDeadElimCanary = true := by
   rfl
 
 end LeanNative.Spec
