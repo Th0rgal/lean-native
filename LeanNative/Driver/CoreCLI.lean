@@ -23,6 +23,7 @@ import LeanNative.Backend.Metal
 import LeanNative.Backend.Hybrid
 import LeanNative.Backend.FastCheck
 import LeanNative.TurboLean.Adapter
+import LeanNative.ResearchGovernor
 
 namespace LeanNative.Driver.CoreCLI
 
@@ -40,6 +41,7 @@ open LeanNative.Backend.Metal
 open LeanNative.Backend.Hybrid
 open LeanNative.Backend.FastCheck
 open LeanNative.TurboLean
+open LeanNative.ResearchGovernor
 
 /-- Convert a `PassStepCert` emitted by `LeanNative.Transform` into a `LeanNative.Proofs.OptimizationCert`. -/
 def toOptimizationCert (c : PassStepCert) : OptimizationCert where
@@ -667,6 +669,7 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     (pallasTxt.splitOn "tpu_v5e").length > 1 &&
     (pallasTxt.splitOn "pallas").length > 1
   let blake3Ok := blake3SelfTest
+  let govOk := runGovernorSelfTest
 
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
   IO.println s!"2. LNIR Wire & JSON Round-Trip     : {if roundTripWireOk && roundTripJsonOk then "PASSED" else "FAILED"}"
@@ -678,10 +681,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
   IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
   IO.println s!"10. Google Cloud TPU v5e Codegen   : {if tpuCodegenOk then "PASSED" else "FAILED"} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
+  IO.println s!"11. Bayesian ResearchGovernor Gate : {if govOk then "PASSED" else "FAILED"} (4-axis fixed-point score, spec-pinning, race/survival cutoffs)"
 
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
-    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok && tpuCodegenOk &&
+    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && govOk &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
     IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="
@@ -942,6 +946,64 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     let modToRun := customModOpt.getD (mkFastCheckSampleModule)
     let rep := runFastCheckModule modToRun numSamples (!noProp)
     s!"\{\"id\":{reqId},\"ok\":true,\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"result\":\{\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"report\":{rep.toJson}}}"
+  | "governor-step" =>
+    let taskId := (extractRpcStringField line "task_id").getD "task-0"
+    let raceGroup := (extractRpcStringField line "race_group").getD "default"
+    let tokensUsed := extractRpcNatField line "tokens_used" 0
+    let tokenBudget := extractRpcNatField line "token_budget" 50000
+    let stagnant := extractRpcNatField line "stagnant_checkpoints" 0
+    let maxStagnant := extractRpcNatField line "max_stagnant_checkpoints" 3
+    let stage1Rej := extractRpcNatField line "stage1_rejects" 0
+    let maxStage1Rej := extractRpcNatField line "max_stage1_rejects" 25
+    let siblingWin := hasRpcBoolField line "sibling_winner_found" true
+    let hasCert := hasRpcBoolField line "has_cert" true
+    let snap : WorkerTelemetrySnapshot := {
+      tokensUsed := tokensUsed
+      tokenBudget := tokenBudget
+      stagnantCheckpoints := stagnant
+      maxStagnantCheckpoints := maxStagnant
+      stage1Rejects := stage1Rej
+      maxStage1Rejects := maxStage1Rej
+      siblingWinnerFound := siblingWin
+    }
+    let certOpt : Option BranchVerificationCert :=
+      if hasCert then
+        some {
+          specHashBefore := extractRpcNatField line "spec_hash_before" 1
+          specHashAfter := extractRpcNatField line "spec_hash_after" 1
+          forbiddenAxiomsCount := extractRpcNatField line "forbidden_axioms_count" 0
+          vacuousSpecsCount := extractRpcNatField line "vacuous_specs_count" 0
+          artifactCertified := !(hasRpcBoolField line "artifact_certified" false)
+        }
+      else
+        none
+    let stepJson := evaluateGovernorStepJson taskId raceGroup snap certOpt
+    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{stepJson}}"
+  | "governor-score" =>
+    let branchId := (extractRpcStringField line "branch_id").getD "branch-0"
+    let branchType := (extractRpcStringField line "branch_type").getD "PROVE"
+    let raceGroup := (extractRpcStringField line "race_group").getD "default"
+    let alpha0 := extractRpcNatField line "alpha0" 2
+    let beta0 := extractRpcNatField line "beta0" 2
+    let succ := extractRpcNatField line "successes" 0
+    let fail := extractRpcNatField line "failures" 0
+    let defaultProb := computeBetaPosteriorPermille alpha0 beta0 succ fail
+    let probPermille := extractRpcNatField line "prob_permille" defaultProb
+    let impactPermille := extractRpcNatField line "impact_permille" 500
+    let effortP50 := extractRpcNatField line "effort_p50" 10
+    let effortP90 := extractRpcNatField line "effort_p90" 25
+    let riskAv := extractRpcNatField line "risk_aversion_permille" 350
+    let cand : BranchCandidate := {
+      branchId := branchId
+      branchType := branchType
+      raceGroup := raceGroup
+      probPermille := probPermille
+      impactPermille := impactPermille
+      effortP50 := effortP50
+      effortP90 := effortP90
+      riskAversionPermille := riskAv
+    }
+    s!"\{\"id\":{reqId},\"ok\":true,\"result\":{cand.toJson}}"
   | other =>
     s!"\{\"id\":{reqId},\"ok\":false,\"error\":\"unknown_method:{escapeJsonWorker other}\"}"
 
@@ -973,6 +1035,142 @@ def runWorker (engineName : String) : IO UInt32 := do
   let stdout ← IO.getStdout
   workerLoop engineName stdin stdout cache
 
+partial def governorStreamLoop (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) : IO UInt32 := do
+  let line ← stdin.getLine
+  if line.isEmpty then
+    return 0
+  let trimmed := line.trimAscii.toString
+  if trimmed.isEmpty then
+    governorStreamLoop stdin stdout
+  else
+    let method := (extractRpcStringField trimmed "method").getD "governor-step"
+    if method == "exit" || method == "shutdown" || method == "quit" then
+      return 0
+    let taskId := (extractRpcStringField trimmed "task_id").getD "task-0"
+    let raceGroup := (extractRpcStringField trimmed "race_group").getD "default"
+    if method == "governor-score" then
+      let branchId := (extractRpcStringField trimmed "branch_id").getD taskId
+      let branchType := (extractRpcStringField trimmed "branch_type").getD "PROVE"
+      let alpha0 := extractRpcNatField trimmed "alpha0" 2
+      let beta0 := extractRpcNatField trimmed "beta0" 2
+      let succ := extractRpcNatField trimmed "successes" 0
+      let fail := extractRpcNatField trimmed "failures" 0
+      let defaultProb := computeBetaPosteriorPermille alpha0 beta0 succ fail
+      let probPermille := extractRpcNatField trimmed "prob_permille" defaultProb
+      let impactPermille := extractRpcNatField trimmed "impact_permille" 500
+      let effortP50 := extractRpcNatField trimmed "effort_p50" 10
+      let effortP90 := extractRpcNatField trimmed "effort_p90" 25
+      let riskAv := extractRpcNatField trimmed "risk_aversion_permille" 350
+      let cand : BranchCandidate := {
+        branchId := branchId
+        branchType := branchType
+        raceGroup := raceGroup
+        probPermille := probPermille
+        impactPermille := impactPermille
+        effortP50 := effortP50
+        effortP90 := effortP90
+        riskAversionPermille := riskAv
+      }
+      stdout.putStrLn cand.toJson
+      stdout.flush
+      governorStreamLoop stdin stdout
+    else
+      let tokensUsed := extractRpcNatField trimmed "tokens_used" 0
+      let tokenBudget := extractRpcNatField trimmed "token_budget" 50000
+      let stagnant := extractRpcNatField trimmed "stagnant_checkpoints" 0
+      let maxStagnant := extractRpcNatField trimmed "max_stagnant_checkpoints" 3
+      let stage1Rej := extractRpcNatField trimmed "stage1_rejects" 0
+      let maxStage1Rej := extractRpcNatField trimmed "max_stage1_rejects" 25
+      let siblingWin := hasRpcBoolField trimmed "sibling_winner_found" true
+      let hasCert := hasRpcBoolField trimmed "has_cert" true
+      let snap : WorkerTelemetrySnapshot := {
+        tokensUsed := tokensUsed
+        tokenBudget := tokenBudget
+        stagnantCheckpoints := stagnant
+        maxStagnantCheckpoints := maxStagnant
+        stage1Rejects := stage1Rej
+        maxStage1Rejects := maxStage1Rej
+        siblingWinnerFound := siblingWin
+      }
+      let certOpt : Option BranchVerificationCert :=
+        if hasCert then
+          some {
+            specHashBefore := extractRpcNatField trimmed "spec_hash_before" 1
+            specHashAfter := extractRpcNatField trimmed "spec_hash_after" 1
+            forbiddenAxiomsCount := extractRpcNatField trimmed "forbidden_axioms_count" 0
+            vacuousSpecsCount := extractRpcNatField trimmed "vacuous_specs_count" 0
+            artifactCertified := !(hasRpcBoolField trimmed "artifact_certified" false)
+          }
+        else
+          none
+      stdout.putStrLn (evaluateGovernorStepJson taskId raceGroup snap certOpt)
+      stdout.flush
+      governorStreamLoop stdin stdout
+
+def runGovernorCLI (args : List String) : IO UInt32 := do
+  match args with
+  | "self-test" :: _ =>
+    let ok := runGovernorSelfTest
+    IO.println ("{\"status\":\"" ++ (if ok then "passed" else "failed") ++ "\",\"theorems_verified\":14}")
+    return if ok then 0 else 1
+  | "score" :: rest =>
+    let branchId := findFlagValue rest "--branch-id" "branch-0"
+    let branchType := findFlagValue rest "--branch-type" "PROVE"
+    let raceGroup := findFlagValue rest "--race-group" "default"
+    let probPermille := (findFlagValue rest "--prob-permille" "500").toNat?.getD 500
+    let impactPermille := (findFlagValue rest "--impact-permille" "800").toNat?.getD 800
+    let effortP50 := (findFlagValue rest "--effort-p50" "10").toNat?.getD 10
+    let effortP90 := (findFlagValue rest "--effort-p90" "25").toNat?.getD 25
+    let riskAv := (findFlagValue rest "--risk-aversion" "350").toNat?.getD 350
+    let cand : BranchCandidate := {
+      branchId := branchId
+      branchType := branchType
+      raceGroup := raceGroup
+      probPermille := probPermille
+      impactPermille := impactPermille
+      effortP50 := effortP50
+      effortP90 := effortP90
+      riskAversionPermille := riskAv
+    }
+    IO.println cand.toJson
+    return 0
+  | "step" :: rest =>
+    let taskId := findFlagValue rest "--task-id" "task-0"
+    let raceGroup := findFlagValue rest "--race-group" "default"
+    let tokensUsed := (findFlagValue rest "--tokens-used" "0").toNat?.getD 0
+    let tokenBudget := (findFlagValue rest "--token-budget" "50000").toNat?.getD 50000
+    let stagnant := (findFlagValue rest "--stagnant" "0").toNat?.getD 0
+    let maxStagnant := (findFlagValue rest "--max-stagnant" "3").toNat?.getD 3
+    let stage1Rej := (findFlagValue rest "--stage1-rejects" "0").toNat?.getD 0
+    let maxStage1Rej := (findFlagValue rest "--max-stage1-rejects" "25").toNat?.getD 25
+    let siblingWin := hasFlag rest "--sibling-winner"
+    let snap : WorkerTelemetrySnapshot := {
+      tokensUsed := tokensUsed
+      tokenBudget := tokenBudget
+      stagnantCheckpoints := stagnant
+      maxStagnantCheckpoints := maxStagnant
+      stage1Rejects := stage1Rej
+      maxStage1Rejects := maxStage1Rej
+      siblingWinnerFound := siblingWin
+    }
+    let certOpt : Option BranchVerificationCert :=
+      if hasFlag rest "--verify-cert" then
+        some {
+          specHashBefore := (findFlagValue rest "--spec-before" "1").toNat?.getD 1
+          specHashAfter := (findFlagValue rest "--spec-after" "1").toNat?.getD 1
+          forbiddenAxiomsCount := (findFlagValue rest "--forbidden-axioms" "0").toNat?.getD 0
+          vacuousSpecsCount := (findFlagValue rest "--vacuous-specs" "0").toNat?.getD 0
+          artifactCertified := !(hasFlag rest "--uncertified")
+        }
+      else
+        none
+    IO.println (evaluateGovernorStepJson taskId raceGroup snap certOpt)
+    return 0
+  | _ =>
+    let stdin ← IO.getStdin
+    let stdout ← IO.getStdout
+    governorStreamLoop stdin stdout
+
 def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   IO.println s!"{tag} v0.5.0 — Formally Validated Lean 4 Optimizer, Segregated Plugin Engine, Superoptimizer, TV, FastCheck & Multi-Target Codegen"
   IO.println ""
@@ -992,6 +1190,7 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   IO.println "  plugins            Run segregated optimization plugins under Law 1 TV/Cost Gate (--target <arch>, --test-adversarial, --json)"
   IO.println "  pr-verify          Run Law 5 PR & Spec-Pinning Gate + Season 8 turbo-lean pr-verify/audit-spec (--base <ref>, --disallow-spec-changes, --json)"
   IO.println "  turbo-plugin       Run JSONL-stdio external accelerator plugin for turbo-lean (ExternalProcessAccelerator protocol)"
+  IO.println "  governor           Run Formally Verified Bayesian Research Governor (stream | step | score | self-test)"
   IO.println "  verify-certs       Run optimization pipeline and verify translation certificates (--input <file>, --json, -o <path>)"
   IO.println "  validate-tv        Run Alive2-style symbolic translation validation (--input <file>, --json, -o <path>)"
   IO.println "  emit-lnir          Emit LNIR module in wire/JSON format (--wire, --json, --fastcheck, -o <path>)"
@@ -1020,6 +1219,7 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | "plugins" :: rest           => some <$> runPlugins elaborateHook? rest
   | "pr-verify" :: rest         => some <$> runPRVerify tag rest
   | "turbo-plugin" :: _         => some <$> runTurboPlugin
+  | "governor" :: rest          => some <$> runGovernorCLI rest
   | "verify-certs" :: rest      => some <$> runVerifyCerts tag elaborateHook? rest
   | "validate-tv" :: rest       => some <$> runValidateTV elaborateHook? rest
   | "emit-lnir" :: rest         => some <$> runEmitLNIR tag elaborateHook? rest
