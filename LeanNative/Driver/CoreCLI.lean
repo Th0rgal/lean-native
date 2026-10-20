@@ -82,6 +82,7 @@ def findFirstPositional (args : List String) : String :=
   | "--opt" :: _ :: rest => findFirstPositional rest
   | "--arch" :: _ :: rest => findFirstPositional rest
   | "--target" :: _ :: rest => findFirstPositional rest
+  | "--profile" :: _ :: rest => findFirstPositional rest
   | "--sm" :: _ :: rest => findFirstPositional rest
   | "--samples" :: _ :: rest => findFirstPositional rest
   | a :: rest =>
@@ -241,24 +242,39 @@ def runCompileFastCheck (tag : String) (elaborateHook? : Option (String → IO L
 
 def runCompileHybrid (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
+  let profilePath := findFlagValue args "--profile" ""
+  let mut minGpuElems : Nat := 65536
+  if !profilePath.isEmpty then
+    let profRaw ← IO.FS.readFile profilePath
+    match HardwareCostProfile.fromJson? profRaw with
+    | some p => minGpuElems := p.minGpuElements
+    | none => throw <| IO.userError s!"[{tag}] Failed to parse hardware profile from '{profilePath}'"
   let baseMod ← loadInputModule elaborateHook? args
   let (optMod, _) := runDefaultPipeline baseMod
-  let plan := partitionModule optMod 65536
+  let plan := partitionModule optMod minGpuElems
   let glueText := emitHybridHostGlue plan
   if outPath.isEmpty then
     IO.println glueText
   else
     IO.FS.writeFile outPath glueText
-    IO.println s!"[{tag}] Wrote Hybrid CPU/GPU dispatch glue (gpuDecls={plan.gpuDecls.length}, cpuDecls={plan.cpuOnlyDecls.length}) to {outPath}"
+    IO.println s!"[{tag}] Wrote Hybrid CPU/GPU dispatch glue (gpuDecls={plan.gpuDecls.length}, cpuDecls={plan.cpuOnlyDecls.length}, minGpuElements={minGpuElems}) to {outPath}"
   return 0
 
 def runSuperopt (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let targetStr := findFlagValue args "--target" (findFlagValue args "--arch" "x86_64")
   let target := parseSuperoptTarget targetStr
+  let profilePath := findFlagValue args "--profile" ""
   let outPath := findFlagValue args "-o" ""
   let jsonFlag := hasFlag args "--json"
   let baseMod ← loadInputModule elaborateHook? args
-  let (_, report) := superoptModule target baseMod
+  let (_, report) ←
+    if !profilePath.isEmpty then
+      let profRaw ← IO.FS.readFile profilePath
+      match HardwareCostProfile.fromJson? profRaw with
+      | some p => pure (superoptModuleWithProfile p baseMod)
+      | none => throw <| IO.userError s!"[lean-native] Failed to parse hardware cost profile from '{profilePath}'"
+    else
+      pure (superoptModule target baseMod)
   let jsonText := report.toJson
   if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
   if jsonFlag then IO.println jsonText else IO.println report.formatSummary

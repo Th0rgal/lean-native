@@ -90,8 +90,15 @@ def evalBinOp (op : BinOp) (v1 v2 : Val) : Except UBError Val :=
   | .sar =>
     match v1, v2 with
     | .u64 a, .u64 b =>
-      let w := UInt256.sar (UInt256.ofUInt64 a) b.toNat
-      .ok (.u64 w.lo0)
+      let sh := b &&& 63
+      let shifted := a >>> sh
+      let signBit := (a >>> 63) &&& 1
+      let res :=
+        if signBit != 0 && sh != 0 then
+          shifted ||| (0xffffffffffffffff <<< (64 - sh))
+        else
+          shifted
+      .ok (.u64 res)
     | .u256 a, .u256 b => .ok (.u256 (UInt256.sar a b.toNat))
     | _, _ => .error (.typeError "evalBinOp: invalid operand types")
   | .eq =>

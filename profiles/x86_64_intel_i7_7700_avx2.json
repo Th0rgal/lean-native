@@ -1,0 +1,38 @@
+{
+  "schema_version": "lean-native-hardware-profile-v1",
+  "profile_id": "x86_64_intel_i7_7700_avx2",
+  "target": "x86_64",
+  "llvm_target_cpu": "neoverse-v2",
+  "sm_arch": "sm_121",
+  "hardware_metadata": {
+    "host_os": "linux",
+    "host_arch": "aarch64",
+    "cpu_model": "aarch64",
+    "gpu_model": "NVIDIA GB10"
+  },
+  "add_sub_cost": 1,
+  "bitwise_cost": 1,
+  "shift_cost": 1,
+  "cmp_cost": 1,
+  "mul_cost": 2,
+  "div_mod_cost": 8,
+  "fma_cost": 1,
+  "select_cost": 1,
+  "clz256_cost": 2,
+  "add_sub_checked256_cost": 3,
+  "mul_checked256_cost": 4,
+  "min_gpu_elements": 65536,
+  "gpu_block_threads": 256,
+  "matmul_tile_dim": 16,
+  "calibration_receipt": {
+    "measured_ns": {
+      "add_ns": 1.0743,
+      "mul_ns": 0.8622,
+      "div_ns": 5.034,
+      "fma_ns": 0.514,
+      "select_ns": 1.03
+    },
+    "payload_digest_blake2b256": "74f715e33f2781d245b2ec77776d1946917f4d80968b2d590aaf9d599e757871",
+    "calibrated_at_utc": "2026-10-20T06:38:46Z"
+  }
+}

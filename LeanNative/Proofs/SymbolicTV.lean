@@ -334,7 +334,9 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
     let sd := st.lookupVar denomVar
     let divZero := sd.expr == .constU64 0
     let mulExpr := normSymBinOpStep .mul sa.expr sb.expr
-    let divExpr := normSymBinOpStep .div mulExpr sd.expr
+    let denomMinusOne := normSymBinOpStep .sub sd.expr (.constU64 1)
+    let roundedNum := normSymBinOpStep .add mulExpr denomMinusOne
+    let divExpr := normSymBinOpStep .div roundedNum sd.expr
     st.bindVar dst {
       expr := divExpr
       nonPoison := sa.nonPoison && sb.nonPoison && sd.nonPoison

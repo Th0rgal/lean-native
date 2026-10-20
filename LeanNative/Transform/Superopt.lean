@@ -50,6 +50,170 @@ def isGpu : SuperoptTarget → Bool
 
 end SuperoptTarget
 
+/-- Declarative, community-contributable hardware latency & tuning profile (`profiles/*.json`).
+    Note (Law 1 / Law 5): A `HardwareCostProfile` only affects cost-guided candidate ranking;
+    every synthesized rewrite still passes `fastCheckScalarEquiv` + `symCheckScalarEquiv`. -/
+structure HardwareCostProfile where
+  profileId            : String := "x86_64_default"
+  target               : SuperoptTarget := .x86_64
+  llvmTargetCpu        : String := "x86-64-v3"
+  smArch               : String := "sm_90"
+  addSubCost           : Nat := 1
+  bitwiseCost          : Nat := 1
+  shiftCost            : Nat := 1
+  cmpCost              : Nat := 1
+  mulCost              : Nat := 4
+  divModCost           : Nat := 24
+  fmaCost              : Nat := 3
+  selectCost           : Nat := 2
+  clz256Cost           : Nat := 2
+  addSubChecked256Cost : Nat := 3
+  mulChecked256Cost    : Nat := 4
+  minGpuElements       : Nat := 65536
+  gpuBlockThreads      : Nat := 256
+  matmulTileDim        : Nat := 16
+  deriving Repr, DecidableEq, Inhabited, BEq
+
+namespace HardwareCostProfile
+
+/-- Built-in default hardware cost profile for a `SuperoptTarget`. -/
+def forTarget (t : SuperoptTarget) : HardwareCostProfile :=
+  match t with
+  | .x86_64 => {
+      profileId := "x86_64_skylake_avx2"
+      target := .x86_64
+      llvmTargetCpu := "x86-64-v3"
+      mulCost := 4
+      divModCost := 24
+      fmaCost := 3
+      mulChecked256Cost := 4
+    }
+  | .arm64 => {
+      profileId := "arm64_grace_neoverse_v2"
+      target := .arm64
+      llvmTargetCpu := "neoverse-v2"
+      mulCost := 3
+      divModCost := 20
+      fmaCost := 2
+      mulChecked256Cost := 4
+    }
+  | .cuda_ptx => {
+      profileId := "cuda_blackwell_gb10_sm121"
+      target := .cuda_ptx
+      llvmTargetCpu := "neoverse-v2"
+      smArch := "sm_90"
+      mulCost := 5
+      divModCost := 36
+      fmaCost := 2
+      mulChecked256Cost := 5
+      minGpuElements := 65536
+      gpuBlockThreads := 256
+      matmulTileDim := 16
+    }
+  | .apple_metal => {
+      profileId := "apple_silicon_m3_metal"
+      target := .apple_metal
+      llvmTargetCpu := "apple-m3"
+      mulCost := 5
+      divModCost := 36
+      fmaCost := 2
+      mulChecked256Cost := 5
+      minGpuElements := 32768
+      gpuBlockThreads := 256
+      matmulTileDim := 16
+    }
+
+private def extractJsonStringField (raw : String) (key : String) : Option String :=
+  let pat := "\"" ++ key ++ "\""
+  match raw.splitOn pat with
+  | _ :: afterKey :: _ =>
+    match afterKey.splitOn ":" with
+    | _ :: afterColon :: _ =>
+      let trimmed := afterColon.trimAscii.toString
+      match trimmed.splitOn "\"" with
+      | _ :: val :: _ => some val
+      | _ => none
+    | _ => none
+  | _ => none
+
+private def extractJsonNatField (raw : String) (key : String) : Option Nat :=
+  let pat := "\"" ++ key ++ "\""
+  match raw.splitOn pat with
+  | _ :: afterKey :: _ =>
+    match afterKey.splitOn ":" with
+    | _ :: afterColon :: _ =>
+      let trimmed := afterColon.trimAscii.toString
+      let digits := trimmed.toList.takeWhile (fun c => c.isDigit)
+      if digits.isEmpty then none else (String.ofList digits).toNat?
+    | _ => none
+  | _ => none
+
+/-- Parse a `HardwareCostProfile` from a `profiles/*.json` file. -/
+def fromJson? (raw : String) : Option HardwareCostProfile := do
+  let tgtStr := (extractJsonStringField raw "target").getD "x86_64"
+  let target : SuperoptTarget :=
+    if tgtStr == "arm64" || tgtStr == "aarch64" then .arm64
+    else if tgtStr == "cuda_ptx" || tgtStr == "cuda" || tgtStr == "ptx" then .cuda_ptx
+    else if tgtStr == "apple_metal" || tgtStr == "metal" then .apple_metal
+    else .x86_64
+  let base := forTarget target
+  let pid := (extractJsonStringField raw "profile_id").orElse (fun _ => extractJsonStringField raw "profileId") |>.getD base.profileId
+  let llvmCpu := (extractJsonStringField raw "llvm_target_cpu").getD base.llvmTargetCpu
+  let sm := (extractJsonStringField raw "sm_arch").getD base.smArch
+  return {
+    profileId            := pid
+    target               := target
+    llvmTargetCpu        := llvmCpu
+    smArch               := sm
+    addSubCost           := (extractJsonNatField raw "add_sub_cost").getD base.addSubCost
+    bitwiseCost          := (extractJsonNatField raw "bitwise_cost").getD base.bitwiseCost
+    shiftCost            := (extractJsonNatField raw "shift_cost").getD base.shiftCost
+    cmpCost              := (extractJsonNatField raw "cmp_cost").getD base.cmpCost
+    mulCost              := (extractJsonNatField raw "mul_cost").getD base.mulCost
+    divModCost           := (extractJsonNatField raw "div_mod_cost").getD base.divModCost
+    fmaCost              := (extractJsonNatField raw "fma_cost").getD base.fmaCost
+    selectCost           := (extractJsonNatField raw "select_cost").getD base.selectCost
+    clz256Cost           := (extractJsonNatField raw "clz256_cost").getD base.clz256Cost
+    addSubChecked256Cost := (extractJsonNatField raw "add_sub_checked256_cost").getD base.addSubChecked256Cost
+    mulChecked256Cost    := (extractJsonNatField raw "mul_checked256_cost").getD base.mulChecked256Cost
+    minGpuElements       := (extractJsonNatField raw "min_gpu_elements").getD base.minGpuElements
+    gpuBlockThreads      := (extractJsonNatField raw "gpu_block_threads").getD base.gpuBlockThreads
+    matmulTileDim        := (extractJsonNatField raw "matmul_tile_dim").getD base.matmulTileDim
+  }
+
+end HardwareCostProfile
+
+/-- Profile-guided binary operator latency cost. -/
+def binOpCostWithProfile (p : HardwareCostProfile) (op : BinOp) : Nat :=
+  match op with
+  | .div | .mod => p.divModCost
+  | .mul => p.mulCost
+  | .mulChecked256 => p.mulChecked256Cost
+  | .addChecked256 | .subChecked256 => p.addSubChecked256Cost
+  | .add | .sub => p.addSubCost
+  | .bitAnd | .bitOr | .bitXor => p.bitwiseCost
+  | .shl | .shr | .sar => p.shiftCost
+  | .eq | .lt | .le => p.cmpCost
+
+/-- Profile-guided unary operator latency cost. -/
+def unaryOpCostWithProfile (p : HardwareCostProfile) (op : UnaryOp) : Nat :=
+  match op with
+  | .not | .neg => p.bitwiseCost
+  | .clz256 => p.clz256Cost
+
+/-- Profile-guided total latency cost of a `ScalarExpr`. -/
+def scalarExprCostWithProfile (p : HardwareCostProfile) : ScalarExpr → Nat
+  | .constU64 _ | .constBool _ | .var _ => 0
+  | .binOp op lhs rhs =>
+    let dupPenalty := if op == .add && lhs == rhs then 1 else 0
+    binOpCostWithProfile p op + dupPenalty + scalarExprCostWithProfile p lhs + scalarExprCostWithProfile p rhs
+  | .unaryOp op arg =>
+    unaryOpCostWithProfile p op + scalarExprCostWithProfile p arg
+  | .select c t e =>
+    p.selectCost + scalarExprCostWithProfile p c + scalarExprCostWithProfile p t + scalarExprCostWithProfile p e
+  | .fma a b c =>
+    p.fmaCost + scalarExprCostWithProfile p a + scalarExprCostWithProfile p b + scalarExprCostWithProfile p c
+
 /-- Hardware-specific instruction cost model for a binary scalar operator. -/
 def binOpCost (target : SuperoptTarget) (op : BinOp) : Nat :=
   match op with
@@ -590,6 +754,119 @@ def superoptModule (target : SuperoptTarget) (m : LNIRModule) : LNIRModule × Su
     records := allRecs
   }
   (m', report)
+
+/-- Superoptimize a single `ScalarExpr` using a custom `HardwareCostProfile` (`profiles/*.json`),
+    enforcing the exact same `fastCheckScalarEquiv` + `symCheckScalarEquiv` formal soundness gate. -/
+def superoptScalarExprWithProfile (p : HardwareCostProfile) (declName : String) (e : ScalarExpr) :
+    ScalarExpr × Option SuperoptRewriteRecord :=
+  let origCost := scalarExprCostWithProfile p e
+  let cands := synthesizeCandidates p.target e
+  let bestCand :=
+    cands.foldl (fun acc cand =>
+      let cCost := scalarExprCostWithProfile p cand
+      let fcOk := fastCheckScalarEquiv e cand
+      let tvOk := symCheckScalarEquiv e cand
+      if fcOk && tvOk && cCost < scalarExprCostWithProfile p acc then
+        cand
+      else
+        acc
+    ) e
+  let afterCost := scalarExprCostWithProfile p bestCand
+  if bestCand != e && afterCost < origCost then
+    let isKernelVerified :=
+      bestCand == LeanNative.Proofs.rewriteScalarVerified e ||
+      bestCand == LeanNative.Proofs.rewriteScalarPeephole e
+    let thmRef :=
+      if isKernelVerified then "LeanNative.Proofs.rewriteScalarVerified_sound"
+      else "LeanNative.Proofs.SymbolicTV"
+    let recEntry : SuperoptRewriteRecord := {
+      declName := declName
+      target := s!"{p.target.toString}:{p.profileId}"
+      originalExpr := reprStr e
+      synthesizedExpr := reprStr bestCand
+      costBefore := origCost
+      costAfter := afterCost
+      fastCheckPassed := fastCheckScalarEquiv e bestCand
+      symbolicTVPassed := symCheckScalarEquiv e bestCand
+      kernelProofVerified := isKernelVerified
+      theoremRef := thmRef
+    }
+    (bestCand, some recEntry)
+  else
+    (e, none)
+
+/-- Superoptimize all declarations in an `LNIRModule` using a `HardwareCostProfile` (`profiles/*.json`). -/
+def superoptModuleWithProfile (p : HardwareCostProfile) (m : LNIRModule) : LNIRModule × SuperoptReport :=
+  let rec goCode (declName : String) : LNIRCode → LNIRCode × List SuperoptRewriteRecord
+    | .letBind dst ty (.scalar se) k =>
+      let (se', recOpt) := superoptScalarExprWithProfile p declName se
+      let (k', kRecs) := goCode declName k
+      let recs := match recOpt with | some r => r :: kRecs | none => kRecs
+      (.letBind dst ty (.scalar se') k', recs)
+    | .letBind dst ty val k =>
+      let (k', kRecs) := goCode declName k
+      (.letBind dst ty val k', kRecs)
+    | .rawStore pv iv vv ety k =>
+      let (k', kRecs) := goCode declName k
+      (.rawStore pv iv vv ety k', kRecs)
+    | .incRef ov c k =>
+      let (k', kRecs) := goCode declName k
+      (.incRef ov c k', kRecs)
+    | .decRef ov c k =>
+      let (k', kRecs) := goCode declName k
+      (.decRef ov c k', kRecs)
+    | .ite cv t e =>
+      let (t', tRecs) := goCode declName t
+      let (e', eRecs) := goCode declName e
+      (.ite cv t' e', tRecs ++ eRecs)
+    | .seqFor iv lv hv av ai aty step k =>
+      let (step', sRecs) := goCode declName step
+      let (k', kRecs) := goCode declName k
+      (.seqFor iv lv hv av ai aty step' k', sRecs ++ kRecs)
+    | .parFor ov lv ins ety (.customScalar idxVar inVars body) k =>
+      let (body', recOpt) := superoptScalarExprWithProfile p declName body
+      let (k', kRecs) := goCode declName k
+      let recs := match recOpt with | some r => r :: kRecs | none => kRecs
+      (.parFor ov lv ins ety (.customScalar idxVar inVars body') k', recs)
+    | .parFor ov lv ins ety kern k =>
+      let (k', kRecs) := goCode declName k
+      (.parFor ov lv ins ety kern k', kRecs)
+    | .ret v => (.ret v, [])
+    | .unreachable => (.unreachable, [])
+  let rec codeCostProf : LNIRCode → Nat
+    | .letBind _ _ (.scalar se) k => scalarExprCostWithProfile p se + codeCostProf k
+    | .letBind _ _ _ k => codeCostProf k
+    | .rawStore _ _ _ _ k => codeCostProf k
+    | .incRef _ _ k => codeCostProf k
+    | .decRef _ _ k => codeCostProf k
+    | .ite _ t e => codeCostProf t + codeCostProf e
+    | .seqFor _ _ _ _ _ _ step k => codeCostProf step + codeCostProf k
+    | .parFor _ _ _ _ (.customScalar _ _ body) k => scalarExprCostWithProfile p body + codeCostProf k
+    | .parFor _ _ _ _ _ k => codeCostProf k
+    | .ret _ | .unreachable => 0
+  let cBefore := m.decls.foldl (fun acc d => acc + codeCostProf d.body) 0
+  let (decls', allRecs) := m.decls.foldl (fun (dAcc, rAcc) d =>
+    let (body', recs) := goCode d.name d.body
+    let assurance' :=
+      if recs.isEmpty then d.assurance
+      else if recs.all (fun r => r.kernelProofVerified) then
+        AssuranceLevel.combine d.assurance .verifiedKernelProof
+      else
+        AssuranceLevel.combine d.assurance .translationValidated
+    (dAcc ++ [{ d with body := body', assurance := assurance' }], rAcc ++ recs)
+  ) ([], [])
+  let m' : LNIRModule := { m with decls := decls' }
+  let cAfter := m'.decls.foldl (fun acc d => acc + codeCostProf d.body) 0
+  (m', {
+    moduleName := m.moduleName
+    schemaVersion := "lean-native-superopt-v1"
+    target := s!"{p.target.toString}:{p.profileId}"
+    totalDecls := m.decls.length
+    rewritesApplied := allRecs.length
+    totalCostBefore := cBefore
+    totalCostAfter := cAfter
+    records := allRecs
+  })
 
 private def escapeJsonSO (s : String) : String :=
   s.foldl (fun acc c =>

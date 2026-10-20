@@ -26,9 +26,10 @@ lake build lean-native-core lean-native
 CORE_BIN="./.lake/build/bin/lean-native-core"
 FULL_BIN="./.lake/build/bin/lean-native"
 
-echo "[2/5] Running Gate 1 & Gate 3: Spec Pinning, Untrusted Plugin Gate & Season 8 turbo-lean..."
+echo "[2/5] Running Gate 1 & Gate 3: Spec Pinning, Untrusted Plugin Gate, Hardware Profiles & Season 8 turbo-lean..."
 $FULL_BIN pr-verify --base "$BASE_REF" $EXTRA_PR_FLAGS
 $CORE_BIN plugins --test-adversarial
+python3 scripts/tune_hardware_profile.py --verify-profiles profiles
 
 if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean..."

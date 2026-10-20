@@ -482,20 +482,38 @@ partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
       emitLine s!"  {res} = xor i64 {lVal}, {rVal}"
       return res
     | .shl =>
-      let masked ← freshTmp "sh_amt"
-      emitLine s!"  {masked} = and i64 {rVal}, 63"
-      emitLine s!"  {res} = shl i64 {lVal}, {masked}"
-      return res
+      match rhs with
+      | .constU64 k =>
+        let sh := k &&& 63
+        emitLine s!"  {res} = shl i64 {lVal}, {sh}"
+        return res
+      | _ =>
+        let masked ← freshTmp "sh_amt"
+        emitLine s!"  {masked} = and i64 {rVal}, 63"
+        emitLine s!"  {res} = shl i64 {lVal}, {masked}"
+        return res
     | .shr =>
-      let masked ← freshTmp "sh_amt"
-      emitLine s!"  {masked} = and i64 {rVal}, 63"
-      emitLine s!"  {res} = lshr i64 {lVal}, {masked}"
-      return res
+      match rhs with
+      | .constU64 k =>
+        let sh := k &&& 63
+        emitLine s!"  {res} = lshr i64 {lVal}, {sh}"
+        return res
+      | _ =>
+        let masked ← freshTmp "sh_amt"
+        emitLine s!"  {masked} = and i64 {rVal}, 63"
+        emitLine s!"  {res} = lshr i64 {lVal}, {masked}"
+        return res
     | .sar =>
-      let masked ← freshTmp "sar_amt"
-      emitLine s!"  {masked} = and i64 {rVal}, 63"
-      emitLine s!"  {res} = ashr i64 {lVal}, {masked}"
-      return res
+      match rhs with
+      | .constU64 k =>
+        let sh := k &&& 63
+        emitLine s!"  {res} = ashr i64 {lVal}, {sh}"
+        return res
+      | _ =>
+        let masked ← freshTmp "sar_amt"
+        emitLine s!"  {masked} = and i64 {rVal}, 63"
+        emitLine s!"  {res} = ashr i64 {lVal}, {masked}"
+        return res
     | .eq =>
       let cmp ← freshTmp "cmp_eq"
       emitLine s!"  {cmp} = icmp eq i64 {lVal}, {rVal}"
@@ -520,7 +538,7 @@ partial def emitScalarExpr (e : ScalarExpr) : EmitM String := do
     | .not =>
       let aVal ← emitScalarExpr arg
       let res ← freshTmp "un"
-      emitLine s!"  {res} = xor i64 {aVal}, 1"
+      emitLine s!"  {res} = xor i64 {aVal}, -1"
       return res
     | .neg =>
       let aVal ← emitScalarExpr arg
@@ -1345,7 +1363,7 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
 /-- Emit LLVM 18 loop vectorization & attribute metadata footer. -/
 def emitMetadataFooter (target : TargetArch) : String :=
   let cpuAttr := match target with
-    | .arm64 => "\"target-cpu\"=\"generic\""
+    | .arm64 => "\"target-cpu\"=\"neoverse-v2\""
     | _      => "\"target-cpu\"=\"x86-64-v3\""
   String.intercalate "\n" [
     s!"attributes #0 = \{ nounwind uwtable {cpuAttr} }",
