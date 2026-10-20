@@ -417,8 +417,48 @@ def cmd_watch(args: argparse.Namespace) -> int:
         time.sleep(args.interval)
 
 
+def cmd_warm_lake(args: argparse.Namespace) -> int:
+    """Sync precompiled .lake & .hol artifacts across fleet nodes without triggering Lake .git invalidation or missing .ir files."""
+    ssh_cfg = resolve_ssh_config()
+    ssh_cmd = f"ssh -F {ssh_cfg}" if ssh_cfg else "ssh"
+    src = args.source.rstrip("/")
+    dst = args.dest.rstrip("/")
+    os.makedirs(dst, exist_ok=True)
+    rsync_cmd = [
+        "rsync",
+        "-az",
+        "-e",
+        ssh_cmd,
+        f"{src}/.lake",
+        f"{src}/.hol",
+        f"{dst}/",
+    ]
+    proc = subprocess.run(rsync_cmd)
+    if proc.returncode != 0:
+        return proc.returncode
+    print(json.dumps({"ok": True, "source": src, "dest": dst}))
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] in ("step", "score", "self-test", "stream"):
+        if "--help" in sys.argv or "-h" in sys.argv:
+            subcmd = sys.argv[1]
+            if subcmd == "step":
+                print(
+                    "usage: research-governor step --task-id ID --race-group GROUP "
+                    "[--tokens-used N] [--token-budget N] [--stagnant N] [--max-stagnant N] "
+                    "[--stage1-rejects N] [--max-stage1-rejects N] [--sibling-winner] "
+                    "[--verify-cert --spec-before H1 --spec-after H2 --forbidden-axioms N --vacuous-specs N]"
+                )
+            elif subcmd == "score":
+                print(
+                    "usage: research-governor score --branch-id ID [--branch-type PROVE|REFUTE|PROBE|OPTIMIZE] "
+                    "[--race-group GROUP] --prob-permille P --impact-permille I --effort-p50 E50 --effort-p90 E90"
+                )
+            else:
+                print(f"usage: research-governor {subcmd}")
+            return 0
         bin_path = find_lean_native_core()
         sub = sys.argv[1:] if sys.argv[1] != "stream" else []
         proc = subprocess.run([bin_path, "governor", *sub])
@@ -463,6 +503,10 @@ def main() -> int:
     p_watch.add_argument("--once", action="store_true", help="Evaluate once and exit immediately")
     p_watch.add_argument("--log-telemetry", action="store_true", help="Automatically record checkpoints/outcomes to spark-memory")
 
+    p_warm = subparsers.add_parser("warm-lake", help="Sync prebuilt .lake and .hol caches from a fleet host without invalidating Lake package .git or .ir files")
+    p_warm.add_argument("source", help="Source host:project_dir (e.g. ashur:/path/to/evm.fast-dev)")
+    p_warm.add_argument("dest", help="Destination project_dir")
+
     args = parser.parse_args()
     if args.cmd == "priors":
         return cmd_priors(args)
@@ -472,6 +516,8 @@ def main() -> int:
         return cmd_rank(args)
     if args.cmd == "watch":
         return cmd_watch(args)
+    if args.cmd == "warm-lake":
+        return cmd_warm_lake(args)
     return 1
 
 
