@@ -667,33 +667,32 @@ def cmd_warm_lake(args: argparse.Namespace) -> int:
 
 
 def cmd_warm_pool(args: argparse.Namespace) -> int:
-    """Provision N isolated, pre-warmed worktrees in <2s via git worktree + cp -alT hardlinks of .lake & .hol."""
+    """Provision N isolated, pre-warmed worktrees in <2s via parallel cp -alfT hardlinks + independent mutable Solver/ directory."""
     src = os.path.abspath(args.source.rstrip("/"))
     base = os.path.abspath(args.dest_base.rstrip("/"))
     count = max(1, int(args.count))
     os.makedirs(base, exist_ok=True)
     t0 = time.time()
     created: List[str] = []
+    procs: List[Tuple[str, subprocess.Popen]] = []
 
-    subprocess.run(["git", "-C", src, "worktree", "prune"], check=False, capture_output=True)
     for i in range(1, count + 1):
         wt = os.path.join(base, f"{args.prefix}-{i}")
-        if not os.path.isdir(os.path.join(wt, ".git")) and not os.path.isfile(os.path.join(wt, ".git")):
-            if os.path.exists(wt):
-                shutil.rmtree(wt, ignore_errors=True)
-            res = subprocess.run(
-                ["git", "-C", src, "worktree", "add", "--detach", "--force", wt, "HEAD"],
-                capture_output=True,
-                text=True,
-            )
-            if res.returncode != 0:
-                os.makedirs(wt, exist_ok=True)
-                subprocess.run(["cp", "-alT", src, wt], check=False)
-        for sub in (".lake", ".hol"):
-            s_sub = os.path.join(src, sub)
-            d_sub = os.path.join(wt, sub)
-            if os.path.isdir(s_sub):
-                subprocess.run(["cp", "-alT", s_sub, d_sub], check=False)
+        os.makedirs(wt, exist_ok=True)
+        p = subprocess.Popen(
+            ["cp", "-alfT", src, wt],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        procs.append((wt, p))
+
+    for wt, p in procs:
+        p.wait()
+        solver_src = os.path.join(src, "submission", "InitECandidate", "Solver")
+        solver_dst = os.path.join(wt, "submission", "InitECandidate", "Solver")
+        if os.path.isdir(solver_src):
+            shutil.rmtree(solver_dst, ignore_errors=True)
+            shutil.copytree(solver_src, solver_dst)
         created.append(wt)
 
     elapsed_ms = round((time.time() - t0) * 1000.0, 1)
