@@ -189,93 +189,33 @@ theorem evalBinOp_and_self (v : Val) : evalBinOp .bitAnd v v = .ok v := by
 theorem evalBinOp_or_self (v : Val) : evalBinOp .bitOr v v = .ok v := by
   unfold evalBinOp; cases v <;> simp [Val.beq_self]
 
-theorem evalBinOp_mul_two (v : Val) :
-    evalBinOp .mul v (.u64 2) = evalBinOp .shl v (.u64 1) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_mul_two]
-  | _ => rfl
-
-theorem evalBinOp_mul_four (v : Val) :
-    evalBinOp .mul v (.u64 4) = evalBinOp .shl v (.u64 2) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_mul_four]
-  | _ => rfl
-
-theorem evalBinOp_mul_eight (v : Val) :
-    evalBinOp .mul v (.u64 8) = evalBinOp .shl v (.u64 3) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_mul_eight]
-  | _ => rfl
-
-theorem evalBinOp_mul_sixteen (v : Val) :
-    evalBinOp .mul v (.u64 16) = evalBinOp .shl v (.u64 4) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_mul_sixteen]
-  | _ => rfl
-
-theorem evalBinOp_mul_thirtytwo (v : Val) :
-    evalBinOp .mul v (.u64 32) = evalBinOp .shl v (.u64 5) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_mul_thirtytwo]
-  | _ => rfl
-
-theorem evalBinOp_two_mul (v : Val) :
-    evalBinOp .mul (.u64 2) v = evalBinOp .shl v (.u64 1) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_two_mul]
-  | _ => rfl
-
-theorem evalBinOp_four_mul (v : Val) :
-    evalBinOp .mul (.u64 4) v = evalBinOp .shl v (.u64 2) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_four_mul]
-  | _ => rfl
-
-theorem evalBinOp_eight_mul (v : Val) :
-    evalBinOp .mul (.u64 8) v = evalBinOp .shl v (.u64 3) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_eight_mul]
-  | _ => rfl
-
-@[simp]
-theorem evalBinOp_div_one (v : Val) : evalBinOp .div v (.u64 1) = .ok v := by
+theorem evalBinOp_mul_two (v : Val) : evalBinOp .mul v (.u64 2) = evalBinOp .shl v (.u64 1) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_mul_two] | _ => rfl
+theorem evalBinOp_mul_four (v : Val) : evalBinOp .mul v (.u64 4) = evalBinOp .shl v (.u64 2) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_mul_four] | _ => rfl
+theorem evalBinOp_mul_eight (v : Val) : evalBinOp .mul v (.u64 8) = evalBinOp .shl v (.u64 3) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_mul_eight] | _ => rfl
+theorem evalBinOp_mul_sixteen (v : Val) : evalBinOp .mul v (.u64 16) = evalBinOp .shl v (.u64 4) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_mul_sixteen] | _ => rfl
+theorem evalBinOp_mul_thirtytwo (v : Val) : evalBinOp .mul v (.u64 32) = evalBinOp .shl v (.u64 5) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_mul_thirtytwo] | _ => rfl
+theorem evalBinOp_two_mul (v : Val) : evalBinOp .mul (.u64 2) v = evalBinOp .shl v (.u64 1) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_two_mul] | _ => rfl
+theorem evalBinOp_four_mul (v : Val) : evalBinOp .mul (.u64 4) v = evalBinOp .shl v (.u64 2) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_four_mul] | _ => rfl
+theorem evalBinOp_eight_mul (v : Val) : evalBinOp .mul (.u64 8) v = evalBinOp .shl v (.u64 3) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_eight_mul] | _ => rfl
+@[simp] theorem evalBinOp_div_one (v : Val) : evalBinOp .div v (.u64 1) = .ok v := by
   unfold evalBinOp; cases v <;> simp
-
-theorem evalBinOp_div_two (v : Val) :
-    evalBinOp .div v (.u64 2) = evalBinOp .shr v (.u64 1) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_div_two]
-  | _ => rfl
-
-theorem evalBinOp_div_four (v : Val) :
-    evalBinOp .div v (.u64 4) = evalBinOp .shr v (.u64 2) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_div_four]
-  | _ => rfl
-
-theorem evalBinOp_div_eight (v : Val) :
-    evalBinOp .div v (.u64 8) = evalBinOp .shr v (.u64 3) := by
-  unfold evalBinOp
-  cases v with
-  | u64 a => simp [uint64_div_eight]
-  | _ => rfl
-
-@[simp]
-theorem evalBinOp_shl_zero (v : Val) : evalBinOp .shl v (.u64 0) = .ok v := by
+theorem evalBinOp_div_two (v : Val) : evalBinOp .div v (.u64 2) = evalBinOp .shr v (.u64 1) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_div_two] | _ => rfl
+theorem evalBinOp_div_four (v : Val) : evalBinOp .div v (.u64 4) = evalBinOp .shr v (.u64 2) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_div_four] | _ => rfl
+theorem evalBinOp_div_eight (v : Val) : evalBinOp .div v (.u64 8) = evalBinOp .shr v (.u64 3) := by
+  unfold evalBinOp; cases v with | u64 _ => simp [uint64_div_eight] | _ => rfl
+@[simp] theorem evalBinOp_shl_zero (v : Val) : evalBinOp .shl v (.u64 0) = .ok v := by
   unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_shr_zero (v : Val) : evalBinOp .shr v (.u64 0) = .ok v := by
+@[simp] theorem evalBinOp_shr_zero (v : Val) : evalBinOp .shr v (.u64 0) = .ok v := by
   unfold evalBinOp; cases v <;> simp
 
 /-! ## Verified Scalar Peephole Rewriter -/
@@ -360,193 +300,32 @@ def rewriteLNIRExpr : LNIRExpr → LNIRExpr
   | .scalar e => .scalar (rewriteScalarPeephole e)
   | other => other
 
-/-! ## Machine-Checked Soundness Proofs -/
+/-! ## Machine-Checked Soundness Proofs via Generic Lifting Combinators -/
 
-theorem evalScalarExpr_add_zero_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .add lhs (.constU64 0)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_add_zero v
+private theorem liftBinOpIdR (op : BinOp) (c : UInt64)
+    (h : ∀ v, evalBinOp op v (.u64 c) = .ok v) (env : VarEnv) (lhs : ScalarExpr) :
+    evalScalarExpr env (.binOp op lhs (.constU64 c)) = evalScalarExpr env lhs := by
+  simp only [evalScalarExpr]; cases evalScalarExpr env lhs with | error _ => rfl | ok v => exact h v
 
-theorem evalScalarExpr_add_zero_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .add (.constU64 0) rhs) = evalScalarExpr env rhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_zero_add v
+private theorem liftBinOpIdL (op : BinOp) (c : UInt64)
+    (h : ∀ v, evalBinOp op (.u64 c) v = .ok v) (env : VarEnv) (rhs : ScalarExpr) :
+    evalScalarExpr env (.binOp op (.constU64 c) rhs) = evalScalarExpr env rhs := by
+  simp only [evalScalarExpr]; cases evalScalarExpr env rhs with | error _ => rfl | ok v => exact h v
 
-theorem evalScalarExpr_sub_zero_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .sub lhs (.constU64 0)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_sub_zero v
+private theorem liftBinOpShiftR (op1 op2 : BinOp) (c k : UInt64)
+    (h : ∀ v, evalBinOp op1 v (.u64 c) = evalBinOp op2 v (.u64 k)) (env : VarEnv) (lhs : ScalarExpr) :
+    evalScalarExpr env (.binOp op1 lhs (.constU64 c)) = evalScalarExpr env (.binOp op2 lhs (.constU64 k)) := by
+  simp only [evalScalarExpr]; cases evalScalarExpr env lhs with | error _ => rfl | ok v => exact h v
 
-theorem evalScalarExpr_mul_one_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul lhs (.constU64 1)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_mul_one v
+private theorem liftBinOpShiftL (op1 op2 : BinOp) (c k : UInt64)
+    (h : ∀ v, evalBinOp op1 (.u64 c) v = evalBinOp op2 v (.u64 k)) (env : VarEnv) (rhs : ScalarExpr) :
+    evalScalarExpr env (.binOp op1 (.constU64 c) rhs) = evalScalarExpr env (.binOp op2 rhs (.constU64 k)) := by
+  simp only [evalScalarExpr]; cases evalScalarExpr env rhs with | error _ => rfl | ok v => exact h v
 
-theorem evalScalarExpr_mul_one_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul (.constU64 1) rhs) = evalScalarExpr env rhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_one_mul v
-
-theorem evalScalarExpr_mul_two_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul lhs (.constU64 2)) =
-    evalScalarExpr env (.binOp .shl lhs (.constU64 1)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_mul_two v
-
-theorem evalScalarExpr_mul_four_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul lhs (.constU64 4)) =
-    evalScalarExpr env (.binOp .shl lhs (.constU64 2)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_mul_four v
-
-theorem evalScalarExpr_mul_eight_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul lhs (.constU64 8)) =
-    evalScalarExpr env (.binOp .shl lhs (.constU64 3)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_mul_eight v
-
-theorem evalScalarExpr_mul_sixteen_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul lhs (.constU64 16)) =
-    evalScalarExpr env (.binOp .shl lhs (.constU64 4)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_mul_sixteen v
-
-theorem evalScalarExpr_mul_thirtytwo_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul lhs (.constU64 32)) =
-    evalScalarExpr env (.binOp .shl lhs (.constU64 5)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_mul_thirtytwo v
-
-theorem evalScalarExpr_mul_two_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul (.constU64 2) rhs) =
-    evalScalarExpr env (.binOp .shl rhs (.constU64 1)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_two_mul v
-
-theorem evalScalarExpr_mul_four_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul (.constU64 4) rhs) =
-    evalScalarExpr env (.binOp .shl rhs (.constU64 2)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_four_mul v
-
-theorem evalScalarExpr_mul_eight_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .mul (.constU64 8) rhs) =
-    evalScalarExpr env (.binOp .shl rhs (.constU64 3)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_eight_mul v
-
-theorem evalScalarExpr_div_one_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .div lhs (.constU64 1)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_div_one v
-
-theorem evalScalarExpr_div_two_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .div lhs (.constU64 2)) =
-    evalScalarExpr env (.binOp .shr lhs (.constU64 1)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_div_two v
-
-theorem evalScalarExpr_div_four_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .div lhs (.constU64 4)) =
-    evalScalarExpr env (.binOp .shr lhs (.constU64 2)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_div_four v
-
-theorem evalScalarExpr_div_eight_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .div lhs (.constU64 8)) =
-    evalScalarExpr env (.binOp .shr lhs (.constU64 3)) := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_div_eight v
-
-theorem evalScalarExpr_shl_zero_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .shl lhs (.constU64 0)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_shl_zero v
-
-theorem evalScalarExpr_shr_zero_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .shr lhs (.constU64 0)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_shr_zero v
-
-theorem evalScalarExpr_xor_zero_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .bitXor lhs (.constU64 0)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_xor_zero v
-
-theorem evalScalarExpr_xor_zero_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .bitXor (.constU64 0) rhs) = evalScalarExpr env rhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_zero_xor v
-
-theorem evalScalarExpr_or_zero_right (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .bitOr lhs (.constU64 0)) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_or_zero v
-
-theorem evalScalarExpr_or_zero_left (env : VarEnv) (rhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .bitOr (.constU64 0) rhs) = evalScalarExpr env rhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env rhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_zero_or v
-
-theorem evalScalarExpr_and_self (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .bitAnd lhs lhs) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_and_self v
-
-theorem evalScalarExpr_or_self (env : VarEnv) (lhs : ScalarExpr) :
-    evalScalarExpr env (.binOp .bitOr lhs lhs) = evalScalarExpr env lhs := by
-  simp only [evalScalarExpr]
-  cases evalScalarExpr env lhs with
-  | error err => rfl
-  | ok v => exact evalBinOp_or_self v
+private theorem liftBinOpIdem (op : BinOp)
+    (h : ∀ v, evalBinOp op v v = .ok v) (env : VarEnv) (lhs : ScalarExpr) :
+    evalScalarExpr env (.binOp op lhs lhs) = evalScalarExpr env lhs := by
+  simp only [evalScalarExpr]; cases evalScalarExpr env lhs with | error _ => rfl | ok v => exact h v
 
 theorem rewriteBinOpStep_sound (op : BinOp) (lhs rhs : ScalarExpr) :
     ScalarExprEquiv (.binOp op lhs rhs) (rewriteBinOpStep op lhs rhs) := by
@@ -555,95 +334,95 @@ theorem rewriteBinOpStep_sound (op : BinOp) (lhs rhs : ScalarExpr) :
   | add =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [evalScalarExpr_add_zero_right]
+    · subst h1; simp [liftBinOpIdR .add 0 evalBinOp_add_zero]
     · rw [if_neg h1]
       by_cases h2 : lhs = .constU64 0
-      · subst h2; simp [evalScalarExpr_add_zero_left]
+      · subst h2; simp [liftBinOpIdL .add 0 evalBinOp_zero_add]
       · rw [if_neg h2]
   | sub =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [evalScalarExpr_sub_zero_right]
+    · subst h1; simp [liftBinOpIdR .sub 0 evalBinOp_sub_zero]
     · rw [if_neg h1]
   | mul =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 1
-    · subst h1; simp [evalScalarExpr_mul_one_right]
+    · subst h1; simp [liftBinOpIdR .mul 1 evalBinOp_mul_one]
     · rw [if_neg h1]
       by_cases h2 : lhs = .constU64 1
-      · subst h2; simp [evalScalarExpr_mul_one_left]
+      · subst h2; simp [liftBinOpIdL .mul 1 evalBinOp_one_mul]
       · rw [if_neg h2]
         by_cases h3 : rhs = .constU64 2
-        · subst h3; simp [evalScalarExpr_mul_two_right]
+        · subst h3; simp [liftBinOpShiftR .mul .shl 2 1 evalBinOp_mul_two]
         · rw [if_neg h3]
           by_cases h4 : rhs = .constU64 4
-          · subst h4; simp [evalScalarExpr_mul_four_right]
+          · subst h4; simp [liftBinOpShiftR .mul .shl 4 2 evalBinOp_mul_four]
           · rw [if_neg h4]
             by_cases h5 : rhs = .constU64 8
-            · subst h5; simp [evalScalarExpr_mul_eight_right]
+            · subst h5; simp [liftBinOpShiftR .mul .shl 8 3 evalBinOp_mul_eight]
             · rw [if_neg h5]
               by_cases h6 : rhs = .constU64 16
-              · subst h6; simp [evalScalarExpr_mul_sixteen_right]
+              · subst h6; simp [liftBinOpShiftR .mul .shl 16 4 evalBinOp_mul_sixteen]
               · rw [if_neg h6]
                 by_cases h7 : rhs = .constU64 32
-                · subst h7; simp [evalScalarExpr_mul_thirtytwo_right]
+                · subst h7; simp [liftBinOpShiftR .mul .shl 32 5 evalBinOp_mul_thirtytwo]
                 · rw [if_neg h7]
                   by_cases h8 : lhs = .constU64 2
-                  · subst h8; simp [evalScalarExpr_mul_two_left]
+                  · subst h8; simp [liftBinOpShiftL .mul .shl 2 1 evalBinOp_two_mul]
                   · rw [if_neg h8]
                     by_cases h9 : lhs = .constU64 4
-                    · subst h9; simp [evalScalarExpr_mul_four_left]
+                    · subst h9; simp [liftBinOpShiftL .mul .shl 4 2 evalBinOp_four_mul]
                     · rw [if_neg h9]
                       by_cases h10 : lhs = .constU64 8
-                      · subst h10; simp [evalScalarExpr_mul_eight_left]
+                      · subst h10; simp [liftBinOpShiftL .mul .shl 8 3 evalBinOp_eight_mul]
                       · rw [if_neg h10]
   | div =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 1
-    · subst h1; simp [evalScalarExpr_div_one_right]
+    · subst h1; simp [liftBinOpIdR .div 1 evalBinOp_div_one]
     · rw [if_neg h1]
       by_cases h2 : rhs = .constU64 2
-      · subst h2; simp [evalScalarExpr_div_two_right]
+      · subst h2; simp [liftBinOpShiftR .div .shr 2 1 evalBinOp_div_two]
       · rw [if_neg h2]
         by_cases h3 : rhs = .constU64 4
-        · subst h3; simp [evalScalarExpr_div_four_right]
+        · subst h3; simp [liftBinOpShiftR .div .shr 4 2 evalBinOp_div_four]
         · rw [if_neg h3]
           by_cases h4 : rhs = .constU64 8
-          · subst h4; simp [evalScalarExpr_div_eight_right]
+          · subst h4; simp [liftBinOpShiftR .div .shr 8 3 evalBinOp_div_eight]
           · rw [if_neg h4]
   | shl =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [evalScalarExpr_shl_zero_right]
+    · subst h1; simp [liftBinOpIdR .shl 0 evalBinOp_shl_zero]
     · rw [if_neg h1]
   | shr =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [evalScalarExpr_shr_zero_right]
+    · subst h1; simp [liftBinOpIdR .shr 0 evalBinOp_shr_zero]
     · rw [if_neg h1]
   | bitXor =>
     simp only [rewriteBinOpStep]
     by_cases h1 : rhs = .constU64 0
-    · subst h1; simp [evalScalarExpr_xor_zero_right]
+    · subst h1; simp [liftBinOpIdR .bitXor 0 evalBinOp_xor_zero]
     · rw [if_neg h1]
       by_cases h2 : lhs = .constU64 0
-      · subst h2; simp [evalScalarExpr_xor_zero_left]
+      · subst h2; simp [liftBinOpIdL .bitXor 0 evalBinOp_zero_xor]
       · rw [if_neg h2]
   | bitAnd =>
     simp only [rewriteBinOpStep]
     by_cases h1 : lhs = rhs
-    · subst h1; simp [evalScalarExpr_and_self]
+    · subst h1; simp [liftBinOpIdem .bitAnd evalBinOp_and_self]
     · rw [if_neg h1]
   | bitOr =>
     simp only [rewriteBinOpStep]
     by_cases h1 : lhs = rhs
-    · subst h1; simp [evalScalarExpr_or_self]
+    · subst h1; simp [liftBinOpIdem .bitOr evalBinOp_or_self]
     · rw [if_neg h1]
       by_cases h2 : rhs = .constU64 0
-      · subst h2; simp [evalScalarExpr_or_zero_right]
+      · subst h2; simp [liftBinOpIdR .bitOr 0 evalBinOp_or_zero]
       · rw [if_neg h2]
         by_cases h3 : lhs = .constU64 0
-        · subst h3; simp [evalScalarExpr_or_zero_left]
+        · subst h3; simp [liftBinOpIdL .bitOr 0 evalBinOp_zero_or]
         · rw [if_neg h3]
   | mod | sar | eq | lt | le | addChecked256 | subChecked256 | mulChecked256 =>
     rfl

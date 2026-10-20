@@ -212,6 +212,7 @@ def run_stage2_formal_and_axiom_audit(candidate: Dict[str, Any]) -> Dict[str, An
     # Law 1 (Untrusted Plugin Gate) & Law 5 (Spec & Test Suite Pinning Gate)
     spec_pin_ok = not bool(candidate.get("simulate_spec_tampering", False))
     plugin_gate_ok = not bool(candidate.get("simulate_adversarial_plugin", False))
+    profiles_ok = True
     if ln_bin.is_file() and spec_pin_ok and plugin_gate_ok:
         plug_proc = subprocess.run(
             [str(ln_bin), "plugins", "--test-adversarial", "--json"],
@@ -221,11 +222,26 @@ def run_stage2_formal_and_axiom_audit(candidate: Dict[str, Any]) -> Dict[str, An
         )
         if plug_proc.returncode != 0:
             plugin_gate_ok = False
+        prof_dir = REPO_ROOT / "profiles"
+        if prof_dir.is_dir():
+            for pfile in sorted(prof_dir.glob("*.json")):
+                if pfile.name == "SCHEMA.json":
+                    continue
+                so_proc = subprocess.run(
+                    [str(ln_bin), "superopt", "--profile", str(pfile), "--json"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if so_proc.returncode != 0:
+                    profiles_ok = False
 
     if not spec_pin_ok:
         forbidden_in_source.append("Law5_SpecOrTestTamperingDetected")
     if not plugin_gate_ok:
         forbidden_in_source.append("Law1_AdversarialUntrustedPluginRejected")
+    if not profiles_ok:
+        forbidden_in_source.append("HardwareCostProfileVerificationFailed")
 
     axiom_audit_ok = (
         len(forbidden_in_axioms) == 0
@@ -234,6 +250,7 @@ def run_stage2_formal_and_axiom_audit(candidate: Dict[str, Any]) -> Dict[str, An
         and tv_ok
         and spec_pin_ok
         and plugin_gate_ok
+        and profiles_ok
     )
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     return {

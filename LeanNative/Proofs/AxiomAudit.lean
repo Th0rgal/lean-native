@@ -127,6 +127,9 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Proofs.evalScalarExpr_or_mask_coalesce_u64
   , ``LeanNative.Proofs.evalScalarExpr_xor_mask_coalesce_u64
   , ``LeanNative.Proofs.evalScalarExpr_mul_add_distrib_const_u64
+  , ``LeanNative.Spec.meta_verified_contract_compose_sound
+  , ``LeanNative.Spec.meta_validator_rejects_semantic_mutants
+  , ``LeanNative.Spec.meta_limb256_mul_lo_homomorphism
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

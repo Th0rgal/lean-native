@@ -388,17 +388,44 @@ partial def emitScalarExpr256 (e : ScalarExpr) : EmitM String := do
       return res
     | .addChecked256 =>
       let ov ← freshTmp "uadd_ov"
+      let flag ← freshTmp "uadd_flag"
+      let trapLbl ← freshLabel "uadd_trap"
+      let okLbl ← freshLabel "uadd_ok"
       emitLine s!"  {ov} = call \{ i256, i1 } @llvm.uadd.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+      emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
+      emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
+      emitLine s!"{trapLbl}:"
+      emitLine "  call void @llvm.trap()"
+      emitLine "  unreachable"
+      emitLine s!"{okLbl}:"
       emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
       return res
     | .subChecked256 =>
       let ov ← freshTmp "usub_ov"
+      let flag ← freshTmp "usub_flag"
+      let trapLbl ← freshLabel "usub_trap"
+      let okLbl ← freshLabel "usub_ok"
       emitLine s!"  {ov} = call \{ i256, i1 } @llvm.usub.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+      emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
+      emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
+      emitLine s!"{trapLbl}:"
+      emitLine "  call void @llvm.trap()"
+      emitLine "  unreachable"
+      emitLine s!"{okLbl}:"
       emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
       return res
     | .mulChecked256 =>
       let ov ← freshTmp "umul_ov"
+      let flag ← freshTmp "umul_flag"
+      let trapLbl ← freshLabel "umul_trap"
+      let okLbl ← freshLabel "umul_ok"
       emitLine s!"  {ov} = call \{ i256, i1 } @llvm.umul.with.overflow.i256(i256 {lVal}, i256 {rVal})"
+      emitLine s!"  {flag} = extractvalue \{ i256, i1 } {ov}, 1"
+      emitLine s!"  br i1 {flag}, label %{trapLbl}, label %{okLbl}"
+      emitLine s!"{trapLbl}:"
+      emitLine "  call void @llvm.trap()"
+      emitLine "  unreachable"
+      emitLine s!"{okLbl}:"
       emitLine s!"  {res} = extractvalue \{ i256, i1 } {ov}, 0"
       return res
   | .unaryOp op arg =>

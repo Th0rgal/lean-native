@@ -315,7 +315,12 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
     let sv := symEvalScalar st se
     st.bindVar dst sv
   | .constU256 val =>
-    st.bindVar dst { expr := .constU64 val.lo0, nonPoison := true, noUB := true }
+    let symVal : SymExpr :=
+      if val.lo1 == 0 && val.hi0 == 0 && val.hi1 == 0 then
+        .constU64 val.lo0
+      else
+        .tuple [.constU64 val.lo0, .constU64 val.lo1, .constU64 val.hi0, .constU64 val.hi1]
+    st.bindVar dst { expr := symVal, nonPoison := true, noUB := true }
   | .mulDivDown aVar bVar denomVar =>
     let sa := st.lookupVar aVar
     let sb := st.lookupVar bVar
@@ -562,7 +567,19 @@ def mkSampleParamVal (seed : UInt64) (paramIdx : Nat) (ty : LNIRType) (st : Heap
   let smallU64 : UInt64 := (r % 8) + 1
   match ty with
   | .i1 => (.bool (r % 2 == 1), st)
-  | .u256 | .i256 => (.u256 (UInt256.ofUInt64 smallU64), st)
+  | .u256 | .i256 =>
+    let (r1, _) := splitMix64Next (r + 1)
+    let (r2, _) := splitMix64Next (r + 2)
+    let (r3, _) := splitMix64Next (r + 3)
+    let w256 : UInt256 :=
+      match r % 8 with
+      | 0 => UInt256.ofUInt64 smallU64
+      | 1 => ⟨0xffffffffffffffff, 0, 0, 0⟩
+      | 2 => ⟨0xffffffffffffffff, 0xffffffffffffffff, 0, 0⟩
+      | 3 => ⟨0, 0, 0, 0x8000000000000000⟩
+      | 4 => UInt256.max
+      | _ => ⟨r, r1, r2, r3 &&& 0x7fffffffffffffff⟩
+    (.u256 w256, st)
   | .storageMap =>
     let mapId := st.nextId + 1
     let mapBuf : StorageMapBuffer := { id := mapId, entries := [] }

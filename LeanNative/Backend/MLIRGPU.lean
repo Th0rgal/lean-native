@@ -257,11 +257,10 @@ def emitMLIRModule (m : LNIRModule) : String :=
     `bar.sync 0;` tree reduction (`stride = 128, 64, 32, 16, 8, 4, 2, 1`), and thread-0
     `atom.global.add.u64`. -/
 def emitPTXDotReduceKernel (fnSymbol : String) : String :=
-  let reduceSteps : List (Nat × Nat) := [
-    (128, 1024), (64, 512), (32, 256), (16, 128),
-    (8, 64), (4, 32), (2, 16), (1, 8)
+  let sharedSteps : List (Nat × Nat) := [
+    (128, 1024), (64, 512), (32, 256)
   ]
-  let reduceLines := reduceSteps.foldl (fun acc (stride, byteOff) =>
+  let sharedLines := sharedSteps.foldl (fun acc (stride, byteOff) =>
     acc ++ [
       s!"    setp.lt.u32   %p2, %r3, {stride};",
       s!"    @!%p2 bra     $L_red_sync_{stride}_{fnSymbol};",
@@ -272,6 +271,22 @@ def emitPTXDotReduceKernel (fnSymbol : String) : String :=
       "    bar.sync      0;"
     ]
   ) []
+  let warpSteps : List Nat := [16, 8, 4, 2, 1]
+  let warpLines := [
+    "    setp.lt.u32   %p2, %r3, 32;",
+    s!"    @!%p2 bra     $L_warp_done_{fnSymbol};"
+  ] ++ warpSteps.foldl (fun acc offset =>
+    acc ++ [
+      "    mov.b64            {%r5, %r6}, %rd9;",
+      s!"    shfl.sync.bfly.b32 %r7, %r5, {offset}, 31, 0xffffffff;",
+      s!"    shfl.sync.bfly.b32 %r8, %r6, {offset}, 31, 0xffffffff;",
+      "    mov.b64            %rd15, {%r7, %r8};",
+      "    add.u64            %rd9, %rd9, %rd15;"
+    ]
+  ) [] ++ [
+    s!"$L_warp_done_{fnSymbol}:"
+  ]
+  let reduceLines := sharedLines ++ warpLines
   String.intercalate "\n" ([
     s!".visible .entry {fnSymbol}(",
     "    .param .u64 param_out,",
@@ -282,7 +297,7 @@ def emitPTXDotReduceKernel (fnSymbol : String) : String :=
     "{",
     "    .shared .align 8 .b8 sdata_raw[2048];",
     "    .reg .pred %p<3>;",
-    "    .reg .b32  %r<5>;",
+    "    .reg .b32  %r<9>;",
     "    .reg .b64  %rd<16>;",
     "",
     "    ld.param.u64 %rd1, [param_out];",
