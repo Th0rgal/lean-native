@@ -29,9 +29,6 @@ def find_lean_native_core() -> str:
     repo_bin = script_dir.parent / ".lake" / "build" / "bin" / "lean-native-core"
     if repo_bin.is_file() and os.access(repo_bin, os.X_OK):
         return str(repo_bin)
-    which_bin = shutil.which("lean-native-core")
-    if which_bin:
-        return which_bin
     for candidate in (
         "/usr/local/bin/lean-native-core",
         "/tmp/lean-native-spark/.lake/build/bin/lean-native-core",
@@ -39,9 +36,70 @@ def find_lean_native_core() -> str:
     ):
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
+    which_bin = shutil.which("lean-native-core")
+    if which_bin:
+        return which_bin
     raise FileNotFoundError(
         "Could not locate 'lean-native-core' binary. Set LEAN_NATIVE_CORE_BIN or add it to PATH."
     )
+
+
+def resolve_ssh_config() -> Optional[str]:
+    dev_id = os.environ.get("SANDBOXED_DEVELOPMENT_IDENTITY", "/var/lib/sandboxed-node/Shared/development-identity")
+    for candidate in (
+        os.path.join(dev_id, "current", "ssh", "config"),
+        "/var/lib/sandboxed-node/.config/sandboxed-sh/development-identity/current/ssh/config",
+        "/var/lib/sandboxed-node/Shared/development-identity/current/ssh/config",
+        "/root/Shared/development-identity/current/ssh/config",
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def spark_http_via_ssh(method: str, path_and_query: str, token: str, body: Optional[bytes] = None) -> Optional[Dict[str, Any]]:
+    ssh_cfg = resolve_ssh_config()
+    ssh_base = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4"]
+    if ssh_cfg:
+        ssh_base.extend(["-F", ssh_cfg])
+    for host, target_url in (("agent-core", f"http://100.77.4.93:8890{path_and_query}"), ("dgx-spark", f"http://127.0.0.1:8890{path_and_query}")):
+        try:
+            curl_cmd = f"curl -fsSL -X {method} '{target_url}' -H 'Content-Type: application/json'"
+            if token:
+                curl_cmd += f" -H 'Authorization: Bearer {token}'"
+            if body is not None:
+                curl_cmd += " --data-binary @-"
+            proc = subprocess.run(
+                ssh_base + [host, curl_cmd],
+                input=body,
+                capture_output=True,
+                timeout=6.0,
+                check=True,
+            )
+            return json.loads(proc.stdout.decode("utf-8"))
+        except Exception:
+            continue
+    return None
+
+
+def resolve_memory_token() -> str:
+    tok = os.environ.get("MEMORY_API_TOKEN", "").strip()
+    if tok:
+        return tok
+    for path in ("/etc/spark/memory/token", "/etc/spark/memory/secrets.env"):
+        try:
+            if os.path.isfile(path) and os.access(path, os.R_OK):
+                for line in Path(path).read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith("MEMORY_API_TOKEN="):
+                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if "=" not in line:
+                        return line
+        except Exception:
+            pass
+    return ""
 
 
 def call_governor_stream(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -62,37 +120,93 @@ def call_governor_stream(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
-def fetch_spark_priors(domain: Optional[str] = None, branch_type: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+def fetch_spark_priors_raw(domain: Optional[str] = None, goal_class: Optional[str] = None) -> Dict[str, Any]:
     base_url = os.environ.get("SPARK_MEMORY_URL", "http://100.77.4.93:8890").rstrip("/")
-    token = os.environ.get("MEMORY_API_TOKEN", "")
+    token = resolve_memory_token()
     params = {}
     if domain:
         params["domain"] = domain
-    if branch_type:
-        params["branch_type"] = branch_type
+    if goal_class:
+        params["goal_class"] = goal_class
     qs = ("?" + urllib.parse.urlencode(params)) if params else ""
-    req = urllib.request.Request(f"{base_url}/api/priors{qs}")
+    path_and_query = f"/api/priors{qs}"
+    req = urllib.request.Request(f"{base_url}{path_and_query}")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=3.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            priors_map: Dict[str, Dict[str, Any]] = {}
-            for p in data.get("priors", []):
-                key = f"{p.get('domain')}:{p.get('branch_type')}:{p.get('goal_shape_hash', '*')}"
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        via_ssh = spark_http_via_ssh("GET", path_and_query, token)
+        if via_ssh is not None:
+            return via_ssh
+        return {"items": [], "count": 0, "warning": str(exc)}
+
+
+def fetch_spark_priors(domain: Optional[str] = None, goal_class: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    data = fetch_spark_priors_raw(domain, goal_class)
+    priors_map: Dict[str, Dict[str, Any]] = {}
+    items = data.get("items") or data.get("priors") or []
+    for p in items:
+        dom = p.get("domain", "lean_proof")
+        gc = p.get("goal_class") or p.get("branch_type") or "*"
+        model = p.get("solver_model", "*")
+        for key in (f"{dom}:{gc}:{model}", f"{dom}:{gc}:*", f"{dom}:*:*"):
+            if key not in priors_map:
                 priors_map[key] = p
-                wildcard_key = f"{p.get('domain')}:{p.get('branch_type')}:*"
-                if wildcard_key not in priors_map:
-                    priors_map[wildcard_key] = p
-            return priors_map
-    except Exception:
-        return {}
+    return priors_map
 
 
-def post_spark_telemetry(event: Dict[str, Any]) -> bool:
+def normalize_outcome(outcome: str) -> str:
+    up = outcome.upper().strip()
+    if up in ("VALIDATED", "SOLVED", "ACCEPTED", "DONE"):
+        return "SOLVED"
+    if up in ("FALSIFIED", "FALSE_GOAL", "COUNTEREXAMPLE"):
+        return "FALSE_GOAL"
+    if up in ("BLOCKED", "REJECTED_GATE"):
+        return "BLOCKED"
+    return "PRUNED"
+
+
+def post_spark_telemetry(event: Dict[str, Any]) -> Dict[str, Any]:
     base_url = os.environ.get("SPARK_MEMORY_URL", "http://100.77.4.93:8890").rstrip("/")
-    token = os.environ.get("MEMORY_API_TOKEN", "")
-    body = json.dumps(event).encode("utf-8")
+    token = resolve_memory_token()
+    pred_axes = event.get("predicted_axes") or {
+        "p": float(event.get("predicted_p", event.get("p", 0.5))),
+        "impact": float(event.get("predicted_impact", event.get("impact", 0.8))),
+        "effort_p50": float(event.get("predicted_effort_p50", event.get("effort_p50", 10000.0))),
+        "effort_p90": float(event.get("predicted_effort_p90", event.get("effort_p90", 30000.0))),
+    }
+    static_feats = event.get("static_features") or {}
+    if event.get("failure_mode"):
+        static_feats["failure_mode"] = event["failure_mode"]
+    if event.get("branch_type"):
+        static_feats["branch_type"] = event["branch_type"]
+
+    elapsed_ms = event.get("actual_elapsed_ms")
+    if elapsed_ms is None:
+        elapsed_ms = float(event.get("actual_wall_sec", event.get("wall_sec", 0.0))) * 1000.0
+
+    payload = {
+        "mission_id": str(event.get("mission_id", "mission-local")),
+        "task_key": str(event.get("task_key") or event.get("branch_id") or "task-0"),
+        "parent_task_key": event.get("parent_task_key"),
+        "stage": str(event.get("stage", "GRIND")),
+        "domain": str(event.get("domain", "lean_proof")),
+        "goal_class": str(event.get("goal_class") or event.get("goal_shape_hash") or event.get("branch_type") or "default"),
+        "goal_shape_hash": str(event.get("goal_shape_hash") or event.get("goal_class") or "default"),
+        "decomposer_model": str(event.get("decomposer_model", "gemini-4-argon")),
+        "solver_model": str(event.get("solver_model", "gemini-4-argon")),
+        "predicted_axes": pred_axes,
+        "static_features": static_feats,
+        "checkpoints": event.get("checkpoints") or [],
+        "actual_tokens": int(event.get("actual_tokens", event.get("tokens", 0))),
+        "actual_heartbeats": int(event.get("actual_heartbeats", event.get("heartbeats", 0))),
+        "actual_elapsed_ms": float(elapsed_ms),
+        "outcome": normalize_outcome(str(event.get("outcome", "SOLVED"))),
+        "final_metric": event.get("final_metric"),
+    }
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         f"{base_url}/api/telemetry",
         data=body,
@@ -102,14 +216,57 @@ def post_spark_telemetry(event: Dict[str, Any]) -> bool:
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            return 200 <= resp.status < 300
-    except Exception:
-        return False
+        with urllib.request.urlopen(req, timeout=1.8) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        via_ssh = spark_http_via_ssh("POST", "/api/telemetry", token, body)
+        if via_ssh is not None:
+            return via_ssh
+        return {"ok": False, "error": str(exc)}
+
+
+def cmd_priors(args: argparse.Namespace) -> int:
+    data = fetch_spark_priors_raw(args.domain, args.branch_type)
+    print(json.dumps(data, indent=2))
+    return 0
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    if args.json:
+        event = json.loads(sys.stdin.read() if args.json == "-" else args.json)
+    else:
+        event = {
+            "mission_id": args.mission_id,
+            "branch_id": args.branch_id,
+            "stage": args.stage,
+            "domain": args.domain,
+            "branch_type": args.branch_type,
+            "goal_class": args.goal_shape,
+            "goal_shape_hash": args.goal_shape,
+            "solver_model": args.solver_model,
+            "decomposer_model": args.decomposer_model,
+            "predicted_p": args.p,
+            "predicted_impact": args.impact,
+            "predicted_effort_p50": args.effort_p50,
+            "predicted_effort_p90": args.effort_p90,
+            "outcome": args.outcome,
+            "actual_tokens": args.tokens,
+            "actual_heartbeats": args.heartbeats,
+            "actual_wall_sec": args.wall_sec,
+            "failure_mode": args.failure_mode,
+        }
+    resp = post_spark_telemetry(event)
+    print(json.dumps(resp, indent=2))
+    return 0 if resp.get("ok", True) else 1
 
 
 def cmd_rank(args: argparse.Namespace) -> int:
-    raw = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+    if args.input == "-":
+        raw = sys.stdin.read()
+    elif args.input.strip().startswith("[") or args.input.strip().startswith("{"):
+        raw = args.input
+    else:
+        raw = Path(args.input).read_text(encoding="utf-8")
     candidates = json.loads(raw)
     if isinstance(candidates, dict) and "candidates" in candidates:
         candidates = candidates["candidates"]
@@ -119,18 +276,20 @@ def cmd_rank(args: argparse.Namespace) -> int:
     for idx, c in enumerate(candidates):
         dom = c.get("domain", args.domain or "lean_proof")
         btype = c.get("branch_type", "PROVE")
-        gshape = c.get("goal_shape_hash", "*")
-        prior = priors.get(f"{dom}:{btype}:{gshape}") or priors.get(f"{dom}:{btype}:*") or {}
+        gclass = c.get("goal_class") or c.get("goal_shape_hash") or btype
+        prior = priors.get(f"{dom}:{gclass}:*") or priors.get(f"{dom}:{btype}:*") or priors.get(f"{dom}:*:*") or {}
 
         prob_permille = c.get("prob_permille")
         if prob_permille is None and "p" in c:
             prob_permille = int(round(float(c["p"]) * 1000))
-        if prob_permille is None and "posterior_p" in prior:
-            prob_permille = int(round(float(prior["posterior_p"]) * 1000))
+        if prob_permille is None and "p_mean" in prior:
+            prob_permille = int(round(float(prior["p_mean"]) * 1000))
 
         impact_permille = c.get("impact_permille")
         if impact_permille is None and "impact" in c:
             impact_permille = int(round(float(c["impact"]) * 1000))
+        if impact_permille is None and "mean_impact" in prior:
+            impact_permille = int(round(float(prior["mean_impact"]) * 1000))
         if impact_permille is None:
             impact_permille = 800
 
@@ -157,6 +316,7 @@ def cmd_rank(args: argparse.Namespace) -> int:
             "bayesian_effective_effort_monotone_in_tail",
             "bayesian_score_monotone_in_prob",
         ],
+        "priors_loaded": len(priors),
         "ranked_candidates": scored,
     }
     print(json.dumps(result, indent=2))
@@ -181,10 +341,15 @@ def cmd_watch(args: argparse.Namespace) -> int:
             print(json.dumps({"status": "idle", "wake_boss": True, "reason": "no_active_workers"}))
             return 0
 
-        # Determine if any worker in a race_group has already certified a winner
         winning_groups = set()
         for w in workers:
-            if w.get("has_cert") and w.get("spec_hash_before", 1) == w.get("spec_hash_after", 1) and w.get("forbidden_axioms_count", 0) == 0 and w.get("vacuous_specs_count", 0) == 0 and w.get("artifact_certified", True):
+            if (
+                w.get("has_cert")
+                and w.get("spec_hash_before", 1) == w.get("spec_hash_after", 1)
+                and w.get("forbidden_axioms_count", 0) == 0
+                and w.get("vacuous_specs_count", 0) == 0
+                and w.get("artifact_certified", True)
+            ):
                 winning_groups.add(w.get("race_group", "default"))
 
         reqs: List[Dict[str, Any]] = []
@@ -214,43 +379,22 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
         decisions = call_governor_stream(reqs)
 
-        # Log survival curve checkpoint if crossing 15s / 60s / 180s / 300s
-        for mark in checkpoint_marks:
-            if elapsed >= mark and mark not in checkpoints_logged:
-                checkpoints_logged.add(mark)
-                if args.log_telemetry:
-                    for w, d in zip(workers, decisions):
-                        post_spark_telemetry({
-                            "mission_id": args.mission_id,
-                            "branch_id": d["task_id"],
-                            "domain": w.get("domain", "lean_proof"),
-                            "branch_type": w.get("branch_type", "PROVE"),
-                            "goal_shape_hash": w.get("goal_shape_hash", "default"),
-                            "predicted_p": float(w.get("prob_permille", 500)) / 1000.0,
-                            "predicted_impact": float(w.get("impact_permille", 800)) / 1000.0,
-                            "predicted_effort_p50": float(w.get("effort_p50", 10)),
-                            "predicted_effort_p90": float(w.get("effort_p90", 25)),
-                            "outcome": "RUNNING_CHECKPOINT",
-                            "actual_tokens": d["tokens_used"],
-                            "actual_wall_sec": float(elapsed),
-                            "checkpoints": [{"t_sec": mark, "tokens": d["tokens_used"], "stage1_rejects": d["stage1_rejects"]}],
-                        })
-
         wake_events = [d for d in decisions if d.get("wake_boss")]
         if wake_events or args.once:
             if args.log_telemetry:
                 for w, d in zip(workers, decisions):
                     if d.get("wake_boss"):
                         outcome = (
-                            "VALIDATED"
+                            "SOLVED"
                             if d.get("acceptance_gate_passed") is True
-                            else ("REJECTED_GATE" if d.get("acceptance_gate_passed") is False else d.get("decision", "PRUNED").upper())
+                            else ("BLOCKED" if d.get("acceptance_gate_passed") is False else "PRUNED")
                         )
                         post_spark_telemetry({
                             "mission_id": args.mission_id,
                             "branch_id": d["task_id"],
                             "domain": w.get("domain", "lean_proof"),
                             "branch_type": w.get("branch_type", "PROVE"),
+                            "goal_class": w.get("goal_class", w.get("goal_shape_hash", "default")),
                             "goal_shape_hash": w.get("goal_shape_hash", "default"),
                             "predicted_p": float(w.get("prob_permille", 500)) / 1000.0,
                             "predicted_impact": float(w.get("impact_permille", 800)) / 1000.0,
@@ -259,7 +403,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                             "outcome": outcome,
                             "actual_tokens": d["tokens_used"],
                             "actual_wall_sec": float(elapsed),
-                            "failure_mode": None if outcome == "VALIDATED" else d.get("wake_reason"),
+                            "failure_mode": None if outcome == "SOLVED" else d.get("wake_reason"),
                         })
             print(json.dumps({
                 "status": "wake_boss" if wake_events else "snapshot",
@@ -283,10 +427,34 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Formally Verified Bayesian Research Governor (LeanNative)")
     subparsers = parser.add_subparsers(dest="cmd", required=True)
 
+    p_priors = subparsers.add_parser("priors", help="Fetch empirical Bayesian priors from spark-memory (:8890)")
+    p_priors.add_argument("--domain", default=None, help="Filter by domain (e.g. lean_proof, formal_spec, gpu_kernel)")
+    p_priors.add_argument("--branch-type", default=None, help="Filter by goal_class / branch_type")
+
     p_rank = subparsers.add_parser("rank", help="Rank candidate research branches using 64-bit Lean 4 Bayesian kernel")
-    p_rank.add_argument("input", help="Path to JSON candidate list or '-' for stdin")
+    p_rank.add_argument("input", help="Path to JSON candidate list, inline JSON array, or '-' for stdin")
     p_rank.add_argument("--domain", default=None, help="Default domain for spark-memory priors lookup")
     p_rank.add_argument("--no-remote-priors", action="store_true", help="Skip querying spark-memory for empirical priors")
+
+    p_record = subparsers.add_parser("record", help="Record a research branch outcome & telemetry to spark-memory (:8890)")
+    p_record.add_argument("--json", default=None, help="Inline JSON object or '-' for stdin")
+    p_record.add_argument("--mission-id", default="mission-local", help="Orb mission ID")
+    p_record.add_argument("--branch-id", default="branch-0", help="Branch or task ID")
+    p_record.add_argument("--stage", default="GRIND", help="Stage (ABSTRACT, CONTRACT, GRIND)")
+    p_record.add_argument("--domain", default="lean_proof", help="Domain (lean_proof, formal_spec, gpu_kernel)")
+    p_record.add_argument("--branch-type", default="PROVE", help="Branch type (PROVE, REFUTE, PROBE, OPTIMIZE)")
+    p_record.add_argument("--goal-shape", default="clocked_sim_bridge", help="Goal class / shape family tag")
+    p_record.add_argument("--solver-model", default="gemini-4-argon", help="Model used by worker/solver")
+    p_record.add_argument("--decomposer-model", default="gemini-4-argon", help="Model used by Boss decomposer")
+    p_record.add_argument("--p", type=float, default=0.5, help="Predicted probability p (0..1)")
+    p_record.add_argument("--impact", type=float, default=0.8, help="Predicted impact I (0..1)")
+    p_record.add_argument("--effort-p50", type=float, default=10.0, help="Predicted median effort")
+    p_record.add_argument("--effort-p90", type=float, default=25.0, help="Predicted p90 effort")
+    p_record.add_argument("--outcome", default="VALIDATED", help="Outcome (VALIDATED/SOLVED, FALSIFIED/FALSE_GOAL, PRUNED, BLOCKED)")
+    p_record.add_argument("--tokens", type=int, default=0, help="Actual tokens consumed")
+    p_record.add_argument("--heartbeats", type=int, default=0, help="Actual Lean heartbeats")
+    p_record.add_argument("--wall-sec", type=float, default=0.0, help="Actual wall-clock seconds")
+    p_record.add_argument("--failure-mode", default=None, help="Optional failure mode / counterexample summary")
 
     p_watch = subparsers.add_parser("watch", help="Watch active workers, enforce race_group/budget/survival cutoffs, and wake Boss")
     p_watch.add_argument("--mission-id", default="mission-local", help="Orb mission ID")
@@ -296,6 +464,10 @@ def main() -> int:
     p_watch.add_argument("--log-telemetry", action="store_true", help="Automatically record checkpoints/outcomes to spark-memory")
 
     args = parser.parse_args()
+    if args.cmd == "priors":
+        return cmd_priors(args)
+    if args.cmd == "record":
+        return cmd_record(args)
     if args.cmd == "rank":
         return cmd_rank(args)
     if args.cmd == "watch":
