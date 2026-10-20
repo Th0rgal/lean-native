@@ -107,6 +107,20 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.pr_spec_pinning_blocks_test_tampering
   , ``LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms
   , ``LeanNative.Spec.pr_spec_pinning_gate_sound
+  , ``LeanNative.Proofs.uint64_mul_sixteen
+  , ``LeanNative.Proofs.uint64_mul_thirtytwo
+  , ``LeanNative.Proofs.uint64_two_mul
+  , ``LeanNative.Proofs.uint64_four_mul
+  , ``LeanNative.Proofs.uint64_eight_mul
+  , ``LeanNative.Proofs.uint64_div_two
+  , ``LeanNative.Proofs.uint64_div_four
+  , ``LeanNative.Proofs.uint64_div_eight
+  , ``LeanNative.Proofs.uint64_add_self_shl_one
+  , ``LeanNative.Proofs.uint64_add_assoc_const
+  , ``LeanNative.Proofs.uint64_and_mask_coalesce
+  , ``LeanNative.Proofs.uint64_or_mask_coalesce
+  , ``LeanNative.Proofs.uint64_xor_mask_coalesce
+  , ``LeanNative.Proofs.uint64_mul_add_distrib_const
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

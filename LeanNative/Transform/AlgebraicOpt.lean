@@ -38,13 +38,6 @@ def rewriteScalarPeepholeStep (e : ScalarExpr) : ScalarExpr :=
     if x == y then .constU64 0 else e2
   | .binOp .mul _ (.constU64 0) => .constU64 0
   | .binOp .mul (.constU64 0) _ => .constU64 0
-  | .binOp .mul (.constU64 2) x => .binOp .shl x (.constU64 1)
-  | .binOp .mul (.constU64 4) x => .binOp .shl x (.constU64 2)
-  | .binOp .mul (.constU64 8) x => .binOp .shl x (.constU64 3)
-  | .binOp .div x (.constU64 1) => x
-  | .binOp .div x (.constU64 2) => .binOp .shr x (.constU64 1)
-  | .binOp .div x (.constU64 4) => .binOp .shr x (.constU64 2)
-  | .binOp .div x (.constU64 8) => .binOp .shr x (.constU64 3)
   | .binOp .mod _ (.constU64 1) => .constU64 0
   | .binOp .mod x (.constU64 2) => .binOp .bitAnd x (.constU64 1)
   | .binOp .mod x (.constU64 4) => .binOp .bitAnd x (.constU64 3)
@@ -53,8 +46,6 @@ def rewriteScalarPeepholeStep (e : ScalarExpr) : ScalarExpr :=
     if x == y then .constU64 0 else e2
   | .binOp .bitAnd _ (.constU64 0) => .constU64 0
   | .binOp .bitAnd (.constU64 0) _ => .constU64 0
-  | .binOp .shl x (.constU64 0) => x
-  | .binOp .shr x (.constU64 0) => x
   | .binOp .eq x y =>
     if x == y then .constBool true else e2
   | .binOp .lt x y =>
