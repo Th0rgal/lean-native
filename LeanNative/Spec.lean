@@ -364,4 +364,12 @@ theorem spt_rom_fetch_deterministic {α : Type} (rom : SptTree α) (pcBits : Lis
     sptLookup (sptInsert rom pcBits instr) pcBits = some instr :=
   sptLookup_insert_same rom pcBits instr
 
+def mulDivDownNat (a b d : Nat) : Nat := if d == 0 then 0 else (a * b) / d
+def mulDivUpNat (a b d : Nat) : Nat := if d == 0 then 0 else (a * b + (d - 1)) / d
+
+theorem mulDivDown_le_mulDivUp (a b d : Nat) : mulDivDownNat a b d ≤ mulDivUpNat a b d := by
+  unfold mulDivDownNat mulDivUpNat; split <;> first | exact Nat.le_refl 0 | exact Nat.div_le_div_right (Nat.le_add_right _ _)
+
+theorem mulDivDown_zero_denom (a b : Nat) : mulDivDownNat a b 0 = 0 ∧ mulDivUpNat a b 0 = 0 := ⟨rfl, rfl⟩
+
 end LeanNative.Spec

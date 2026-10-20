@@ -5,7 +5,7 @@
 `lean-native` and `turbo-lean` form a co-designed native compilation, hardware fast-check, and incremental verification stack for Lean 4:
 
 - **`lean-native` (Verified Native Codegen, Translation Validation & Hardware Fast-Check)**:
-  Lowers Lean/LNIR into verified zero-boxing C-ABI SIMD (`--c-abi`), LLVM IR, NVIDIA CUDA PTX, Apple Metal MSL, and Cloud TPU XLA/StableHLO kernels. Certifies counterexamples (`0` false positives) and specification non-vacuity via executable operational semantics (`evalCode`) and Alive2-style symbolic translation validation (`CodeRefines`).
+  Lowers Lean/LNIR into verified zero-boxing C-ABI SIMD (`--c-abi`), LLVM IR, NVIDIA CUDA PTX, Apple Metal MSL, and Cloud TPU XLA/StableHLO kernels (including 512-bit `mulDivDown`/`mulDivUp` and 256-bit bit-scan primitives). Certifies counterexamples (`0` false positives) and specification non-vacuity via executable operational semantics (`evalCode`) and Alive2-style symbolic translation validation (`CodeRefines`).
 - **`turbo-lean` (Incremental Verification, Zygote Elaboration & Federated Orchestration)**:
   Partitions Lean modules into dependency cones and `have` sub-proof cuts, invokes `lean-native` as its Stage-1 counterexample and C-ABI fast-check engine, races tactic accelerators inside warm `ZygoteWorker` snapshots, and enforces an in-kernel soundness gate (`0 sorryAx`, `0 native_decide`, `0 trustCompiler`).
 

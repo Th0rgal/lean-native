@@ -99,18 +99,7 @@ def verifiedTheoremRegistry : List String :=
     "bootstrap_shift_step_budget_sound", "empirical_high_water_refutes_loose_bound",
     "evalLoopStepBudget_monotone", "riscv_div_by_zero_spec", "zisk_csr_atomic_step_budget",
     "evalPassChainBudget_cons", "sptLookup_insert_same", "pass_chain_two_passes_eval",
-    "spt_rom_fetch_deterministic"
-  ]
-  let gov := [
-    "bayesian_effective_effort_pos", "bayesian_falsified_branch_score_zero",
-    "bayesian_zero_impact_score_zero", "bayesian_effective_effort_monotone_in_tail",
-    "bayesian_score_monotone_in_prob", "bayesian_posterior_bounded",
-    "governor_accept_blocks_spec_tampering", "governor_accept_blocks_sorry_axioms",
-    "governor_accept_blocks_vacuous_spec", "governor_accept_gate_sound",
-    "governor_race_winner_cancels_siblings", "governor_budget_exceeded_never_continues",
-    "governor_survival_stagnation_never_continues",
-    "governor_continue_implies_within_budget_and_no_winner",
-    "pruneArm_falsified_true", "decideWorkerActionC_sibling_won"
+    "spt_rom_fetch_deterministic", "mulDivDown_le_mulDivUp", "mulDivDown_zero_denom"
   ]
   let ir := ["bitAnd_self", "bitOr_self", "bitXor_zero", "zero_bitXor", "bitOr_zero", "zero_bitOr"]
   let fc := ["certifyCounterexample_no_false_positive", "substScalarExpr_nil",
@@ -121,7 +110,6 @@ def verifiedTheoremRegistry : List String :=
   (proofs.map ("LeanNative.Proofs.SymbolicTV." ++ ·)) ++
   (sem.map ("LeanNative.Semantics." ++ ·)) ++
   (spec.map ("LeanNative.Spec." ++ ·)) ++
-  (gov.map ("LeanNative.ResearchGovernor." ++ ·)) ++
   (ir.map ("LeanNative.IR.UInt256." ++ ·)) ++
   (fc.map ("LeanNative.Backend.FastCheck." ++ ·))
 
