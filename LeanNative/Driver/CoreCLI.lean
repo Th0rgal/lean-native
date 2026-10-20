@@ -244,14 +244,23 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
 
 def runCompileMLIR (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
+  let isStableHLO := hasFlag args "--tpu" || hasFlag args "--stablehlo" || hasFlag args "--tpu-stablehlo"
+  let isPallas := hasFlag args "--pallas" || hasFlag args "--tpu-pallas"
   let baseMod ← loadInputModule elaborateHook? args
   let (optMod, _) := runDefaultPipeline baseMod
-  let mlirText := emitMLIRModule optMod
+  let mlirText :=
+    if isPallas then
+      emitTPUPallasModule optMod
+    else if isStableHLO then
+      emitStableHLOModule optMod
+    else
+      emitMLIRModule optMod
   if outPath.isEmpty then
     IO.println mlirText
   else
     IO.FS.writeFile outPath mlirText
-    IO.println s!"[{tag}] Wrote GPU MLIR module to {outPath}"
+    let kind := if isPallas then "TPU Pallas" else if isStableHLO then "TPU v5e StableHLO" else "GPU MLIR"
+    IO.println s!"[{tag}] Wrote {kind} module to {outPath}"
   return 0
 
 def runCompilePTX (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
@@ -575,6 +584,12 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   let (metalValid, _) := validateMetalShader metalTxt
   let (fcMetalValid, _) := validateMetalShader fcMetal
   let gpuDescs := lowerModuleToGPUDescriptors optMod
+  let stablehloTxt := emitStableHLOModule optMod
+  let pallasTxt := emitTPUPallasModule optMod
+  let tpuCodegenOk := (stablehloTxt.splitOn "stablehlo.").length > 1 &&
+    (stablehloTxt.splitOn "tpu_v5e").length > 1 &&
+    (pallasTxt.splitOn "tpu_v5e").length > 1 &&
+    (pallasTxt.splitOn "pallas").length > 1
   let blake3Ok := blake3SelfTest
 
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
@@ -586,10 +601,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"7. FastCheck ConstraintProp vs Vac : {if fcPropOk && fcNaiveVacuousOk then "PASSED" else "FAILED"} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses})"
   IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
   IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
+  IO.println s!"10. Google Cloud TPU v5e Codegen   : {if tpuCodegenOk then "PASSED" else "FAILED"} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
 
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
-    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok &&
+    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok && tpuCodegenOk &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
     IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="
@@ -646,6 +662,8 @@ structure WorkerCache where
   ptxSm90          : String
   metalText        : String
   mlirText         : String
+  stablehloText    : String
+  pallasText       : String
   fcReportPropJson : String
   fcReportVacJson  : String
   fcLlvmText       : String
@@ -666,6 +684,8 @@ def initWorkerCache : IO WorkerCache := do
   let ptxSm90 := emitPTXModule optMod "sm_90"
   let metalText := emitMetalModule optMod
   let mlirText := emitMLIRModule optMod
+  let stablehloText := emitStableHLOModule optMod
+  let pallasText := emitTPUPallasModule optMod
   let fcMod := mkFastCheckSampleModule
   let fcProp := runFastCheckModule fcMod 1024 true
   let fcVac := runFastCheckModule fcMod 1024 false
@@ -685,6 +705,8 @@ def initWorkerCache : IO WorkerCache := do
     ptxSm90
     metalText
     mlirText
+    stablehloText
+    pallasText
     fcReportPropJson := fcProp.toJson
     fcReportVacJson := fcVac.toJson
     fcLlvmText := fcLlvm
@@ -741,13 +763,27 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     let (valid, _) := validateMetalShader msl
     s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"apple_metal_3.0\",\"valid\":{if valid then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"metalBytes\":{msl.length},\"metal\":\"{escapeJsonWorker msl}\"}}"
   | "compile-mlir" =>
+    let dialect := (extractRpcStringField line "dialect").getD "gpu"
     let mlir :=
       match customModOpt with
       | some m =>
         let (mOpt, _) := runDefaultPipeline m
-        emitMLIRModule mOpt
-      | none => cache.mlirText
-    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"decls\":{cache.optMod.decls.length},\"mlirBytes\":{mlir.length},\"mlir\":\"{escapeJsonWorker mlir}\"}}"
+        if dialect == "pallas" then emitTPUPallasModule mOpt
+        else if dialect == "stablehlo" || dialect == "tpu" then emitStableHLOModule mOpt
+        else emitMLIRModule mOpt
+      | none =>
+        if dialect == "pallas" then cache.pallasText
+        else if dialect == "stablehlo" || dialect == "tpu" then cache.stablehloText
+        else cache.mlirText
+    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"dialect\":\"{escapeJsonWorker dialect}\",\"decls\":{cache.optMod.decls.length},\"mlirBytes\":{mlir.length},\"mlir\":\"{escapeJsonWorker mlir}\"}}"
+  | "compile-tpu" =>
+    let (shlo, pallas) :=
+      match customModOpt with
+      | some m =>
+        let (mOpt, _) := runDefaultPipeline m
+        (emitStableHLOModule mOpt, emitTPUPallasModule mOpt)
+      | none => (cache.stablehloText, cache.pallasText)
+    s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"google_cloud_tpu_v5e\",\"decls\":{cache.optMod.decls.length},\"stablehloBytes\":{shlo.length},\"pallasBytes\":{pallas.length},\"stablehlo\":\"{escapeJsonWorker shlo}\",\"pallas\":\"{escapeJsonWorker pallas}\"}}"
   | "compile-fastcheck" =>
     let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
     let repJson :=
