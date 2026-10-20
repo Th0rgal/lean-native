@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
+export PATH="/var/lib/sandboxed-node/caches/elan/bin:$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
 
 BASE_REF="${1:-HEAD}"
 EXTRA_PR_FLAGS="${LEAN_NATIVE_PR_FLAGS:-}"
@@ -32,18 +32,21 @@ $CORE_BIN plugins --test-adversarial
 python3 scripts/tune_hardware_profile.py --verify-profiles profiles
 
 if command -v turbo-lean >/dev/null 2>&1; then
-  echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean..."
+  echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean & LeanNative/ResearchGovernor.lean..."
   turbo-lean --json audit-spec LeanNative/Spec.lean > /tmp/ln_ci_audit_spec.json
   grep -q '"vacuous_specs": 0' /tmp/ln_ci_audit_spec.json
   grep -q '"tight_specs": 30' /tmp/ln_ci_audit_spec.json
-  echo "  -> turbo-lean audit-spec: 30/30 tight, 0 vacuous specs!"
+  turbo-lean --json audit-spec LeanNative/ResearchGovernor.lean > /tmp/ln_ci_audit_gov.json
+  grep -q '"vacuous_specs": 0' /tmp/ln_ci_audit_gov.json
+  echo "  -> turbo-lean audit-spec: 30/30 tight in Spec.lean & 0 vacuous specs in ResearchGovernor.lean!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (122 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (136 theorems) & Self-Tests..."
 $CORE_BIN self-test
+$CORE_BIN governor self-test
 $FULL_BIN self-test
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 122" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 136" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."

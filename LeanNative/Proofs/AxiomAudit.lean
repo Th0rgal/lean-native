@@ -10,6 +10,7 @@ import LeanNative.Proofs.LoopOptProofs
 import LeanNative.Proofs.SymbolicTV
 import LeanNative.Proofs.CertChecker
 import LeanNative.Backend.FastCheck
+import LeanNative.ResearchGovernor
 
 namespace LeanNative.Proofs
 
@@ -147,6 +148,20 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.evalLoopStepBudget_monotone
   , ``LeanNative.Spec.riscv_div_by_zero_spec
   , ``LeanNative.Spec.zisk_csr_atomic_step_budget
+  , ``LeanNative.ResearchGovernor.bayesian_effective_effort_pos
+  , ``LeanNative.ResearchGovernor.bayesian_falsified_branch_score_zero
+  , ``LeanNative.ResearchGovernor.bayesian_zero_impact_score_zero
+  , ``LeanNative.ResearchGovernor.bayesian_effective_effort_monotone_in_tail
+  , ``LeanNative.ResearchGovernor.bayesian_score_monotone_in_prob
+  , ``LeanNative.ResearchGovernor.bayesian_posterior_bounded
+  , ``LeanNative.ResearchGovernor.governor_accept_blocks_spec_tampering
+  , ``LeanNative.ResearchGovernor.governor_accept_blocks_sorry_axioms
+  , ``LeanNative.ResearchGovernor.governor_accept_blocks_vacuous_spec
+  , ``LeanNative.ResearchGovernor.governor_accept_gate_sound
+  , ``LeanNative.ResearchGovernor.governor_race_winner_cancels_siblings
+  , ``LeanNative.ResearchGovernor.governor_budget_exceeded_never_continues
+  , ``LeanNative.ResearchGovernor.governor_survival_stagnation_never_continues
+  , ``LeanNative.ResearchGovernor.governor_continue_implies_within_budget_and_no_winner
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

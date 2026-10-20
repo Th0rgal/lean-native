@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""
+research-governor — Sidecar CLI & Stream Governor backed by `lean-native-core governor`.
+
+All scoring (`computeBayesianScorePermille`), spec-pinning acceptance checks
+(`checkBranchAcceptanceGate`), and survival/race-group cutoff transitions (`decideWorkerAction`)
+are executed inside the formally verified Lean 4 binary (`lean-native-core governor`, 14 theorems,
+0 sorryAx). This script provides the thin I/O bridge to `spark-memory` (:8890) and `orb`.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+
+def find_lean_native_core() -> str:
+    env_bin = os.environ.get("LEAN_NATIVE_CORE_BIN")
+    if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+        return env_bin
+    script_dir = Path(__file__).resolve().parent
+    repo_bin = script_dir.parent / ".lake" / "build" / "bin" / "lean-native-core"
+    if repo_bin.is_file() and os.access(repo_bin, os.X_OK):
+        return str(repo_bin)
+    which_bin = shutil.which("lean-native-core")
+    if which_bin:
+        return which_bin
+    for candidate in (
+        "/usr/local/bin/lean-native-core",
+        "/tmp/lean-native-spark/.lake/build/bin/lean-native-core",
+        str(Path.home() / ".local" / "bin" / "lean-native-core"),
+    ):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise FileNotFoundError(
+        "Could not locate 'lean-native-core' binary. Set LEAN_NATIVE_CORE_BIN or add it to PATH."
+    )
+
+
+def call_governor_stream(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    bin_path = find_lean_native_core()
+    payload = "\n".join(json.dumps(item, separators=(",", ":")) for item in lines) + "\n{\"method\":\"exit\"}\n"
+    proc = subprocess.run(
+        [bin_path, "governor"],
+        input=payload,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    out: List[Dict[str, Any]] = []
+    for raw_line in proc.stdout.splitlines():
+        raw_line = raw_line.strip()
+        if raw_line.startswith("{") and raw_line.endswith("}"):
+            out.append(json.loads(raw_line))
+    return out
+
+
+def fetch_spark_priors(domain: Optional[str] = None, branch_type: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    base_url = os.environ.get("SPARK_MEMORY_URL", "http://100.77.4.93:8890").rstrip("/")
+    token = os.environ.get("MEMORY_API_TOKEN", "")
+    params = {}
+    if domain:
+        params["domain"] = domain
+    if branch_type:
+        params["branch_type"] = branch_type
+    qs = ("?" + urllib.parse.urlencode(params)) if params else ""
+    req = urllib.request.Request(f"{base_url}/api/priors{qs}")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            priors_map: Dict[str, Dict[str, Any]] = {}
+            for p in data.get("priors", []):
+                key = f"{p.get('domain')}:{p.get('branch_type')}:{p.get('goal_shape_hash', '*')}"
+                priors_map[key] = p
+                wildcard_key = f"{p.get('domain')}:{p.get('branch_type')}:*"
+                if wildcard_key not in priors_map:
+                    priors_map[wildcard_key] = p
+            return priors_map
+    except Exception:
+        return {}
+
+
+def post_spark_telemetry(event: Dict[str, Any]) -> bool:
+    base_url = os.environ.get("SPARK_MEMORY_URL", "http://100.77.4.93:8890").rstrip("/")
+    token = os.environ.get("MEMORY_API_TOKEN", "")
+    body = json.dumps(event).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url}/api/telemetry",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            return 200 <= resp.status < 300
+    except Exception:
+        return False
+
+
+def cmd_rank(args: argparse.Namespace) -> int:
+    raw = sys.stdin.read() if args.input == "-" else Path(args.input).read_text(encoding="utf-8")
+    candidates = json.loads(raw)
+    if isinstance(candidates, dict) and "candidates" in candidates:
+        candidates = candidates["candidates"]
+
+    priors = {} if args.no_remote_priors else fetch_spark_priors(args.domain)
+    stream_reqs: List[Dict[str, Any]] = []
+    for idx, c in enumerate(candidates):
+        dom = c.get("domain", args.domain or "lean_proof")
+        btype = c.get("branch_type", "PROVE")
+        gshape = c.get("goal_shape_hash", "*")
+        prior = priors.get(f"{dom}:{btype}:{gshape}") or priors.get(f"{dom}:{btype}:*") or {}
+
+        prob_permille = c.get("prob_permille")
+        if prob_permille is None and "p" in c:
+            prob_permille = int(round(float(c["p"]) * 1000))
+        if prob_permille is None and "posterior_p" in prior:
+            prob_permille = int(round(float(prior["posterior_p"]) * 1000))
+
+        impact_permille = c.get("impact_permille")
+        if impact_permille is None and "impact" in c:
+            impact_permille = int(round(float(c["impact"]) * 1000))
+        if impact_permille is None:
+            impact_permille = 800
+
+        req: Dict[str, Any] = {
+            "method": "governor-score",
+            "branch_id": str(c.get("branch_id", f"branch-{idx}")),
+            "branch_type": str(btype),
+            "race_group": str(c.get("race_group", "default")),
+            "impact_permille": int(impact_permille),
+            "effort_p50": int(c.get("effort_p50", prior.get("effort_p50", 10))),
+            "effort_p90": int(c.get("effort_p90", prior.get("effort_p90", 25))),
+            "risk_aversion_permille": int(c.get("risk_aversion_permille", 350)),
+        }
+        if prob_permille is not None:
+            req["prob_permille"] = int(prob_permille)
+        stream_reqs.append(req)
+
+    scored = call_governor_stream(stream_reqs)
+    scored.sort(key=lambda x: x.get("bayesian_score_permille", 0), reverse=True)
+    result = {
+        "engine": "lean-native-core/governor",
+        "theorems_enforced": [
+            "bayesian_falsified_branch_score_zero",
+            "bayesian_effective_effort_monotone_in_tail",
+            "bayesian_score_monotone_in_prob",
+        ],
+        "ranked_candidates": scored,
+    }
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    state_file = Path(args.state_file)
+    if not state_file.is_file():
+        print(json.dumps({"error": f"State file {state_file} not found"}), file=sys.stderr)
+        return 1
+
+    start_ts = time.time()
+    checkpoints_logged = set()
+    checkpoint_marks = (15, 60, 180, 300)
+
+    while True:
+        elapsed = int(time.time() - start_ts)
+        raw_state = json.loads(state_file.read_text(encoding="utf-8"))
+        workers = raw_state.get("workers", [])
+        if not workers:
+            print(json.dumps({"status": "idle", "wake_boss": True, "reason": "no_active_workers"}))
+            return 0
+
+        # Determine if any worker in a race_group has already certified a winner
+        winning_groups = set()
+        for w in workers:
+            if w.get("has_cert") and w.get("spec_hash_before", 1) == w.get("spec_hash_after", 1) and w.get("forbidden_axioms_count", 0) == 0 and w.get("vacuous_specs_count", 0) == 0 and w.get("artifact_certified", True):
+                winning_groups.add(w.get("race_group", "default"))
+
+        reqs: List[Dict[str, Any]] = []
+        for w in workers:
+            rg = w.get("race_group", "default")
+            is_winner_self = bool(w.get("has_cert")) and rg in winning_groups
+            sibling_win = (rg in winning_groups) and not is_winner_self
+            req = {
+                "method": "governor-step",
+                "task_id": str(w.get("task_id", "task-0")),
+                "race_group": str(rg),
+                "tokens_used": int(w.get("tokens_used", 0)),
+                "token_budget": int(w.get("token_budget", 50000)),
+                "stagnant_checkpoints": int(w.get("stagnant_checkpoints", 0)),
+                "max_stagnant_checkpoints": int(w.get("max_stagnant_checkpoints", 3)),
+                "stage1_rejects": int(w.get("stage1_rejects", 0)),
+                "max_stage1_rejects": int(w.get("max_stage1_rejects", 25)),
+                "sibling_winner_found": sibling_win,
+                "has_cert": bool(w.get("has_cert", False)),
+                "spec_hash_before": int(w.get("spec_hash_before", 1)),
+                "spec_hash_after": int(w.get("spec_hash_after", 1)),
+                "forbidden_axioms_count": int(w.get("forbidden_axioms_count", 0)),
+                "vacuous_specs_count": int(w.get("vacuous_specs_count", 0)),
+                "artifact_certified": bool(w.get("artifact_certified", True)),
+            }
+            reqs.append(req)
+
+        decisions = call_governor_stream(reqs)
+
+        # Log survival curve checkpoint if crossing 15s / 60s / 180s / 300s
+        for mark in checkpoint_marks:
+            if elapsed >= mark and mark not in checkpoints_logged:
+                checkpoints_logged.add(mark)
+                if args.log_telemetry:
+                    for w, d in zip(workers, decisions):
+                        post_spark_telemetry({
+                            "mission_id": args.mission_id,
+                            "branch_id": d["task_id"],
+                            "domain": w.get("domain", "lean_proof"),
+                            "branch_type": w.get("branch_type", "PROVE"),
+                            "goal_shape_hash": w.get("goal_shape_hash", "default"),
+                            "predicted_p": float(w.get("prob_permille", 500)) / 1000.0,
+                            "predicted_impact": float(w.get("impact_permille", 800)) / 1000.0,
+                            "predicted_effort_p50": float(w.get("effort_p50", 10)),
+                            "predicted_effort_p90": float(w.get("effort_p90", 25)),
+                            "outcome": "RUNNING_CHECKPOINT",
+                            "actual_tokens": d["tokens_used"],
+                            "actual_wall_sec": float(elapsed),
+                            "checkpoints": [{"t_sec": mark, "tokens": d["tokens_used"], "stage1_rejects": d["stage1_rejects"]}],
+                        })
+
+        wake_events = [d for d in decisions if d.get("wake_boss")]
+        if wake_events or args.once:
+            if args.log_telemetry:
+                for w, d in zip(workers, decisions):
+                    if d.get("wake_boss"):
+                        outcome = (
+                            "VALIDATED"
+                            if d.get("acceptance_gate_passed") is True
+                            else ("REJECTED_GATE" if d.get("acceptance_gate_passed") is False else d.get("decision", "PRUNED").upper())
+                        )
+                        post_spark_telemetry({
+                            "mission_id": args.mission_id,
+                            "branch_id": d["task_id"],
+                            "domain": w.get("domain", "lean_proof"),
+                            "branch_type": w.get("branch_type", "PROVE"),
+                            "goal_shape_hash": w.get("goal_shape_hash", "default"),
+                            "predicted_p": float(w.get("prob_permille", 500)) / 1000.0,
+                            "predicted_impact": float(w.get("impact_permille", 800)) / 1000.0,
+                            "predicted_effort_p50": float(w.get("effort_p50", 10)),
+                            "predicted_effort_p90": float(w.get("effort_p90", 25)),
+                            "outcome": outcome,
+                            "actual_tokens": d["tokens_used"],
+                            "actual_wall_sec": float(elapsed),
+                            "failure_mode": None if outcome == "VALIDATED" else d.get("wake_reason"),
+                        })
+            print(json.dumps({
+                "status": "wake_boss" if wake_events else "snapshot",
+                "mission_id": args.mission_id,
+                "elapsed_sec": elapsed,
+                "decisions": decisions,
+                "wake_events": wake_events,
+            }, indent=2))
+            return 0
+
+        time.sleep(args.interval)
+
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] in ("step", "score", "self-test", "stream"):
+        bin_path = find_lean_native_core()
+        sub = sys.argv[1:] if sys.argv[1] != "stream" else []
+        proc = subprocess.run([bin_path, "governor", *sub])
+        return proc.returncode
+
+    parser = argparse.ArgumentParser(description="Formally Verified Bayesian Research Governor (LeanNative)")
+    subparsers = parser.add_subparsers(dest="cmd", required=True)
+
+    p_rank = subparsers.add_parser("rank", help="Rank candidate research branches using 64-bit Lean 4 Bayesian kernel")
+    p_rank.add_argument("input", help="Path to JSON candidate list or '-' for stdin")
+    p_rank.add_argument("--domain", default=None, help="Default domain for spark-memory priors lookup")
+    p_rank.add_argument("--no-remote-priors", action="store_true", help="Skip querying spark-memory for empirical priors")
+
+    p_watch = subparsers.add_parser("watch", help="Watch active workers, enforce race_group/budget/survival cutoffs, and wake Boss")
+    p_watch.add_argument("--mission-id", default="mission-local", help="Orb mission ID")
+    p_watch.add_argument("--state-file", required=True, help="Path to live worker telemetry state JSON")
+    p_watch.add_argument("--interval", type=float, default=2.0, help="Watch interval in seconds")
+    p_watch.add_argument("--once", action="store_true", help="Evaluate once and exit immediately")
+    p_watch.add_argument("--log-telemetry", action="store_true", help="Automatically record checkpoints/outcomes to spark-memory")
+
+    args = parser.parse_args()
+    if args.cmd == "rank":
+        return cmd_rank(args)
+    if args.cmd == "watch":
+        return cmd_watch(args)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
