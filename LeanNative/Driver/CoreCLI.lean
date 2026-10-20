@@ -824,7 +824,7 @@ def handleFastWorkerRequest? (engineName line : String) : Option String :=
     let tgt := LeanNative.Backend.selectOptimalComputeTarget tripCount isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
     some s!"\{\"id\":{reqId},\"ok\":true,\"target\":\"{tgt}\",\"result\":\{\"target\":\"{tgt}\",\"trip_count\":{tripCount}}}"
   | "riscv-step-audit" =>
-    let boot := extractRpcNatField line "bootstrap_steps" 23127
+    let boot := extractRpcNatField line "bootstrap_steps" 23132
     let scale := extractRpcNatField line "loop_scale" 1
     let csr := extractRpcNatField line "csr_cost" 0
     let candK := extractRpcNatField line "candidate_k" 1000000
