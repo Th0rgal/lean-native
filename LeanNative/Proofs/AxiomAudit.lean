@@ -137,6 +137,9 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64
   , ``LeanNative.Proofs.evalScalarExpr_fma_fusion_u64
   , ``LeanNative.Proofs.uint64_rotl_comm_or
+  , ``LeanNative.Spec.small_trip_prefers_cpu_simd
+  , ``LeanNative.Spec.matrix_contraction_prefers_tpu_mxu
+  , ``LeanNative.Spec.federated_node_effective_cost_monotone_in_queue
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

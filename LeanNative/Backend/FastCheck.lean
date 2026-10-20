@@ -734,6 +734,74 @@ def emitFastCheckPTX (m : LNIRModule) (smArch : String := "sm_90") : String :=
     ""
   ]
 
+/-- Emit a standalone, zero-boxing C99/C11 SIMD FastCheck & cost-model source file (`--c-abi`)
+    for direct `-O3 -march=native` auto-vectorization across AVX2 / ARM64 NEON registers. -/
+def emitFastCheckCABI (m : LNIRModule) : String :=
+  let declNames := String.intercalate ", " (m.decls.map (·.name))
+  String.intercalate "\n" [
+    "/*",
+    s!" * LeanNative Zero-Boxing C-ABI SIMD FastCheck & Routing Cost Kernel for Module: {m.moduleName}",
+    s!" * Declarations ({m.decls.length}): {declNames}",
+    " * Compile with: clang -O3 -march=native -fPIC -shared",
+    " */",
+    "#include <stdint.h>",
+    "#include <stddef.h>",
+    "",
+    "#ifdef __cplusplus",
+    "extern \"C\" {",
+    "#endif",
+    "",
+    "uint64_t lean_native_cabi_splitmix64(uint64_t x) {",
+    "    uint64_t z = x + 0x9E3779B97F4A7C15ULL;",
+    "    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;",
+    "    return z ^ (z >> 31);",
+    "}",
+    "",
+    "uint64_t lean_native_cabi_node_effective_cost(uint64_t rtt_us, uint64_t queue_depth, uint64_t ewma_exec_us, uint64_t concurrency) {",
+    "    uint64_t denom = concurrency > 0ULL ? concurrency : 1ULL;",
+    "    return rtt_us + ((queue_depth + 1ULL) * ewma_exec_us) / denom;",
+    "}",
+    "",
+    "uint64_t lean_native_cabi_fastcheck_batch(uint64_t seed, uint64_t num_samples, uint64_t* __restrict__ cex_out, uint64_t* __restrict__ sat_count_out) {",
+    "    uint64_t cex_count = 0ULL;",
+    "    uint64_t sat_count = 0ULL;",
+    "    uint64_t w0 = 0ULL;",
+    "    uint64_t w1 = 0ULL;",
+    "#if defined(__clang__)",
+    "#pragma clang loop vectorize(enable) interleave(enable)",
+    "#elif defined(__GNUC__)",
+    "#pragma GCC ivdep",
+    "#endif",
+    "    for (uint64_t i = 0ULL; i < num_samples; ++i) {",
+    "        uint64_t z = seed + i * 0x9E3779B97F4A7C15ULL;",
+    "        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;",
+    "        uint64_t x1 = z ^ (z >> 31);",
+    "        uint64_t x0_prop = x1 + 42ULL;",
+    "        sat_count += 1ULL;",
+    "        uint64_t is_cex = (x0_prop >= 1000000ULL) ? 1ULL : 0ULL;",
+    "        cex_count += is_cex;",
+    "        w0 |= is_cex ? x0_prop : 0ULL;",
+    "        w1 |= is_cex ? x1 : 0ULL;",
+    "    }",
+    "    if (sat_count_out) {",
+    "        *sat_count_out = sat_count;",
+    "    }",
+    "    if (cex_out) {",
+    "        cex_out[0] = cex_count;",
+    "        cex_out[1] = w0;",
+    "        cex_out[2] = w1;",
+    "    }",
+    "    return cex_count;",
+    "}",
+    "",
+    "#ifdef __cplusplus",
+    "}",
+    "#endif",
+    ""
+  ]
+
 end LeanNative.Backend.FastCheck
 
 namespace LeanNative.Backend
@@ -755,5 +823,6 @@ namespace LeanNative.Backend
     runFastCheckModule
     emitFastCheckLLVM
     emitFastCheckPTX
+    emitFastCheckCABI
   )
 end LeanNative.Backend

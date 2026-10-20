@@ -268,4 +268,74 @@ def emitHybridHostGlue (plan : HybridPartitionPlan) : String :=
 
   String.intercalate "\n\n" ([header, scheduleSummary] ++ declGlues) ++ "\n"
 
+/-- Unified 4-target hardware accelerator placement for `lean-native` × `turbo-lean`. -/
+inductive ComputeTarget where
+  | cpuSimd         -- Local AVX2 / ARM64 NEON zero-boxing SIMD
+  | gpuCudaPtx      -- Local or remote NVIDIA CUDA PTX 8.0 (`sm_80`/`sm_89`/`sm_90`/`sm_121`)
+  | gpuMetal        -- Apple Silicon Metal Shading Language
+  | tpuXlaStableHLO -- Google Cloud TPU v5e/v6e XLA StableHLO / Pallas (128x128 MXU + 128x8 VPU)
+  deriving Repr, DecidableEq, Inhabited, BEq
+
+namespace ComputeTarget
+def toString : ComputeTarget → String
+  | .cpuSimd         => "cpu_simd"
+  | .gpuCudaPtx      => "gpu_cuda_ptx"
+  | .gpuMetal        => "gpu_metal"
+  | .tpuXlaStableHLO => "tpu_xla_stablehlo"
+instance : ToString ComputeTarget := ⟨toString⟩
+end ComputeTarget
+
+/-- Select the optimal hardware target given workload shape and available hardware backends. -/
+def selectOptimalComputeTarget
+    (tripCount : Nat)
+    (isMatrixContraction : Bool)
+    (is256BitWorkload : Bool)
+    (isControlHeavy : Bool)
+    (hasTpu : Bool)
+    (hasCudaGpu : Bool)
+    (hasMetalGpu : Bool := false) : ComputeTarget :=
+  if isControlHeavy || tripCount < 4096 then
+    .cpuSimd
+  else if isMatrixContraction && hasTpu then
+    .tpuXlaStableHLO
+  else if is256BitWorkload && hasCudaGpu then
+    .gpuCudaPtx
+  else if hasTpu then
+    .tpuXlaStableHLO
+  else if hasCudaGpu then
+    .gpuCudaPtx
+  else if hasMetalGpu then
+    .gpuMetal
+  else
+    .cpuSimd
+
+/-- Classify an `LNIRDecl` and select its optimal hardware target based on `extractParForRegions`,
+    256-bit parameter/return types, and GPU compatibility analysis. -/
+def classifyDeclComputeTarget
+    (d : LNIRDecl)
+    (tripCount : Nat)
+    (hasTpu hasCudaGpu : Bool)
+    (hasMetalGpu : Bool := false) : ComputeTarget :=
+  let regions := extractParForRegions d.body
+  let isMatrixContraction :=
+    d.name == "matmul_tiled_u64" || (d.name.splitOn "matmul").length > 1 ||
+    regions.any (fun (_, _, _, _, k) =>
+      match k with
+      | .dotProduct => d.name == "matmul_tiled_u64"
+      | _ => false)
+  let is256BitWorkload :=
+    d.retTy.is256Bit ||
+    d.params.any (fun p => p.ty == .u256 || p.ty == .i256 || p.ty == .storageMap || p.ty.is256Bit) ||
+    regions.any (fun (_, _, _, elemTy, _) => elemTy == .u256 || elemTy == .i256 || elemTy.is256Bit)
+  let isControlHeavy := !(analyzeGpuCompatibility d).1
+  selectOptimalComputeTarget tripCount isMatrixContraction is256BitWorkload isControlHeavy hasTpu hasCudaGpu hasMetalGpu
+
 end LeanNative.Backend.Hybrid
+
+namespace LeanNative.Backend
+  export Hybrid (
+    ComputeTarget
+    selectOptimalComputeTarget
+    classifyDeclComputeTarget
+  )
+end LeanNative.Backend

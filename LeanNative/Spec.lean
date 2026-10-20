@@ -34,11 +34,13 @@ import LeanNative.IR.AST
 import LeanNative.Semantics.Value
 import LeanNative.Semantics.Eval
 import LeanNative.Semantics.Refinement
+import LeanNative.Backend.Hybrid
 
 namespace LeanNative.Spec
 
 open LeanNative.IR
 open LeanNative.Semantics
+open LeanNative.Backend.Hybrid
 
 /-! ## 1. Law 1 — Untrusted Optimization Plugin / Verified TV & Kernel Gate Soundness -/
 
@@ -437,5 +439,51 @@ def checkSuperoptShiftMaskAndFmaCanary : Bool :=
 theorem meta_double_shift_mask_and_fma_sound :
     checkSuperoptShiftMaskAndFmaCanary = true := by
   rfl
+
+/-! ## 7. Law 6 — Verified 4-Target Hardware Partitioner & Queue-Aware Federated Routing -/
+
+/-- Effective cost (in microseconds) of dispatching a kernel to a federated accelerator node
+    given network round-trip latency `rtt`, current queue depth `q`, EWMA execution time `exec`,
+    and hardware concurrency slots `conc`. -/
+def federatedNodeEffectiveCost (rtt q exec conc : Nat) : Nat :=
+  rtt + ((q + 1) * exec) / max 1 conc
+
+/-- Theorem 6.1 (`small_trip_prefers_cpu_simd`):
+    When `tripCount < 4096`, the verified 4-target partitioner always selects `.cpuSimd`
+    to achieve `0` network/kernel-launch overhead. -/
+theorem small_trip_prefers_cpu_simd
+    (tripCount : Nat)
+    (isMatrixContraction is256BitWorkload isControlHeavy hasTpu hasCudaGpu hasMetalGpu : Bool)
+    (h_small : tripCount < 4096) :
+    selectOptimalComputeTarget tripCount isMatrixContraction is256BitWorkload isControlHeavy hasTpu hasCudaGpu hasMetalGpu = .cpuSimd := by
+  unfold selectOptimalComputeTarget
+  have h_lt : decide (tripCount < 4096) = true := decide_eq_true h_small
+  simp [h_lt]
+
+/-- Theorem 6.2 (`matrix_contraction_prefers_tpu_mxu`):
+    When `tripCount ≥ 4096`, `isControlHeavy = false`, `isMatrixContraction = true`,
+    and `hasTpu = true`, the partitioner selects `.tpuXlaStableHLO` (Google Cloud TPU MXU). -/
+theorem matrix_contraction_prefers_tpu_mxu
+    (tripCount : Nat)
+    (is256BitWorkload hasCudaGpu hasMetalGpu : Bool)
+    (h_large : 4096 ≤ tripCount) :
+    selectOptimalComputeTarget tripCount true is256BitWorkload false true hasCudaGpu hasMetalGpu = .tpuXlaStableHLO := by
+  unfold selectOptimalComputeTarget
+  have h_not_lt : ¬ (tripCount < 4096) := Nat.not_lt.mpr h_large
+  have h_dec : decide (tripCount < 4096) = false := decide_eq_false h_not_lt
+  simp [h_dec]
+
+/-- Theorem 6.3 (`federated_node_effective_cost_monotone_in_queue`):
+    Queue-aware load-balancing cost `rtt + ((q + 1) * exec) / max 1 conc` is monotonically
+    non-decreasing in the active queue depth `q1 ≤ q2`. -/
+theorem federated_node_effective_cost_monotone_in_queue
+    (rtt q1 q2 exec conc : Nat)
+    (h_q : q1 ≤ q2) :
+    rtt + ((q1 + 1) * exec) / max 1 conc ≤ rtt + ((q2 + 1) * exec) / max 1 conc := by
+  have h_q1 : q1 + 1 ≤ q2 + 1 := Nat.add_le_add_right h_q 1
+  have h_mul : (q1 + 1) * exec ≤ (q2 + 1) * exec := Nat.mul_le_mul_right exec h_q1
+  have h_div : ((q1 + 1) * exec) / max 1 conc ≤ ((q2 + 1) * exec) / max 1 conc :=
+    Nat.div_le_div_right h_mul
+  exact Nat.add_le_add_left h_div rtt
 
 end LeanNative.Spec

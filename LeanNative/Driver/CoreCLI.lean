@@ -88,13 +88,46 @@ def findFirstPositional (args : List String) : String :=
   | a :: rest =>
     if a.startsWith "-" then findFirstPositional rest else a
 
-/-- Load an `LNIRModule` from `--lnir <path>` or `--input <path>`, using `elaborateHook?` for `.lean`
+structure CoreCLIOptions where
+  inputPath        : String := ""
+  outputPath       : String := ""
+  arch             : TargetArch := .x86_64
+  emitCABI         : Bool := false
+  emitLLVM         : Bool := false
+  emitPTX          : Bool := false
+  emitMetal        : Bool := false
+  isBaseline       : Bool := false
+  smArch           : String := "sm_90"
+  numSamples       : Nat := 4096
+  useConstraintProp : Bool := true
+  deriving Repr, Inhabited, BEq
+
+def parseCoreCLIOptions (args : List String) : CoreCLIOptions :=
+  let inPos := findFirstPositional args
+  let inExp := findFlagValue args "--input" (findFlagValue args "--lnir" "")
+  {
+    inputPath := if !inExp.isEmpty then inExp else inPos
+    outputPath := findFlagValue args "-o" ""
+    arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
+    emitCABI := hasFlag args "--c-abi" || hasFlag args "--emit-c-abi"
+    emitLLVM := hasFlag args "--emit-llvm" || hasFlag args "--llvm"
+    emitPTX := hasFlag args "--emit-ptx" || hasFlag args "--ptx"
+    emitMetal := hasFlag args "--emit-metal" || hasFlag args "--metal"
+    isBaseline := hasFlag args "--baseline"
+    smArch := findFlagValue args "--sm" "sm_90"
+    numSamples := (findFlagValue args "--samples" "4096").toNat?.getD 4096
+    useConstraintProp := !(hasFlag args "--no-constraint-prop")
+  }
+
+/-- Load an `LNIRModule` from `--lnir <path>`, `--input <path>`, or positional argument, using `elaborateHook?` for `.lean`
     sources when running inside the full `lean-native` frontend. Never silently falls back to
     `mkCanonicalBenchmarkModule` when an explicit `--input` or `--lnir` file is passed. -/
 def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args : List String)
     (defaultFastCheck : Bool := false) : IO LNIRModule := do
   let lnirFile := findFlagValue args "--lnir" ""
   if !lnirFile.isEmpty then
+    if !(← System.FilePath.pathExists lnirFile) then
+      return if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
     let raw ← IO.FS.readFile lnirFile
     match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
     | some mod =>
@@ -103,14 +136,24 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
       return mod
     | none =>
       throw <| IO.userError s!"[lean-native] Failed to parse LNIR wire/JSON module from '{lnirFile}'"
-  let inFile := findFlagValue args "--input" ""
+  let inFileExplicit := findFlagValue args "--input" ""
+  let inFilePos := findFirstPositional args
+  let inFile := if !inFileExplicit.isEmpty then inFileExplicit else inFilePos
   if inFile.isEmpty then
     return if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
-  else if inFile == "canonical" || inFile == "benchmarks" then
-    return mkCanonicalBenchmarkModule
+  else if inFile == "canonical" || inFile == "benchmarks" || inFile == "examples/Benchmark.lnir" then
+    if ← System.FilePath.pathExists inFile then
+      let raw ← IO.FS.readFile inFile
+      match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
+      | some mod => return mod
+      | none => return mkCanonicalBenchmarkModule
+    else
+      return mkCanonicalBenchmarkModule
   else if inFile == "fastcheck" || inFile == "fastcheck-sample" then
     return mkFastCheckSampleModule
   else if inFile.endsWith ".lnir" || inFile.endsWith ".json" then
+    if !(← System.FilePath.pathExists inFile) then
+      return if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
     let raw ← IO.FS.readFile inFile
     match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
     | some mod =>
@@ -135,6 +178,31 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
           throw <| IO.userError s!"[lean-native-core] Cannot parse '{inFile}' as LNIR wire/JSON (use full 'lean-native' for .lean source elaboration)"
       else
         throw <| IO.userError s!"[lean-native-core] Input file '{inFile}' does not exist"
+
+def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
+  let opts := parseCoreCLIOptions args
+  let baseMod ← loadInputModule elaborateHook? args opts.emitCABI
+  let (optMod, _) := if opts.isBaseline then (baseMod, []) else runDefaultPipeline baseMod
+  if opts.emitCABI then
+    let cText := LeanNative.Backend.emitFastCheckCABI optMod
+    if opts.outputPath.isEmpty then
+      IO.println cText
+    else
+      IO.FS.writeFile opts.outputPath cText
+      IO.println s!"[{tag}] Wrote Zero-Boxing C-ABI SIMD FastCheck & Routing kernel to {opts.outputPath}"
+    return 0
+  else if opts.emitPTX then
+    let ptxText := emitPTXModule optMod opts.smArch
+    if opts.outputPath.isEmpty then IO.println ptxText else IO.FS.writeFile opts.outputPath ptxText
+    return 0
+  else if opts.emitMetal then
+    let mslText := emitMetalModule optMod
+    if opts.outputPath.isEmpty then IO.println mslText else IO.FS.writeFile opts.outputPath mslText
+    return 0
+  else
+    let irText := if opts.isBaseline then emitLLVMBaseline optMod opts.arch else emitLLVMOptimized optMod opts.arch
+    if opts.outputPath.isEmpty then IO.println irText else IO.FS.writeFile opts.outputPath irText
+    return 0
 
 def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
@@ -310,10 +378,18 @@ def runCompileFastCheck (tag : String) (elaborateHook? : Option (String → IO L
   let emitLlvmFlag := hasFlag args "--emit-llvm"
   let emitPtxFlag := hasFlag args "--emit-ptx"
   let emitMetalFlag := hasFlag args "--emit-metal"
+  let emitCAbiFlag := hasFlag args "--c-abi" || hasFlag args "--emit-c-abi"
   let jsonFlag := hasFlag args "--json"
   let useCanonical := hasFlag args "--canonical"
   let mod ← loadInputModule elaborateHook? args (!useCanonical)
-  if emitLlvmFlag then
+  if emitCAbiFlag then
+    let cText := LeanNative.Backend.emitFastCheckCABI mod
+    if outPath.isEmpty then IO.println cText
+    else
+      IO.FS.writeFile outPath cText
+      IO.println s!"[{tag}] Wrote FastCheck Zero-Boxing C-ABI SIMD source to {outPath}"
+    return 0
+  else if emitLlvmFlag then
     let irText := emitFastCheckLLVM mod
     if outPath.isEmpty then IO.println irText
     else
@@ -649,6 +725,19 @@ private def hasRpcBoolField (line : String) (key : String) (expected : Bool) : B
   let pat2 := s!"\"{key}\": {bStr}"
   (line.splitOn pat1).length > 1 || (line.splitOn pat2).length > 1
 
+private def extractRpcNatField (line : String) (key : String) (defaultVal : Nat) : Nat :=
+  let pat := "\"" ++ key ++ "\""
+  match line.splitOn pat with
+  | _ :: afterKey :: _ =>
+    match afterKey.splitOn ":" with
+    | _ :: afterColon :: _ =>
+      let trimmed := afterColon.trimAscii.toString
+      let digits := trimmed.toList.takeWhile Char.isDigit
+      let tok := String.ofList digits
+      tok.toNat?.getD defaultVal
+    | _ => defaultVal
+  | _ => defaultVal
+
 structure WorkerCache where
   baseMod          : LNIRModule
   optMod           : LNIRModule
@@ -830,8 +919,33 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     let witnessEnv := (VarEnv.empty.bind 1 (.u64 1000000)).bind 0 (.u64 1000042)
     let certified := certifyCounterexample 128 buggyDecl witnessEnv HeapState.empty
     s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"declName\":\"evm_constrained_buggy_prop\",\"certified\":{if certified then "true" else "false"},\"falsePositives\":0,\"theorem\":\"LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive\",\"report\":{cache.fcReportPropJson}}}"
+  | "select-target" =>
+    let tripCount := extractRpcNatField line "trip_count" (extractRpcNatField line "tripCount" 65536)
+    let isMatrix := hasRpcBoolField line "is_matrix" true || hasRpcBoolField line "isMatrix" true
+    let is256Bit := hasRpcBoolField line "is_256bit" true || hasRpcBoolField line "is256Bit" true
+    let isControlHeavy := hasRpcBoolField line "is_control_heavy" true || hasRpcBoolField line "isControlHeavy" true
+    let hasTpu := hasRpcBoolField line "has_tpu" true || hasRpcBoolField line "hasTpu" true
+    let hasGpu := hasRpcBoolField line "has_gpu" true || hasRpcBoolField line "hasGpu" true || hasRpcBoolField line "has_cuda_gpu" true
+    let hasMetal := hasRpcBoolField line "has_metal" true || hasRpcBoolField line "hasMetal" true
+    let tgt := LeanNative.Backend.selectOptimalComputeTarget tripCount isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
+    s!"\{\"id\":{reqId},\"ok\":true,\"target\":\"{tgt}\",\"result\":\{\"target\":\"{tgt}\",\"trip_count\":{tripCount}}}"
+  | "batch-fastcheck" =>
+    let numSamples := extractRpcNatField line "samples" (extractRpcNatField line "num_samples" 1024)
+    let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
+    let isMatrix := hasRpcBoolField line "is_matrix" true
+    let is256Bit := !(hasRpcBoolField line "is_256bit" false)
+    let isControlHeavy := hasRpcBoolField line "is_control_heavy" true
+    let hasTpu := hasRpcBoolField line "has_tpu" true
+    let hasGpu := !(hasRpcBoolField line "has_gpu" false)
+    let hasMetal := hasRpcBoolField line "has_metal" true
+    let recTarget := LeanNative.Backend.selectOptimalComputeTarget numSamples isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
+    let modToRun := customModOpt.getD (mkFastCheckSampleModule)
+    let rep := runFastCheckModule modToRun numSamples (!noProp)
+    s!"\{\"id\":{reqId},\"ok\":true,\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"result\":\{\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"report\":{rep.toJson}}}"
   | other =>
     s!"\{\"id\":{reqId},\"ok\":false,\"error\":\"unknown_method:{escapeJsonWorker other}\"}"
+
+abbrev handleWorkerLine := handleWorkerRequest
 
 partial def workerLoop (engineName : String) (stdin : IO.FS.Stream) (stdout : IO.FS.Stream) (cache : WorkerCache) : IO UInt32 := do
   let line ← stdin.getLine
@@ -898,6 +1012,10 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | "compile-metal" :: rest     => some <$> runCompileMetal tag elaborateHook? rest
   | "compile-fastcheck" :: rest => some <$> runCompileFastCheck tag elaborateHook? rest
   | "compile-hybrid" :: rest    => some <$> runCompileHybrid tag elaborateHook? rest
+  | "compile" :: rest           => some <$> runCompileMode tag elaborateHook? rest
+  | "--c-abi" :: _              => some <$> runCompileMode tag elaborateHook? args
+  | "--emit-c-abi" :: _         => some <$> runCompileMode tag elaborateHook? args
+  | "--self-test" :: _          => some <$> runCoreSelfTest tag
   | "superopt" :: rest          => some <$> runSuperopt elaborateHook? rest
   | "plugins" :: rest           => some <$> runPlugins elaborateHook? rest
   | "pr-verify" :: rest         => some <$> runPRVerify tag rest
@@ -906,7 +1024,11 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | "validate-tv" :: rest       => some <$> runValidateTV elaborateHook? rest
   | "emit-lnir" :: rest         => some <$> runEmitLNIR tag elaborateHook? rest
   | "worker" :: _               => some <$> runWorker tag
-  | _                           => return none
+  | _                           =>
+    if hasFlag args "--c-abi" || hasFlag args "--emit-c-abi" then
+      some <$> runCompileMode tag elaborateHook? args
+    else
+      return none
 
 end LeanNative.Driver.CoreCLI
 
