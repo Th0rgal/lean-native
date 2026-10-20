@@ -42,6 +42,16 @@ def rewriteScalarPeepholeStep (e : ScalarExpr) : ScalarExpr :=
   | .binOp .mod x (.constU64 2) => .binOp .bitAnd x (.constU64 1)
   | .binOp .mod x (.constU64 4) => .binOp .bitAnd x (.constU64 3)
   | .binOp .mod x (.constU64 8) => .binOp .bitAnd x (.constU64 7)
+  | .binOp .mod x (.constU64 16) => .binOp .bitAnd x (.constU64 15)
+  | .binOp .mod x (.constU64 32) => .binOp .bitAnd x (.constU64 31)
+  | .binOp .mod x (.constU64 64) => .binOp .bitAnd x (.constU64 63)
+  | .binOp .div x (.constU64 16) => .binOp .shr x (.constU64 4)
+  | .binOp .div x (.constU64 32) => .binOp .shr x (.constU64 5)
+  | .binOp .div x (.constU64 64) => .binOp .shr x (.constU64 6)
+  | .binOp .mul x (.constU64 64) => .binOp .shl x (.constU64 6)
+  | .binOp .mul (.constU64 16) x => .binOp .shl x (.constU64 4)
+  | .binOp .mul (.constU64 32) x => .binOp .shl x (.constU64 5)
+  | .binOp .mul (.constU64 64) x => .binOp .shl x (.constU64 6)
   | .binOp .bitXor x y =>
     if x == y then .constU64 0 else e2
   | .binOp .bitAnd _ (.constU64 0) => .constU64 0

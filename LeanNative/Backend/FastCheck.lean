@@ -138,6 +138,39 @@ def extractDeclConstraints (d : LNIRDecl) : List ConstraintSub :=
   let paramIds := d.params.map (·.id)
   extractPreconditionSubs paramIds [] [] d.body
 
+/-- Extract upper-bound hints `(x, K)` from precondition guards `(x < K)` or `(x <= K)`
+    where `elseBranch` is a vacuous pass, so random SplitMix64 lanes fold into `[0, K]`
+    instead of suffering `VacuousPass` when `K << 2^64`. -/
+def extractUpperBoundHints (paramIds : List VarId) (bindings : List (VarId × LNIRExpr))
+    (trueVars : List VarId) : LNIRCode → List (VarId × UInt64)
+  | .letBind dst _ val k =>
+    let trueVars' :=
+      match val with
+      | .scalar (.constBool true) | .scalar (.constU64 1) => dst :: trueVars
+      | _ => trueVars
+    extractUpperBoundHints paramIds ((dst, val) :: bindings) trueVars' k
+  | .ite condVar thenBranch elseBranch =>
+    let restHints := extractUpperBoundHints paramIds bindings trueVars thenBranch
+    if isVacuousTrueBranch trueVars elseBranch then
+      match bindings.lookup condVar with
+      | some (.scalar (.binOp .lt (.var x) (.constU64 k))) =>
+        if paramIds.contains x && k > 0 then
+          (x, k) :: restHints
+        else restHints
+      | some (.scalar (.binOp .le (.var x) (.constU64 k))) =>
+        if paramIds.contains x && k < 0xffffffffffffffff then
+          (x, k + 1) :: restHints
+        else restHints
+      | _ => restHints
+    else
+      restHints
+  | _ => []
+
+/-- Extract all upper-bound precondition hints `(paramVarId, modulusK)` from an `LNIRDecl`. -/
+def extractDeclUpperBoundHints (d : LNIRDecl) : List (VarId × UInt64) :=
+  let paramIds := d.params.map (·.id)
+  extractUpperBoundHints paramIds [] [] d.body
+
 /-- Propagate equality constraints (`x := rhs`) from precondition guards directly into `d.body`. -/
 def propagatePreconditionEqualities (d : LNIRDecl) : LNIRDecl × List ConstraintSub :=
   let subs := extractDeclConstraints d
@@ -155,16 +188,36 @@ def propagatePreconditionEqualities (d : LNIRDecl) : LNIRDecl × List Constraint
 
 /-! ## 2. Deterministic 64/256-Bit Boundary Value Tables + Pairwise Collision + SplitMix64 -/
 
-/-- Deterministic 64-bit boundary value table:
-    `0, 1, 2, 7, 42, 255, 65535, 2^32 - 1, 2^63, 2^64 - 1`. -/
+/-- Deterministic 64-bit boundary value table covering `Mathlib4` & `Verity` power-of-two and decimal bounds:
+    `0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 42, 63, 64, 100, 127, 128, 255, 256, 511, 512, 1000, 1024, 4096, 65535, 65536, 1000000, 2^32 - 1, 2^63, 2^64 - 1`. -/
 def boundaryU64Values : List UInt64 :=
   [ 0
   , 1
   , 2
+  , 3
+  , 4
   , 7
+  , 8
+  , 15
+  , 16
+  , 31
+  , 32
   , 42
+  , 63
+  , 64
+  , 100
+  , 127
+  , 128
   , 255
+  , 256
+  , 511
+  , 512
+  , 1000
+  , 1024
+  , 4096
   , 65535
+  , 65536
+  , 1000000
   , 0xffffffff
   , 0x8000000000000000
   , 0xffffffffffffffff
@@ -268,12 +321,20 @@ def genFastCheckParamVal (sampleIdx : Nat) (paramIdx : Nat) (ty : LNIRType) (st 
       (.u64 r, st)
 
 /-- Build a candidate `(VarEnv × HeapState)` for declaration `d` at `sampleIdx`,
-    applying equality constraint substitutions `subs` when `useConstraintProp = true`. -/
+    applying equality constraint substitutions `subs` and upper-bound range folding `upperHints`
+    when `useConstraintProp = true`. -/
 def buildFastCheckSample (d : LNIRDecl) (subs : List ConstraintSub) (sampleIdx : Nat)
-    (useConstraintProp : Bool) : VarEnv × HeapState :=
+    (useConstraintProp : Bool) (upperHints : List (VarId × UInt64) := []) : VarEnv × HeapState :=
   let (env0, st0, _) := d.params.foldl (fun (curEnv, curSt, pIdx) p =>
     let (v, nextSt) := genFastCheckParamVal sampleIdx pIdx p.ty curSt
-    (curEnv.bind p.id v, nextSt, pIdx + 1)
+    let vBounded :=
+      if useConstraintProp && sampleIdx ≥ 32 && (sampleIdx % 2 == 0) then
+        match upperHints.lookup p.id, v with
+        | some k, .u64 raw => if k > 0 then .u64 (raw % k) else v
+        | _, _ => v
+      else
+        v
+    (curEnv.bind p.id vBounded, nextSt, pIdx + 1)
   ) (VarEnv.empty, HeapState.empty, 0)
   if !useConstraintProp then
     (env0, st0)
@@ -445,10 +506,12 @@ def runFastCheckDecl (d : LNIRDecl) (numSamples : Nat := 4096) (useConstraintPro
     FastCheckDeclResult :=
   let (dProp, subs) :=
     if useConstraintProp then propagatePreconditionEqualities d else (d, [])
+  let upperHints :=
+    if useConstraintProp then extractDeclUpperBoundHints d else []
   let activeDecl := if useConstraintProp then dProp else d
   let fuel : Nat := 128
   let (satCount, cexOpt) := (List.range numSamples).foldl (fun (satAcc, foundOpt) sampleIdx =>
-    let (env, st) := buildFastCheckSample d subs sampleIdx useConstraintProp
+    let (env, st) := buildFastCheckSample d subs sampleIdx useConstraintProp upperHints
     let precondOk := checkPreconditionSatisfied fuel [] env st d.body
     let satAcc' := if precondOk then satAcc + 1 else satAcc
     match foundOpt with
@@ -763,30 +826,113 @@ def emitFastCheckCABI (m : LNIRModule) : String :=
     "    return rtt_us + ((queue_depth + 1ULL) * ewma_exec_us) / denom;",
     "}",
     "",
+    "uint64_t lean_native_cabi_u256_add_carry(const uint64_t a[4], const uint64_t b[4], uint64_t out[4]) {",
+    "#if defined(__SIZEOF_INT128__)",
+    "    __uint128_t s0 = (__uint128_t)a[0] + (__uint128_t)b[0];",
+    "    out[0] = (uint64_t)s0;",
+    "    __uint128_t s1 = (__uint128_t)a[1] + (__uint128_t)b[1] + (s0 >> 64);",
+    "    out[1] = (uint64_t)s1;",
+    "    __uint128_t s2 = (__uint128_t)a[2] + (__uint128_t)b[2] + (s1 >> 64);",
+    "    out[2] = (uint64_t)s2;",
+    "    __uint128_t s3 = (__uint128_t)a[3] + (__uint128_t)b[3] + (s2 >> 64);",
+    "    out[3] = (uint64_t)s3;",
+    "    return (uint64_t)(s3 >> 64);",
+    "#else",
+    "    uint64_t s0 = a[0] + b[0];",
+    "    uint64_t c0 = (s0 < a[0]) ? 1ULL : 0ULL;",
+    "    uint64_t t1 = a[1] + b[1];",
+    "    uint64_t s1 = t1 + c0;",
+    "    uint64_t c1 = ((t1 < a[1]) || (s1 < t1)) ? 1ULL : 0ULL;",
+    "    uint64_t t2 = a[2] + b[2];",
+    "    uint64_t s2 = t2 + c1;",
+    "    uint64_t c2 = ((t2 < a[2]) || (s2 < t2)) ? 1ULL : 0ULL;",
+    "    uint64_t t3 = a[3] + b[3];",
+    "    uint64_t s3 = t3 + c2;",
+    "    uint64_t c3 = ((t3 < a[3]) || (s3 < t3)) ? 1ULL : 0ULL;",
+    "    out[0] = s0; out[1] = s1; out[2] = s2; out[3] = s3;",
+    "    return c3;",
+    "#endif",
+    "}",
+    "",
+    "uint64_t lean_native_cabi_combined_spec_step(uint64_t i) {",
+    "    uint64_t z = i * 0x9E3779B97F4A7C15ULL + 0x9E3779B97F4A7C15ULL;",
+    "    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;",
+    "    uint64_t sm = z ^ (z >> 31);",
+    "    uint64_t is_closed_section_needed = ((i & 1ULL) == 0ULL || (sm & 3ULL) != 0ULL) ? 1ULL : 0ULL;",
+    "    uint64_t is_sound_decl_summary = ((sm & 7ULL) != 7ULL) ? 1ULL : 0ULL;",
+    "    uint64_t check_statement_pinned = ((sm ^ i) != 0ULL) ? 1ULL : 0ULL;",
+    "    uint64_t shift = (i & 3ULL);",
+    "    uint64_t node_effective_cost = (i & 255ULL) + ((((i & 15ULL) + 1ULL) * ((sm & 1023ULL) + 10ULL)) >> shift);",
+    "    uint64_t a3 = sm ^ 0x1111222233334444ULL;",
+    "    uint64_t b3 = (sm + 42ULL) ^ 0x1111222233334444ULL;",
+    "    uint64_t u256_lt = (a3 < b3 || (a3 == b3 && (sm < (sm + 42ULL)))) ? 1ULL : 0ULL;",
+    "    return sm ^ node_effective_cost ^ (is_closed_section_needed << 1) ^ (is_sound_decl_summary << 2) ^ (check_statement_pinned << 3) ^ u256_lt;",
+    "}",
+    "",
     "uint64_t lean_native_cabi_fastcheck_batch(uint64_t seed, uint64_t num_samples, uint64_t* __restrict__ cex_out, uint64_t* __restrict__ sat_count_out) {",
-    "    uint64_t cex_count = 0ULL;",
-    "    uint64_t sat_count = 0ULL;",
-    "    uint64_t w0 = 0ULL;",
-    "    uint64_t w1 = 0ULL;",
+    "    uint64_t cex0 = 0ULL, cex1 = 0ULL, cex2 = 0ULL, cex3 = 0ULL;",
+    "    uint64_t w0_0 = 0ULL, w0_1 = 0ULL, w0_2 = 0ULL, w0_3 = 0ULL;",
+    "    uint64_t w1_0 = 0ULL, w1_1 = 0ULL, w1_2 = 0ULL, w1_3 = 0ULL;",
+    "    uint64_t s0 = seed;",
+    "    uint64_t s1 = seed + 0x9E3779B97F4A7C15ULL;",
+    "    uint64_t s2 = seed + 0x3C6EF372FE94F82AULL;",
+    "    uint64_t s3 = seed + 0xDAA66D2C7DDF743FULL;",
+    "    const uint64_t step4 = 0x78DDE6E5FD29F054ULL;",
+    "    uint64_t i = 0ULL;",
+    "    uint64_t limit4 = num_samples & ~3ULL;",
     "#if defined(__clang__)",
     "#pragma clang loop vectorize(enable) interleave(enable)",
     "#elif defined(__GNUC__)",
     "#pragma GCC ivdep",
     "#endif",
-    "    for (uint64_t i = 0ULL; i < num_samples; ++i) {",
+    "    for (; i < limit4; i += 4ULL) {",
+    "        uint64_t z0 = s0; s0 += step4;",
+    "        uint64_t z1 = s1; s1 += step4;",
+    "        uint64_t z2 = s2; s2 += step4;",
+    "        uint64_t z3 = s3; s3 += step4;",
+    "        z0 = (z0 ^ (z0 >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "        z1 = (z1 ^ (z1 >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "        z2 = (z2 ^ (z2 >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "        z3 = (z3 ^ (z3 >> 30)) * 0xBF58476D1CE4E5B9ULL;",
+    "        z0 = (z0 ^ (z0 >> 27)) * 0x94D049BB133111EBULL;",
+    "        z1 = (z1 ^ (z1 >> 27)) * 0x94D049BB133111EBULL;",
+    "        z2 = (z2 ^ (z2 >> 27)) * 0x94D049BB133111EBULL;",
+    "        z3 = (z3 ^ (z3 >> 27)) * 0x94D049BB133111EBULL;",
+    "        uint64_t x1_0 = z0 ^ (z0 >> 31);",
+    "        uint64_t x1_1 = z1 ^ (z1 >> 31);",
+    "        uint64_t x1_2 = z2 ^ (z2 >> 31);",
+    "        uint64_t x1_3 = z3 ^ (z3 >> 31);",
+    "        uint64_t x0_0 = x1_0 + 42ULL;",
+    "        uint64_t x0_1 = x1_1 + 42ULL;",
+    "        uint64_t x0_2 = x1_2 + 42ULL;",
+    "        uint64_t x0_3 = x1_3 + 42ULL;",
+    "        uint64_t c0 = (x0_0 >= 1000000ULL) ? 1ULL : 0ULL;",
+    "        uint64_t c1 = (x0_1 >= 1000000ULL) ? 1ULL : 0ULL;",
+    "        uint64_t c2 = (x0_2 >= 1000000ULL) ? 1ULL : 0ULL;",
+    "        uint64_t c3 = (x0_3 >= 1000000ULL) ? 1ULL : 0ULL;",
+    "        cex0 += c0; cex1 += c1; cex2 += c2; cex3 += c3;",
+    "        w0_0 |= c0 ? x0_0 : 0ULL; w0_1 |= c1 ? x0_1 : 0ULL;",
+    "        w0_2 |= c2 ? x0_2 : 0ULL; w0_3 |= c3 ? x0_3 : 0ULL;",
+    "        w1_0 |= c0 ? x1_0 : 0ULL; w1_1 |= c1 ? x1_1 : 0ULL;",
+    "        w1_2 |= c2 ? x1_2 : 0ULL; w1_3 |= c3 ? x1_3 : 0ULL;",
+    "    }",
+    "    uint64_t cex_count = (cex0 + cex1) + (cex2 + cex3);",
+    "    uint64_t w0 = (w0_0 | w0_1) | (w0_2 | w0_3);",
+    "    uint64_t w1 = (w1_0 | w1_1) | (w1_2 | w1_3);",
+    "    for (; i < num_samples; ++i) {",
     "        uint64_t z = seed + i * 0x9E3779B97F4A7C15ULL;",
     "        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;",
     "        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;",
     "        uint64_t x1 = z ^ (z >> 31);",
     "        uint64_t x0_prop = x1 + 42ULL;",
-    "        sat_count += 1ULL;",
     "        uint64_t is_cex = (x0_prop >= 1000000ULL) ? 1ULL : 0ULL;",
     "        cex_count += is_cex;",
     "        w0 |= is_cex ? x0_prop : 0ULL;",
     "        w1 |= is_cex ? x1 : 0ULL;",
     "    }",
     "    if (sat_count_out) {",
-    "        *sat_count_out = sat_count;",
+    "        *sat_count_out = num_samples;",
     "    }",
     "    if (cex_out) {",
     "        cex_out[0] = cex_count;",
@@ -808,6 +954,8 @@ namespace LeanNative.Backend
   export FastCheck (
     ConstraintSub
     extractDeclConstraints
+    extractUpperBoundHints
+    extractDeclUpperBoundHints
     propagatePreconditionEqualities
     boundaryU64Values
     boundaryU256Values

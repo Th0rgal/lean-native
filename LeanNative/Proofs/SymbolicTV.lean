@@ -119,18 +119,30 @@ def normSymBinOpStep (op : BinOp) (lhs rhs : SymExpr) : SymExpr :=
   | .mul, .constU64 4, x => .binOp .shl x (.constU64 2)
   | .mul, x, .constU64 8 => .binOp .shl x (.constU64 3)
   | .mul, .constU64 8, x => .binOp .shl x (.constU64 3)
+  | .mul, x, .constU64 16 => .binOp .shl x (.constU64 4)
+  | .mul, .constU64 16, x => .binOp .shl x (.constU64 4)
+  | .mul, x, .constU64 32 => .binOp .shl x (.constU64 5)
+  | .mul, .constU64 32, x => .binOp .shl x (.constU64 5)
+  | .mul, x, .constU64 64 => .binOp .shl x (.constU64 6)
+  | .mul, .constU64 64, x => .binOp .shl x (.constU64 6)
 
   -- Division strength reduction (/ 2^k -> >>> k)
   | .div, x, .constU64 1 => x
   | .div, x, .constU64 2 => .binOp .shr x (.constU64 1)
   | .div, x, .constU64 4 => .binOp .shr x (.constU64 2)
   | .div, x, .constU64 8 => .binOp .shr x (.constU64 3)
+  | .div, x, .constU64 16 => .binOp .shr x (.constU64 4)
+  | .div, x, .constU64 32 => .binOp .shr x (.constU64 5)
+  | .div, x, .constU64 64 => .binOp .shr x (.constU64 6)
 
   -- Modulo strength reduction (% 2^k -> &&& (2^k - 1))
   | .mod, _, .constU64 1 => .constU64 0
   | .mod, x, .constU64 2 => .binOp .bitAnd x (.constU64 1)
   | .mod, x, .constU64 4 => .binOp .bitAnd x (.constU64 3)
   | .mod, x, .constU64 8 => .binOp .bitAnd x (.constU64 7)
+  | .mod, x, .constU64 16 => .binOp .bitAnd x (.constU64 15)
+  | .mod, x, .constU64 32 => .binOp .bitAnd x (.constU64 31)
+  | .mod, x, .constU64 64 => .binOp .bitAnd x (.constU64 63)
 
   -- Bitwise identities & idempotence
   | .bitXor, x, .constU64 0 => x
