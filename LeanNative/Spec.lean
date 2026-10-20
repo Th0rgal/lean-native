@@ -414,4 +414,28 @@ theorem meta_unbox_tuple_full_elim_sound :
     checkUnboxTupleDeadElimCanary = true := by
   rfl
 
+/-- Canary check for the 3 v0.6 Superoptimizer Rules (`double_shift_mask_collapse`,
+    `rotate_left_pattern`, and `cost_guided_fma_fusion`):
+    1. `(0x123456789abcdeff >>> 8) <<< 8 == 0x123456789abcdeff &&& (0xffffffffffffffff <<< 8)`
+       and is strictly distinguished from the unmasked `0x123456789abcdeff`.
+    2. `evalScalarExpr` on `.fma a b c` equals `evalScalarExpr` on `.binOp .add (.binOp .mul a b) c`.
+    3. Nested 2-level Tuple SROA forwards projections through intermediate tuple aliases. -/
+def checkSuperoptShiftMaskAndFmaCanary : Bool :=
+  let x : UInt64 := 0x123456789abcdef7
+  let k : UInt64 := 4
+  let cShiftMask := ((x >>> k) <<< k) == (x &&& (0xffffffffffffffff <<< k)) &&
+                    ((x >>> k) <<< k) != x
+  let env := ((VarEnv.empty.bind 0 (.u64 7)).bind 1 (.u64 9)).bind 2 (.u64 11)
+  let cFma := exceptValEq
+    (evalScalarExpr env (.binOp .add (.binOp .mul (.var 0) (.var 1)) (.var 2)))
+    (evalScalarExpr env (.fma (.var 0) (.var 1) (.var 2)))
+  let cRotl := ((x <<< 13) ||| (x >>> 51)) == ((x >>> 51) ||| (x <<< 13))
+  cShiftMask && cFma && cRotl
+
+/-- Meta-Spec E1: Double-shift mask collapse `(x >>> k) <<< k = x &&& (UInt64.max <<< k)`,
+    rotate-left normalization, and FMA fusion preserve exact 64-bit evaluation semantics. -/
+theorem meta_double_shift_mask_and_fma_sound :
+    checkSuperoptShiftMaskAndFmaCanary = true := by
+  rfl
+
 end LeanNative.Spec

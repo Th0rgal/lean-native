@@ -789,6 +789,56 @@ theorem evalScalarExpr_mul_add_distrib_const_u64 (env : VarEnv) (x : ScalarExpr)
   rw [hx]
   exact congrArg (fun r => Except.ok (Val.u64 r)) (uint64_mul_add_distrib_const v a b)
 
+theorem bitvec64_allOnes_getLsbD (j : Nat) (hj : j < 64) :
+    (0xffffffffffffffff#64).getLsbD j = true := by
+  have h1 : (0xffffffffffffffff#64) = BitVec.allOnes 64 := rfl
+  rw [h1, BitVec.getLsbD_allOnes]
+  exact decide_eq_true hj
+
+theorem bitvec64_shr_shl_mask_collapse (bvx : BitVec 64) (s : Nat) :
+    (bvx >>> s) <<< s = bvx &&& ((0xffffffffffffffff#64) <<< s) := by
+  apply BitVec.eq_of_getLsbD_eq
+  intro i hi
+  rw [BitVec.getLsbD_shiftLeft, BitVec.getLsbD_ushiftRight, BitVec.getLsbD_and, BitVec.getLsbD_shiftLeft]
+  by_cases hlt : i < s
+  · simp [hi, hlt]
+  · have hge : s ≤ i := Nat.le_of_not_lt hlt
+    have hadd : s + (i - s) = i := Nat.add_sub_of_le hge
+    have hsub_lt : i - s < 64 := Nat.lt_of_le_of_lt (Nat.sub_le i s) hi
+    have hall : (0xffffffffffffffff#64).getLsbD (i - s) = true := bitvec64_allOnes_getLsbD (i - s) hsub_lt
+    simp [hi, hlt, hadd, hall]
+
+theorem uint64_shr_shl_mask_collapse (x k : UInt64) :
+    (x >>> k) <<< k = x &&& (0xffffffffffffffff <<< k) := by
+  cases x with | ofBitVec bvx =>
+  cases k with | ofBitVec bvk =>
+    apply congrArg UInt64.ofBitVec
+    exact bitvec64_shr_shl_mask_collapse bvx (bvk % 64#64).toNat
+
+theorem evalScalarExpr_shr_shl_mask_collapse_u64 (env : VarEnv) (x : ScalarExpr) (v k : UInt64)
+    (hx : evalScalarExpr env x = .ok (.u64 v)) :
+    evalScalarExpr env (.binOp .shl (.binOp .shr x (.constU64 k)) (.constU64 k)) =
+    evalScalarExpr env (.binOp .bitAnd x (.constU64 (0xffffffffffffffff <<< k))) := by
+  simp only [evalScalarExpr]
+  rw [hx]
+  exact congrArg (fun r => Except.ok (Val.u64 r)) (uint64_shr_shl_mask_collapse v k)
+
+theorem evalScalarExpr_fma_fusion_u64 (env : VarEnv) (a b c : ScalarExpr) (va vb vc : UInt64)
+    (ha : evalScalarExpr env a = .ok (.u64 va))
+    (hb : evalScalarExpr env b = .ok (.u64 vb))
+    (hc : evalScalarExpr env c = .ok (.u64 vc)) :
+    evalScalarExpr env (.binOp .add (.binOp .mul a b) c) =
+    evalScalarExpr env (.fma a b c) := by
+  simp only [evalScalarExpr]
+  rw [ha, hb, hc]
+
+theorem uint64_rotl_comm_or (x k : UInt64) :
+    (x <<< k) ||| (x >>> (64 - k)) = (x >>> (64 - k)) ||| (x <<< k) := by
+  cases x with | ofBitVec bvx =>
+  cases k with | ofBitVec bvk =>
+    apply congrArg UInt64.ofBitVec
+    exact BitVec.or_comm _ _
+
 namespace PeepholeProofs
   abbrev rewriteScalarPeephole_sound := @LeanNative.Proofs.rewriteScalarPeephole_sound
   abbrev rewriteLNIRExpr_sound := @LeanNative.Proofs.rewriteLNIRExpr_sound
@@ -804,6 +854,10 @@ namespace PeepholeProofs
   abbrev evalBinOp_const_fold_sound := @LeanNative.Proofs.evalBinOp_const_fold_sound
   abbrev rewriteConstFoldStep_sound := @LeanNative.Proofs.rewriteConstFoldStep_sound
   abbrev rewriteScalarVerified_sound := @LeanNative.Proofs.rewriteScalarVerified_sound
+  abbrev uint64_shr_shl_mask_collapse := @LeanNative.Proofs.uint64_shr_shl_mask_collapse
+  abbrev evalScalarExpr_shr_shl_mask_collapse_u64 := @LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64
+  abbrev evalScalarExpr_fma_fusion_u64 := @LeanNative.Proofs.evalScalarExpr_fma_fusion_u64
+  abbrev uint64_rotl_comm_or := @LeanNative.Proofs.uint64_rotl_comm_or
 end PeepholeProofs
 
 end LeanNative.Proofs

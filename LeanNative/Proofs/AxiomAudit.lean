@@ -131,7 +131,12 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.meta_validator_rejects_semantic_mutants
   , ``LeanNative.Spec.meta_limb256_mul_lo_homomorphism
   , ``LeanNative.Spec.meta_unbox_tuple_full_elim_sound
+  , ``LeanNative.Spec.meta_double_shift_mask_and_fma_sound
   , ``LeanNative.Proofs.unboxTupleDeadElim_refines
+  , ``LeanNative.Proofs.uint64_shr_shl_mask_collapse
+  , ``LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64
+  , ``LeanNative.Proofs.evalScalarExpr_fma_fusion_u64
+  , ``LeanNative.Proofs.uint64_rotl_comm_or
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

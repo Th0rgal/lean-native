@@ -27,7 +27,7 @@
   "properties": {
     "schema_version": { "type": "string", "const": "lean-native-hardware-profile-v1" },
     "profile_id": { "type": "string", "minLength": 3 },
-    "target": { "type": "string", "enum": ["x86_64", "arm64", "cuda_ptx", "apple_metal"] },
+    "target": { "type": "string", "enum": ["x86_64", "arm64", "cuda_ptx", "apple_metal", "tpu_xla"] },
     "llvm_target_cpu": { "type": "string" },
     "sm_arch": { "type": "string" },
     "add_sub_cost": { "type": "integer", "minimum": 1, "maximum": 100 },

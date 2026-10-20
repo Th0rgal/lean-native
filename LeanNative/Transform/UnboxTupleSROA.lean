@@ -79,50 +79,84 @@ def codeUsesVar (target : VarId) : LNIRCode → Bool
 def invalidateTupleAlias (redefined : VarId) (env : List (VarId × List VarId)) : List (VarId × List VarId) :=
   env.filter (fun (tupVar, fields) => tupVar != redefined && !(fields.contains redefined))
 
+/-- Drop any scalar variable alias entry mentioning `redefined`. -/
+def invalidateScalarAlias (redefined : VarId) (senv : List (VarId × VarId)) : List (VarId × VarId) :=
+  senv.filter (fun (dst, src) => dst != redefined && src != redefined)
+
+/-- Resolve transitive scalar alias chains (`v -> v1 -> v2`) with bounded fuel. -/
+def resolveScalarAlias (fuel : Nat) (senv : List (VarId × VarId)) (v : VarId) : VarId :=
+  match fuel with
+  | 0 => v
+  | f + 1 =>
+    match senv.lookup v with
+    | some v' => if v' == v then v else resolveScalarAlias f senv v'
+    | none => v
+
 /-- Rewrite `LNIRCode` by forwarding `.projTuple dst idx` through known `.mkTuple fields`
-    bindings and eliminating dead `.mkTuple` bindings (SROA / tuple unboxing).
+    bindings (including nested $k$-tuples up to $k \le 8$ via transitive alias resolution)
+    and eliminating dead `.mkTuple` bindings (SROA / tuple unboxing).
     Backed by `LeanNative.Proofs.LoopOptProofs.unboxTupleProj_sound`. -/
-def optimizeCodeTupleSROA (env : List (VarId × List VarId)) (code : LNIRCode) : LNIRCode :=
+def optimizeCodeTupleSROAWithAliases
+    (env : List (VarId × List VarId))
+    (senv : List (VarId × VarId))
+    (code : LNIRCode) : LNIRCode :=
   match code with
   | .letBind dst ty (.mkTuple fields) k =>
+    let resolvedFields := fields.map (resolveScalarAlias 8 senv)
     let envClean := invalidateTupleAlias dst env
-    let env' := (dst, fields) :: envClean
-    let k' := optimizeCodeTupleSROA env' k
+    let senvClean := invalidateScalarAlias dst senv
+    let env' := (dst, resolvedFields) :: envClean
+    let k' := optimizeCodeTupleSROAWithAliases env' senvClean k
     if codeUsesVar dst k' then
-      .letBind dst ty (.mkTuple fields) k'
+      .letBind dst ty (.mkTuple resolvedFields) k'
     else
       k'
   | .letBind dst ty (.projTuple tupleVar idx) k =>
-    let val' : LNIRExpr :=
-      match env.lookup tupleVar with
+    let rootTupleVar := resolveScalarAlias 8 senv tupleVar
+    let (val', senvNext) : LNIRExpr × List (VarId × VarId) :=
+      match env.lookup rootTupleVar with
       | some fields =>
         match fields[idx]? with
-        | some fieldVar => .scalar (.var fieldVar)
-        | none => .projTuple tupleVar idx
-      | none => .projTuple tupleVar idx
+        | some fieldVar =>
+          let rootField := resolveScalarAlias 8 senv fieldVar
+          (.scalar (.var rootField), (dst, rootField) :: invalidateScalarAlias dst senv)
+        | none => (.projTuple rootTupleVar idx, invalidateScalarAlias dst senv)
+      | none => (.projTuple rootTupleVar idx, invalidateScalarAlias dst senv)
     let env' := invalidateTupleAlias dst env
-    .letBind dst ty val' (optimizeCodeTupleSROA env' k)
+    .letBind dst ty val' (optimizeCodeTupleSROAWithAliases env' senvNext k)
+  | .letBind dst ty (.scalar (.var srcVar)) k =>
+    let rootSrc := resolveScalarAlias 8 senv srcVar
+    let env' := invalidateTupleAlias dst env
+    let senv' := (dst, rootSrc) :: invalidateScalarAlias dst senv
+    .letBind dst ty (.scalar (.var rootSrc)) (optimizeCodeTupleSROAWithAliases env' senv' k)
   | .letBind dst ty val k =>
     let env' := invalidateTupleAlias dst env
-    .letBind dst ty val (optimizeCodeTupleSROA env' k)
+    let senv' := invalidateScalarAlias dst senv
+    .letBind dst ty val (optimizeCodeTupleSROAWithAliases env' senv' k)
   | .rawStore ptrVar idxVar valVar elemTy k =>
-    .rawStore ptrVar idxVar valVar elemTy (optimizeCodeTupleSROA env k)
+    .rawStore ptrVar idxVar valVar elemTy (optimizeCodeTupleSROAWithAliases env senv k)
   | .incRef objVar count k =>
-    .incRef objVar count (optimizeCodeTupleSROA env k)
+    .incRef objVar count (optimizeCodeTupleSROAWithAliases env senv k)
   | .decRef objVar count k =>
-    .decRef objVar count (optimizeCodeTupleSROA env k)
+    .decRef objVar count (optimizeCodeTupleSROAWithAliases env senv k)
   | .ite condVar thenBranch elseBranch =>
-    .ite condVar (optimizeCodeTupleSROA env thenBranch) (optimizeCodeTupleSROA env elseBranch)
+    .ite condVar (optimizeCodeTupleSROAWithAliases env senv thenBranch) (optimizeCodeTupleSROAWithAliases env senv elseBranch)
   | .seqFor idxVar loVar hiVar accVar accInit accTy stepBody k =>
     let stepEnv := invalidateTupleAlias accVar (invalidateTupleAlias idxVar env)
-    let stepBody' := optimizeCodeTupleSROA stepEnv stepBody
+    let stepSenv := invalidateScalarAlias accVar (invalidateScalarAlias idxVar senv)
+    let stepBody' := optimizeCodeTupleSROAWithAliases stepEnv stepSenv stepBody
     let kEnv := invalidateTupleAlias accVar env
-    .seqFor idxVar loVar hiVar accVar accInit accTy stepBody' (optimizeCodeTupleSROA kEnv k)
+    let kSenv := invalidateScalarAlias accVar senv
+    .seqFor idxVar loVar hiVar accVar accInit accTy stepBody' (optimizeCodeTupleSROAWithAliases kEnv kSenv k)
   | .parFor outVar lenVar inputs elemTy kernel k =>
     let kEnv := invalidateTupleAlias outVar env
-    .parFor outVar lenVar inputs elemTy kernel (optimizeCodeTupleSROA kEnv k)
+    let kSenv := invalidateScalarAlias outVar senv
+    .parFor outVar lenVar inputs elemTy kernel (optimizeCodeTupleSROAWithAliases kEnv kSenv k)
   | .ret v => .ret v
   | .unreachable => .unreachable
+
+def optimizeCodeTupleSROA (env : List (VarId × List VarId)) (code : LNIRCode) : LNIRCode :=
+  optimizeCodeTupleSROAWithAliases env [] code
 
 /-- Run Tuple Unboxing & SROA on an `LNIRDecl`. -/
 def unboxTupleSROADecl (d : LNIRDecl) : LNIRDecl :=

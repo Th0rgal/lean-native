@@ -159,6 +159,11 @@ def verifiedTheoremRegistry : List String :=
   , "LeanNative.Spec.pr_spec_pinning_blocks_test_tampering"
   , "LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms"
   , "LeanNative.Spec.pr_spec_pinning_gate_sound"
+  , "LeanNative.Spec.meta_double_shift_mask_and_fma_sound"
+  , "LeanNative.Proofs.uint64_shr_shl_mask_collapse"
+  , "LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64"
+  , "LeanNative.Proofs.evalScalarExpr_fma_fusion_u64"
+  , "LeanNative.Proofs.uint64_rotl_comm_or"
   ]
 
 /-- Check whether `thmName` is a registered kernel-checked theorem in `LeanNative.Proofs`. -/

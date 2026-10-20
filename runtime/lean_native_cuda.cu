@@ -11,10 +11,13 @@
  * ============================================================================ */
 
 #define MATMUL_TILE_DIM 16
+#define ZERO_COPY_MIN_ELEMS 65536ULL
+#define ZERO_COPY_MAX_ELEMS 1048576ULL
 
 typedef struct LeanNativeCudaState {
     int          initialized;
     int          available;
+    int          can_map_host_memory;
     int          device_id;
     char         device_name[320];
     CUdevice     cu_device;
@@ -30,6 +33,14 @@ typedef struct LeanNativeCudaState {
     uint64_t*    d_buf1;
     uint64_t*    d_buf2;
     size_t       buf_capacity_elems;
+    /* Grace-Blackwell Zero-Copy Mapped Host Workspace (cudaHostAllocMapped) */
+    uint64_t*    h_mapped0;
+    uint64_t*    h_mapped1;
+    uint64_t*    h_mapped2;
+    uint64_t*    d_mapped0;
+    uint64_t*    d_mapped1;
+    uint64_t*    d_mapped2;
+    size_t       mapped_capacity_elems;
 } LeanNativeCudaState;
 
 static LeanNativeCudaState g_cuda_state = {0};
@@ -114,6 +125,7 @@ static int lean_native_ensure_cuda_initialized(void) {
     }
     cudaDeviceProp prop;
     if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
+        g_cuda_state.can_map_host_memory = prop.canMapHostMemory ? 1 : 0;
         snprintf(
             g_cuda_state.device_name,
             sizeof(g_cuda_state.device_name),
@@ -181,6 +193,38 @@ static int lean_native_ensure_workspace(size_t n_elems) {
         return -1;
     }
     g_cuda_state.buf_capacity_elems = req_elems;
+    return 0;
+}
+
+static int lean_native_ensure_zero_copy_workspace(size_t n_elems) {
+    if (!g_cuda_state.can_map_host_memory ||
+        n_elems < ZERO_COPY_MIN_ELEMS ||
+        n_elems > ZERO_COPY_MAX_ELEMS) {
+        return -1;
+    }
+    if (n_elems <= g_cuda_state.mapped_capacity_elems &&
+        g_cuda_state.h_mapped0 && g_cuda_state.h_mapped1 && g_cuda_state.h_mapped2) {
+        return 0;
+    }
+    if (g_cuda_state.h_mapped0) { cudaFreeHost(g_cuda_state.h_mapped0); g_cuda_state.h_mapped0 = NULL; }
+    if (g_cuda_state.h_mapped1) { cudaFreeHost(g_cuda_state.h_mapped1); g_cuda_state.h_mapped1 = NULL; }
+    if (g_cuda_state.h_mapped2) { cudaFreeHost(g_cuda_state.h_mapped2); g_cuda_state.h_mapped2 = NULL; }
+
+    size_t bytes = n_elems * sizeof(uint64_t);
+    unsigned int flags = cudaHostAllocMapped;
+    if (cudaHostAlloc((void**)&g_cuda_state.h_mapped0, bytes, flags) != cudaSuccess ||
+        cudaHostAlloc((void**)&g_cuda_state.h_mapped1, bytes, flags) != cudaSuccess ||
+        cudaHostAlloc((void**)&g_cuda_state.h_mapped2, bytes, flags) != cudaSuccess ||
+        cudaHostGetDevicePointer((void**)&g_cuda_state.d_mapped0, g_cuda_state.h_mapped0, 0) != cudaSuccess ||
+        cudaHostGetDevicePointer((void**)&g_cuda_state.d_mapped1, g_cuda_state.h_mapped1, 0) != cudaSuccess ||
+        cudaHostGetDevicePointer((void**)&g_cuda_state.d_mapped2, g_cuda_state.h_mapped2, 0) != cudaSuccess) {
+        if (g_cuda_state.h_mapped0) { cudaFreeHost(g_cuda_state.h_mapped0); g_cuda_state.h_mapped0 = NULL; }
+        if (g_cuda_state.h_mapped1) { cudaFreeHost(g_cuda_state.h_mapped1); g_cuda_state.h_mapped1 = NULL; }
+        if (g_cuda_state.h_mapped2) { cudaFreeHost(g_cuda_state.h_mapped2); g_cuda_state.h_mapped2 = NULL; }
+        g_cuda_state.mapped_capacity_elems = 0;
+        return -1;
+    }
+    g_cuda_state.mapped_capacity_elems = n_elems;
     return 0;
 }
 
@@ -309,8 +353,24 @@ extern "C" int lean_native_hybrid_saxpy_u64(
         return 0;
     }
     if (lean_native_ensure_cuda_initialized()) {
+        size_t bytes = n * sizeof(uint64_t);
+        if (lean_native_ensure_zero_copy_workspace(n) == 0) {
+            memcpy(g_cuda_state.h_mapped1, x, bytes);
+            memcpy(g_cuda_state.h_mapped2, y, bytes);
+            uint64_t n_u64 = (uint64_t)n;
+            void* params[5] = {
+                &g_cuda_state.d_mapped0,
+                &g_cuda_state.d_mapped1,
+                &g_cuda_state.d_mapped2,
+                &alpha,
+                &n_u64
+            };
+            if (lean_native_launch_ptx_kernel("lean_native_kernel_saxpy", params, n) == 0) {
+                memcpy(out, g_cuda_state.h_mapped0, bytes);
+                return 0;
+            }
+        }
         if (lean_native_ensure_workspace(n) == 0) {
-            size_t bytes = n * sizeof(uint64_t);
             cudaMemcpyAsync(g_cuda_state.d_buf1, x, bytes, cudaMemcpyHostToDevice, g_cuda_state.stream);
             cudaMemcpyAsync(g_cuda_state.d_buf2, y, bytes, cudaMemcpyHostToDevice, g_cuda_state.stream);
             uint64_t n_u64 = (uint64_t)n;

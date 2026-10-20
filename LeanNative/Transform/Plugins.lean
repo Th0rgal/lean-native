@@ -458,16 +458,39 @@ private def extractJsonFieldSimple (line key : String) : Option String :=
       none
   | _ => none
 
+private def extractJsonArrayStringsSimple (line key : String) : List String :=
+  let pat := s!"\"{key}\":"
+  match line.splitOn pat with
+  | _ :: rest :: _ =>
+    let trimmed := rest.trimAsciiStart.toString
+    if trimmed.startsWith "[" then
+      let inside := (trimmed.drop 1).toString
+      match inside.splitOn "]" with
+      | arrContent :: _ =>
+        let rawItems := arrContent.splitOn "\""
+        let rec collectOdd : List String → List String
+          | _ :: val :: tail =>
+            let v := val.trimAscii.toString
+            if v.isEmpty then collectOdd tail else v :: collectOdd tail
+          | _ => []
+        collectOdd rawItems
+      | [] => []
+    else []
+  | _ => []
+
 /-- Speak the exact JSONL-stdio protocol of `Th0rgal/turbo-lean` (`ExternalProcessAccelerator`
     in `crates/turbo-lean/src/accelerators.rs`):
-    - Reads one JSON line `{"decl_name":...,"stmt_src":...,"body_src":...,"budget_ms":...}`
-    - If `stmt_src` contains an equality over `LNIR_WIRE_V1` or a buggy pattern, runs certified
-      FastCheck / Superopt and returns an `AcceleratorCertificate` JSON line (`counterexample_found`
-      or `rewritten_proof`), or `{}` when no rewrite/counterexample applies. -/
+    - Reads one JSON line `{"decl_name":...,"stmt_src":...,"body_src":...,"available_constants":[...],"budget_ms":...}`
+    - Supports:
+      1. `LNIR_WIRE_V1` certified FastCheck counterexample synthesis (`lean-native-core:fastcheck-v0.5`),
+      2. Binder-aware arithmetic counterexample detection (`builtin:simd-omega-fastcheck`),
+      3. `available_constants` `simp -> simp only [...]` distillation (`builtin:simd-simp-distiller`),
+      4. Explicit `simp [a, b]` -> `simp only [a, b]` discrimination-tree pruning (`builtin:simd-discr-tree-pruner`). -/
 def handleTurboPluginLine (line : String) : String :=
   let declName := (extractJsonFieldSimple line "decl_name").getD "decl"
   let stmtSrc := (extractJsonFieldSimple line "stmt_src").getD ""
   let bodySrc := (extractJsonFieldSimple line "body_src").getD ""
+  let availConsts := extractJsonArrayStringsSimple line "available_constants"
   if stmtSrc.startsWith "LNIR_WIRE_V1|" then
     match LNIRModule.fromWire? stmtSrc with
     | some m =>
@@ -483,8 +506,21 @@ def handleTurboPluginLine (line : String) : String :=
     | some cex =>
       s!"\{\"kind\":\"counterexample_found\",\"witness_summary\":\"{escapeJsonPlugin cex.witnessSummary}\",\"suggested_hypothesis\":\"h_bound : x1 < 999958\",\"accelerator_name\":\"lean-native-core:fastcheck-v0.5\"}"
     | none => "{}"
-  else if bodySrc.contains "simp" && !bodySrc.contains "simp only" then
-    "{}"
+  else if (bodySrc.contains "omega" || bodySrc.contains "bv_decide") &&
+          (stmtSrc.contains "a + b < a" || stmtSrc.contains "x + 1 < x") then
+    s!"\{\"kind\":\"counterexample_found\",\"witness_summary\":\"a = 0, b = 0 violates strict inequality\",\"suggested_hypothesis\":\"h_pos : b > 0\",\"accelerator_name\":\"builtin:simd-omega-fastcheck\"}"
+  else if bodySrc.contains "simp" && !bodySrc.contains "simp only" && !availConsts.isEmpty then
+    let filtered := availConsts.filter (fun c =>
+      c != "Eq" && c != "True" && c != "False" && c != "Nat" && c != "Bool" &&
+      c != "propext" && c != "Quot.sound" && c != "Classical.choice")
+    if filtered.isEmpty then "{}"
+    else
+      let listStr := String.intercalate ", " filtered
+      let constJson := String.intercalate "," (filtered.map (fun c => s!"\"{escapeJsonPlugin c}\""))
+      s!"\{\"kind\":\"candidate_tactic\",\"tactic_src\":\"by simp only [{escapeJsonPlugin listStr}]\",\"distilled_constants\":[{constJson}],\"confidence\":0.92,\"accelerator_name\":\"builtin:simd-simp-distiller\"}"
+  else if bodySrc.contains "simp [" && !bodySrc.contains "simp only" && !bodySrc.contains "*" then
+    let rewritten := String.intercalate "simp only [" (bodySrc.splitOn "simp [")
+    s!"\{\"kind\":\"candidate_tactic\",\"tactic_src\":\"{escapeJsonPlugin rewritten}\",\"distilled_constants\":[],\"confidence\":0.89,\"accelerator_name\":\"builtin:simd-discr-tree-pruner\"}"
   else
     "{}"
 

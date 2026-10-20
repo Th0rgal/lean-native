@@ -347,14 +347,15 @@ def emitPTXDotReduceKernel (fnSymbol : String) : String :=
     "}"
   ])
 
-/-- Emit a 2D thread-block shared-memory tiled matrix multiplication PTX 8.0 kernel (16x16 tiles).
-    Uses `.shared .align 8 .b8 tileA_raw[2048]; .shared .align 8 .b8 tileB_raw[2048];`,
+/-- Emit a 2D thread-block shared-memory tiled matrix multiplication PTX 8.0 kernel (16x16 tiles,
+    with +1 shared-memory column padding `16x17` = 2176 bytes to eliminate 32-way shared memory bank conflicts).
+    Uses `.shared .align 8 .b8 tileA_raw[2176]; .shared .align 8 .b8 tileB_raw[2176];` (stride = 136 bytes = 17 x 8B),
     2D CTA/thread coordinates (`%ctaid.x`, `%ctaid.y`, `%tid.x`, `%tid.y`), collaborative tile loads,
     `bar.sync 0;`, unrolled 16-step `mad.lo.u64` inner product, and global store `C[row * dim + col] = acc`. -/
 def emitPTXMatMulTiledKernel (fnSymbol : String) : String :=
   let unrolledFmaLines := (List.range 16).foldl (fun acc k =>
     let offA := k * 8
-    let offB := k * 128
+    let offB := k * 136
     acc ++ [
       s!"    ld.shared.u64 %rd18, [%rd13+{offA}];",
       s!"    ld.shared.u64 %rd19, [%rd14+{offB}];",
@@ -369,8 +370,9 @@ def emitPTXMatMulTiledKernel (fnSymbol : String) : String :=
     "    .param .u64 param_dim",
     ")",
     "{",
-    "    .shared .align 8 .b8 tileA_raw[2048];",
-    "    .shared .align 8 .b8 tileB_raw[2048];",
+    "    // Bank-conflict-free +1 padded shared memory tiles (16 x 17 x 8B = 2176 bytes, row stride = 136B)",
+    "    .shared .align 8 .b8 tileA_raw[2176];",
+    "    .shared .align 8 .b8 tileB_raw[2176];",
     "    .reg .pred %p<3>;",
     "    .reg .b32  %r<8>;",
     "    .reg .b64  %rd<21>;",
@@ -400,8 +402,7 @@ def emitPTXMatMulTiledKernel (fnSymbol : String) : String :=
     "    cvt.u64.u32  %rd7, %r3;",
     "    cvt.u64.u32  %rd8, %r4;",
     "",
-    "    shl.b32      %r7, %r4, 4;",
-    "    add.u32      %r7, %r7, %r3;",
+    "    mad.lo.u32   %r7, %r4, 17, %r3;",
     "    cvt.u64.u32  %rd16, %r7;",
     "    shl.b64      %rd16, %rd16, 3;",
     "    mov.u64      %rd17, tileA_raw;",
@@ -409,7 +410,7 @@ def emitPTXMatMulTiledKernel (fnSymbol : String) : String :=
     "    mov.u64      %rd18, tileB_raw;",
     "    add.u64      %rd12, %rd18, %rd16;",
     "",
-    "    shl.b64      %rd19, %rd8, 7;",
+    "    mul.lo.u64   %rd19, %rd8, 136;",
     "    add.u64      %rd13, %rd17, %rd19;",
     "    shl.b64      %rd20, %rd7, 3;",
     "    add.u64      %rd14, %rd18, %rd20;",

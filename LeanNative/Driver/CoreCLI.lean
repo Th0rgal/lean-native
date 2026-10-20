@@ -150,6 +150,98 @@ def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRMo
     IO.println s!"[{tag}] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}"
   return 0
 
+private def lnirTypeToCType : LNIRType → String
+  | .i1 => "uint8_t"
+  | .i8 => "uint8_t"
+  | .i16 => "uint16_t"
+  | .i32 => "uint32_t"
+  | .i64 => "uint64_t"
+  | .usize => "size_t"
+  | .u256 | .i256 => "const uint64_t*"
+  | .f32 => "float"
+  | .f64 => "double"
+  | .rawPtr _ | .sarray _ | .objPtr | .taggedPtr | .storageMap => "void*"
+  | .tuple _ => "uint64_t"
+  | .unit => "void"
+
+/-- Emit a C-ABI header (`.h`) and static library (`.a`) or LLVM IR for an `LNIRModule`
+    so Rust (`crates/turbo-lean`) or C/C++ callers can invoke verified Lean kernels directly
+    via `extern "C"` at `< 2 ns` overhead. -/
+def emitCAbiHeader (m : LNIRModule) : String :=
+  let declProtos := m.decls.map (fun d =>
+    let retC := lnirTypeToCType d.retTy
+    let paramsC :=
+      if d.params.isEmpty then "void"
+      else String.intercalate ", " (d.params.map (fun p => s!"{lnirTypeToCType p.ty} {p.name}"))
+    s!"{retC} {d.name}({paramsC});")
+  String.intercalate "\n" ([
+    "/* Auto-generated C-ABI Header by lean-native compile-static-lib */",
+    "#ifndef LEAN_NATIVE_GENERATED_C_ABI_H",
+    "#define LEAN_NATIVE_GENERATED_C_ABI_H",
+    "#include <stdint.h>",
+    "#include <stddef.h>",
+    "#ifdef __cplusplus",
+    "extern \"C\" {",
+    "#endif",
+    ""
+  ] ++ declProtos ++ [
+    "",
+    "#ifdef __cplusplus",
+    "}",
+    "#endif",
+    "#endif /* LEAN_NATIVE_GENERATED_C_ABI_H */",
+    ""
+  ])
+
+def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
+  let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
+  let outPath := findFlagValue args "-o" "/tmp/liblean_native_kernels.a"
+  let headerPath := findFlagValue args "--header" (outPath ++ ".h")
+  let jsonFlag := hasFlag args "--json"
+  let baseMod ← loadInputModule elaborateHook? args
+  let (optMod, _) := runDefaultPipeline baseMod
+  let irText := emitLLVMOptimized optMod arch
+  let hdrText := emitCAbiHeader optMod
+  IO.FS.writeFile headerPath hdrText
+  let tmpLl := outPath ++ ".tmp.ll"
+  let tmpObj := outPath ++ ".tmp.o"
+  IO.FS.writeFile tmpLl irText
+  let mut builtArchive := false
+  let mut clangOk := false
+  try
+    let clangRes ← IO.Process.output {
+      cmd := "clang"
+      args := #["-O3", "-fPIC", "-c", tmpLl, "-o", tmpObj]
+    }
+    clangOk := clangRes.exitCode == 0
+  catch _ =>
+    pure ()
+  if clangOk then
+    try
+      let arRes ← IO.Process.output {
+        cmd := "llvm-ar"
+        args := #["rcs", outPath, tmpObj]
+      }
+      if arRes.exitCode == 0 then builtArchive := true
+    catch _ =>
+      pure ()
+    if !builtArchive then
+      try
+        let arRes2 ← IO.Process.output {
+          cmd := "ar"
+          args := #["rcs", outPath, tmpObj]
+        }
+        if arRes2.exitCode == 0 then builtArchive := true
+      catch _ =>
+        pure ()
+  if !builtArchive then
+    IO.FS.writeFile outPath irText
+  if jsonFlag then
+    IO.println s!"\{\"status\":\"compiled_static_lib\",\"archive\":{if builtArchive then "true" else "false"},\"library\":\"{outPath}\",\"header\":\"{headerPath}\",\"decls\":{optMod.decls.length}}"
+  else
+    IO.println s!"[{tag}] Wrote C-ABI static library ({outPath}, archive={builtArchive}) and header ({headerPath}, decls={optMod.decls.length})"
+  return 0
+
 def runCompileMLIR (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
   let baseMod ← loadInputModule elaborateHook? args
@@ -740,6 +832,7 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   if hasFrontend then
     IO.println "  build-exe          Compile a .lean source file directly to a native executable (<file.lean> -o <bin>)"
   IO.println "  compile-llvm       Emit baseline or optimized LLVM 18 IR (--input <file>, --arch x86_64|arm64, --baseline, -o <path>)"
+  IO.println "  compile-static-lib Emit C-ABI static library (.a) + C header (.h) for zero-copy FFI (--input <file>, -o <lib.a>, --header <lib.h>)"
   IO.println "  compile-mlir       Emit GPU MLIR module (--input <file>, -o <path>)"
   IO.println "  compile-ptx        Emit NVIDIA PTX 8.0 assembly (--input <file>, --sm sm_90, --fastcheck, -o <path>)"
   IO.println "  compile-metal      Emit Apple Metal Shading Language 3.0 (--input <file>, --fastcheck, -o <path>)"
@@ -762,8 +855,9 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
 def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO LNIRModule))
     (args : List String) : IO (Option UInt32) := do
   match args with
-  | "compile-llvm" :: rest      => some <$> runCompileLLVM tag elaborateHook? rest
-  | "compile-mlir" :: rest      => some <$> runCompileMLIR tag elaborateHook? rest
+  | "compile-llvm" :: rest       => some <$> runCompileLLVM tag elaborateHook? rest
+  | "compile-static-lib" :: rest => some <$> runCompileStaticLib tag elaborateHook? rest
+  | "compile-mlir" :: rest       => some <$> runCompileMLIR tag elaborateHook? rest
   | "compile-ptx" :: rest       => some <$> runCompilePTX tag elaborateHook? rest
   | "compile-metal" :: rest     => some <$> runCompileMetal tag elaborateHook? rest
   | "compile-fastcheck" :: rest => some <$> runCompileFastCheck tag elaborateHook? rest

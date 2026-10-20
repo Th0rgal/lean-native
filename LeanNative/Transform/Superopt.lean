@@ -153,7 +153,7 @@ def fromJson? (raw : String) : Option HardwareCostProfile := do
   let tgtStr := (extractJsonStringField raw "target").getD "x86_64"
   let target : SuperoptTarget :=
     if tgtStr == "arm64" || tgtStr == "aarch64" then .arm64
-    else if tgtStr == "cuda_ptx" || tgtStr == "cuda" || tgtStr == "ptx" then .cuda_ptx
+    else if tgtStr == "cuda_ptx" || tgtStr == "cuda" || tgtStr == "ptx" || tgtStr == "tpu_xla" || tgtStr == "tpu" then .cuda_ptx
     else if tgtStr == "apple_metal" || tgtStr == "metal" then .apple_metal
     else .x86_64
   let base := forTarget target
@@ -343,6 +343,35 @@ def superoptSynthRules : List SynthRule :=
             if k1 + k2 == 0 then [x] else [ScalarExpr.binOp .shr x (.constU64 (k1 + k2))]
           else []
         | _ => [] }
+  , { name := "double_shift_mask_collapse"
+      apply := fun
+        | .binOp .shl (.binOp .shr x (.constU64 k1)) (.constU64 k2) =>
+          if k1 == k2 && k1 < 64 then
+            if k1 == 0 then [x]
+            else [ScalarExpr.binOp .bitAnd x (.constU64 (0xffffffffffffffff <<< k1))]
+          else []
+        | .binOp .shr (.binOp .shl x (.constU64 k1)) (.constU64 k2) =>
+          if k1 == k2 && k1 < 64 then
+            if k1 == 0 then [x]
+            else [ScalarExpr.binOp .bitAnd x (.constU64 (0xffffffffffffffff >>> k1))]
+          else []
+        | _ => [] }
+  , { name := "rotate_left_pattern"
+      apply := fun
+        | .binOp .bitOr (.binOp .shr x1 (.constU64 k2)) (.binOp .shl x2 (.constU64 k1)) =>
+          if x1 == x2 && k1 > 0 && k1 < 64 && k1 + k2 == 64 then
+            [ScalarExpr.binOp .bitOr (.binOp .shl x1 (.constU64 k1)) (.binOp .shr x1 (.constU64 k2))]
+          else []
+        | _ => [] }
+  , { name := "cost_guided_fma_fusion"
+      apply := fun
+        | .binOp .add (.binOp .mul a b) c => [ScalarExpr.fma a b c]
+        | .binOp .add c (.binOp .mul a b) => [ScalarExpr.fma a b c]
+        | .binOp .add (.binOp .shl a (.constU64 k)) c =>
+          if k < 64 then [ScalarExpr.fma a (.constU64 (1 <<< k)) c] else []
+        | .binOp .add c (.binOp .shl a (.constU64 k)) =>
+          if k < 64 then [ScalarExpr.fma a (.constU64 (1 <<< k)) c] else []
+        | _ => [] }
   , { name := "bitwise_mask_coalesce"
       apply := fun
         | .binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2) =>
@@ -450,6 +479,15 @@ def normSymSuperoptStep (s : SymExpr) : SymExpr :=
   | .binOp .shr (.binOp .shr x (.constU64 k1)) (.constU64 k2) =>
     if k1 < 64 && k2 < 64 && (k1 + k2) < 64 then
       normSymExpr (.binOp .shr x (.constU64 (k1 + k2)))
+    else s0
+  -- Double-shift mask collapse: (x >>> k) <<< k -> x &&& (UInt64.max <<< k)
+  | .binOp .shl (.binOp .shr x (.constU64 k1)) (.constU64 k2) =>
+    if k1 == k2 && k1 < 64 then
+      normSymExpr (.binOp .bitAnd x (.constU64 (0xffffffffffffffff <<< k1)))
+    else s0
+  | .binOp .shr (.binOp .shl x (.constU64 k1)) (.constU64 k2) =>
+    if k1 == k2 && k1 < 64 then
+      normSymExpr (.binOp .bitAnd x (.constU64 (0xffffffffffffffff >>> k1)))
     else s0
   -- Bitwise mask composition
   | .binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2) =>

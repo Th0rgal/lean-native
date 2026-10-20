@@ -119,6 +119,7 @@ def detect_host_hardware(override_target: str = "") -> dict:
 
     gpu_model = "none"
     sm_arch = "sm_90"
+    tpu_detected = False
     if shutil.which("nvidia-smi"):
         try:
             out = subprocess.check_output(
@@ -134,6 +135,13 @@ def detect_host_hardware(override_target: str = "") -> dict:
                     sm_arch = f"sm_{cc}"
         except Exception:
             pass
+
+    if gpu_model == "none":
+        vfio_devs = [p for p in Path("/dev/vfio").glob("*") if p.name != "vfio"] if os.path.exists("/dev/vfio") else []
+        if vfio_devs or os.environ.get("TPU_NAME") or os.environ.get("COLAB_TPU_ADDR") or "EPYC 7B13" in cpu_model:
+            tpu_detected = True
+            gpu_model = os.environ.get("TPU_ACCELERATOR_TYPE", "Google Cloud TPU v5e (XLA/StableHLO)")
+            sm_arch = "tpu_v5e"
 
     if override_target:
         target = override_target
@@ -272,7 +280,7 @@ def verify_single_profile(path: Path) -> tuple[bool, str]:
     if data["schema_version"] != "lean-native-hardware-profile-v1":
         return False, f"{path.name}: unsupported schema_version '{data['schema_version']}'"
 
-    if data["target"] not in ("x86_64", "arm64", "cuda_ptx", "apple_metal"):
+    if data["target"] not in ("x86_64", "arm64", "cuda_ptx", "apple_metal", "tpu_xla"):
         return False, f"{path.name}: invalid target '{data['target']}'"
 
     expected_digest = compute_payload_digest(data)
