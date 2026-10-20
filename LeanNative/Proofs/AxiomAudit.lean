@@ -144,6 +144,9 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.affine_step_budget_monotone
   , ``LeanNative.Spec.bootstrap_shift_step_budget_sound
   , ``LeanNative.Spec.empirical_high_water_refutes_loose_bound
+  , ``LeanNative.Spec.evalLoopStepBudget_monotone
+  , ``LeanNative.Spec.riscv_div_by_zero_spec
+  , ``LeanNative.Spec.zisk_csr_atomic_step_budget
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

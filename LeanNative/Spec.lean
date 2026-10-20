@@ -112,6 +112,16 @@ theorem affine_step_budget_monotone (b : AffineStepBudget) {s1 s2 : Nat} (h : s1
     b.eval s1 ≤ b.eval s2 :=
   Nat.add_le_add_right (Nat.mul_le_mul_left b.scale h) b.offset
 
+def evalLoopStepBudget (initSteps fuel : Nat) (bodyBudget : AffineStepBudget) (iterSteps : Nat) : Nat :=
+  initSteps + fuel * bodyBudget.eval iterSteps
+
+def riscvDivU64Spec (lhs rhs : UInt64) : UInt64 := if rhs == 0 then 0xffffffffffffffff else lhs / rhs
+def riscvRemU64Spec (lhs rhs : UInt64) : UInt64 := if rhs == 0 then lhs else lhs % rhs
+
+theorem evalLoopStepBudget_monotone (init fuel : Nat) (b : AffineStepBudget) {s1 s2 : Nat} (h : s1 ≤ s2) :
+    evalLoopStepBudget init fuel b s1 ≤ evalLoopStepBudget init fuel b s2 :=
+  Nat.add_le_add_left (Nat.mul_le_mul_left fuel (affine_step_budget_monotone b h)) init
+
 /-! ============================================================================
     LAYER II: DECLARATIVE COROLLARIES (≤ 3 LINES) & `MetaGateSpec` BUNDLES
     ============================================================================ -/
@@ -217,20 +227,15 @@ def prVerificationMetaSpec : MetaGateSpec PRVerificationInput
 /-! ## 5. Semantic Mutant Discrimination & 4-Limb 256-Bit Lowering Homomorphism -/
 
 def add64CarrySpec (x y : UInt64) : UInt64 :=
-  let lo_c := ((x &&& 0xffffffff) + (y &&& 0xffffffff)) >>> 32
-  ((x >>> 32) + (y >>> 32) + lo_c) >>> 32
+  ((x >>> 32) + (y >>> 32) + (((x &&& 0xffffffff) + (y &&& 0xffffffff)) >>> 32)) >>> 32
 
 def mul64HiSpec (x y : UInt64) : UInt64 :=
-  let x_lo := x &&& 0xffffffff; let x_hi := x >>> 32
-  let y_lo := y &&& 0xffffffff; let y_hi := y >>> 32
-  let p0 := x_lo * y_lo; let p1 := x_lo * y_hi
-  let p2 := x_hi * y_lo; let p3 := x_hi * y_hi
-  let cy := ((p0 >>> 32) + (p1 &&& 0xffffffff) + (p2 &&& 0xffffffff)) >>> 32
-  p3 + (p1 >>> 32) + (p2 >>> 32) + cy
+  let x_lo := x &&& 0xffffffff; let x_hi := x >>> 32; let y_lo := y &&& 0xffffffff; let y_hi := y >>> 32
+  let p0 := x_lo * y_lo; let p1 := x_lo * y_hi; let p2 := x_hi * y_lo; let p3 := x_hi * y_hi
+  p3 + (p1 >>> 32) + (p2 >>> 32) + (((p0 >>> 32) + (p1 &&& 0xffffffff) + (p2 &&& 0xffffffff)) >>> 32)
 
 def evalLimbMul256Lo (a b : UInt256) : UInt256 :=
-  let m0 := a.lo0 * b.lo0
-  let h00 := mul64HiSpec a.lo0 b.lo0
+  let m0 := a.lo0 * b.lo0; let h00 := mul64HiSpec a.lo0 b.lo0
   let p01 := a.lo0 * b.lo1; let p10 := a.lo1 * b.lo0
   let s1a := h00 + p01; let c1a := add64CarrySpec h00 p01
   let m1 := s1a + p10; let c1 := c1a + add64CarrySpec s1a p10
@@ -246,20 +251,14 @@ def evalLimbMul256Lo (a b : UInt256) : UInt256 :=
   ⟨m0, m1, m2, m3⟩
 
 def exceptValEq (r1 r2 : Except UBError Val) : Bool :=
-  match r1, r2 with
-  | .ok v1, .ok v2 => v1 == v2
-  | .error e1, .error e2 => e1 == e2
-  | _, _ => false
+  match r1, r2 with | .ok v1, .ok v2 => v1 == v2 | .error e1, .error e2 => e1 == e2 | _, _ => false
 
 def checkAllSemanticMutantsDiscriminated : Bool :=
-  let c1 := exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 0xffffffffffffffff)) &&
-            !(exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 1)))
+  let c1 := exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 0xffffffffffffffff)) && !(exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 1)))
   let c2 := exceptValEq (evalBinOp .sar (.u64 0x8000000000000000) (.u64 4)) (.ok (.u64 0xf800000000000000)) &&
             !(exceptValEq (evalBinOp .sar (.u64 0x8000000000000000) (.u64 4)) (evalBinOp .shr (.u64 0x8000000000000000) (.u64 4)))
-  let c3 := evalLimbMul256Lo UInt256.max UInt256.max == ⟨1, 0, 0, 0⟩ &&
-            evalLimbMul256Lo UInt256.max UInt256.max != ⟨1, 0, 0, 4⟩
-  let mulDivDown64 : UInt64 := (5 * 2) / 3
-  let mulDivUp64   : UInt64 := (5 * 2 + (3 - 1)) / 3
+  let c3 := evalLimbMul256Lo UInt256.max UInt256.max == ⟨1, 0, 0, 0⟩ && evalLimbMul256Lo UInt256.max UInt256.max != ⟨1, 0, 0, 4⟩
+  let mulDivDown64 : UInt64 := (5 * 2) / 3; let mulDivUp64 : UInt64 := (5 * 2 + (3 - 1)) / 3
   let c4 := mulDivDown64 == 3 && mulDivUp64 == 4 && mulDivDown64 != mulDivUp64
   let c5 := add64CarrySpec 0xffffffffffffffff 1 == 1 && add64CarrySpec 0xffffffffffffffff 0 == 0
   c1 && c2 && c3 && c4 && c5
@@ -309,5 +308,12 @@ theorem bootstrap_shift_step_budget_sound (boot targetSteps boundK : Nat) (h : t
 
 theorem empirical_high_water_refutes_loose_bound (obsMax candK : Nat) (h_gt : candK < obsMax) :
     ¬ (obsMax ≤ candK) := Nat.not_le.mpr h_gt
+
+theorem riscv_div_by_zero_spec (x : UInt64) : riscvDivU64Spec x 0 = 0xffffffffffffffff ∧ riscvRemU64Spec x 0 = x :=
+  ⟨rfl, rfl⟩
+
+theorem zisk_csr_atomic_step_budget (boot csrCount bodySteps boundK : Nat) (h : csrCount + bodySteps ≤ boundK) :
+    ({ scale := 1, offset := boot } : AffineStepBudget).eval (csrCount + bodySteps) ≤ boot + boundK :=
+  bootstrap_shift_step_budget_sound boot (csrCount + bodySteps) boundK h
 
 end LeanNative.Spec

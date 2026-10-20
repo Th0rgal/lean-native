@@ -191,51 +191,15 @@ def propagatePreconditionEqualities (d : LNIRDecl) : LNIRDecl × List Constraint
 /-- Deterministic 64-bit boundary value table covering `Mathlib4` & `Verity` power-of-two and decimal bounds:
     `0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 42, 63, 64, 100, 127, 128, 255, 256, 511, 512, 1000, 1024, 4096, 65535, 65536, 1000000, 2^32 - 1, 2^63, 2^64 - 1`. -/
 def boundaryU64Values : List UInt64 :=
-  [ 0
-  , 1
-  , 2
-  , 3
-  , 4
-  , 7
-  , 8
-  , 15
-  , 16
-  , 31
-  , 32
-  , 42
-  , 63
-  , 64
-  , 100
-  , 127
-  , 128
-  , 255
-  , 256
-  , 511
-  , 512
-  , 1000
-  , 1024
-  , 4096
-  , 65535
-  , 65536
-  , 1000000
-  , 0xffffffff
-  , 0x8000000000000000
-  , 0xffffffffffffffff
-  ]
+  [ 0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 42, 63, 64, 100, 127, 128, 255, 256,
+    511, 512, 1000, 1024, 4096, 65535, 65536, 1000000, 0xffffffff, 0x8000000000000000, 0xffffffffffffffff ]
 
 /-- Deterministic 256-bit EVM/Verity boundary value table:
     `0, 1, 2, 2^64 - 1, 2^128 - 1, 2^255, 2^256 - 1, WAD (10^18), MAX_UINT256 - 1`. -/
 def boundaryU256Values : List UInt256 :=
-  [ UInt256.zero
-  , UInt256.one
-  , UInt256.ofUInt64 2
-  , UInt256.maxU64
-  , UInt256.maxU128
-  , UInt256.twoPow255
-  , UInt256.max
-  , UInt256.ofUInt64 1000000000000000000
-  , ⟨0xfffffffffffffffe, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff⟩
-  ]
+  [ UInt256.zero, UInt256.one, UInt256.ofUInt64 2, UInt256.maxU64, UInt256.maxU128,
+    UInt256.twoPow255, UInt256.max, UInt256.ofUInt64 1000000000000000000,
+    ⟨0xfffffffffffffffe, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff⟩ ]
 
 /-- Deterministic SplitMix64 PRNG step. -/
 def fastCheckSplitMix64 (state : UInt64) : UInt64 × UInt64 :=
@@ -535,27 +499,15 @@ def runFastCheckDecl (d : LNIRDecl) (numSamples : Nat := 4096) (useConstraintPro
   let isVacuous := satCount == 0
   match cexOpt with
   | some (idx, witnessStr) =>
-    { declName := d.name
-      status := "counterexample_found"
-      passed := false
-      counterexampleFound := true
-      certifiedCounterexample := true
-      vacuousPass := isVacuous
-      samplesTested := numSamples
-      satisfiedPreconditionsCount := satCount
-      constraintsPropagated := subs.length
-      witnessSummary := s!"sample#{idx}: {witnessStr}" }
+    { declName := d.name, status := "counterexample_found", passed := false,
+      counterexampleFound := true, certifiedCounterexample := true, vacuousPass := isVacuous,
+      samplesTested := numSamples, satisfiedPreconditionsCount := satCount,
+      constraintsPropagated := subs.length, witnessSummary := s!"sample#{idx}: {witnessStr}" }
   | none =>
-    { declName := d.name
-      status := if isVacuous then "vacuous_pass" else "passed"
-      passed := !isVacuous
-      counterexampleFound := false
-      certifiedCounterexample := false
-      vacuousPass := isVacuous
-      samplesTested := numSamples
-      satisfiedPreconditionsCount := satCount
-      constraintsPropagated := subs.length
-      witnessSummary := "" }
+    { declName := d.name, status := if isVacuous then "vacuous_pass" else "passed",
+      passed := !isVacuous, counterexampleFound := false, certifiedCounterexample := false,
+      vacuousPass := isVacuous, samplesTested := numSamples, satisfiedPreconditionsCount := satCount,
+      constraintsPropagated := subs.length, witnessSummary := "" }
 
 /-- Run FastCheck across all declarations in an `LNIRModule`. -/
 def runFastCheckModule (m : LNIRModule) (numSamples : Nat := 4096) (useConstraintProp : Bool := true) :
@@ -563,45 +515,39 @@ def runFastCheckModule (m : LNIRModule) (numSamples : Nat := 4096) (useConstrain
   let results := m.decls.map (fun d => runFastCheckDecl d numSamples useConstraintProp)
   let cexCount := (results.filter (·.counterexampleFound)).length
   let vacCount := (results.filter (·.vacuousPass)).length
-  { moduleName := m.moduleName
-    schemaVersion := "lean-native-fastcheck-v1"
-    numSamplesPerDecl := numSamples
-    useConstraintProp := useConstraintProp
-    totalDecls := results.length
-    counterexamplesFound := cexCount
-    vacuousPasses := vacCount
-    falsePositives := 0
-    declResults := results }
+  { moduleName := m.moduleName, schemaVersion := "lean-native-fastcheck-v1",
+    numSamplesPerDecl := numSamples, useConstraintProp := useConstraintProp,
+    totalDecls := results.length, counterexamplesFound := cexCount, vacuousPasses := vacCount,
+    falsePositives := 0, declResults := results }
 
 private abbrev escapeJsonFC := LeanNative.IR.jsonEscape
 
 def FastCheckDeclResult.toJson (r : FastCheckDeclResult) : String :=
-  "{" ++
-  s!"\"declName\":\"{escapeJsonFC r.declName}\"," ++
-  s!"\"status\":\"{escapeJsonFC r.status}\"," ++
-  s!"\"passed\":{if r.passed then "true" else "false"}," ++
-  s!"\"counterexampleFound\":{if r.counterexampleFound then "true" else "false"}," ++
-  s!"\"certifiedCounterexample\":{if r.certifiedCounterexample then "true" else "false"}," ++
-  s!"\"vacuousPass\":{if r.vacuousPass then "true" else "false"}," ++
-  s!"\"samplesTested\":{r.samplesTested}," ++
-  s!"\"satisfiedPreconditionsCount\":{r.satisfiedPreconditionsCount}," ++
-  s!"\"constraintsPropagated\":{r.constraintsPropagated}," ++
-  s!"\"witnessSummary\":\"{escapeJsonFC r.witnessSummary}\"" ++
-  "}"
+  s!"\{\"declName\":\"{escapeJsonFC r.declName}\",\"status\":\"{escapeJsonFC r.status}\"," ++
+  s!"\"passed\":{if r.passed then "true" else "false"},\"counterexampleFound\":{if r.counterexampleFound then "true" else "false"}," ++
+  s!"\"certifiedCounterexample\":{if r.certifiedCounterexample then "true" else "false"},\"vacuousPass\":{if r.vacuousPass then "true" else "false"}," ++
+  s!"\"samplesTested\":{r.samplesTested},\"satisfiedPreconditionsCount\":{r.satisfiedPreconditionsCount}," ++
+  s!"\"constraintsPropagated\":{r.constraintsPropagated},\"witnessSummary\":\"{escapeJsonFC r.witnessSummary}\"}"
 
 def FastCheckReport.toJson (r : FastCheckReport) : String :=
   let declsJson := String.intercalate "," (r.declResults.map FastCheckDeclResult.toJson)
-  "{" ++
-  s!"\"schemaVersion\":\"{escapeJsonFC r.schemaVersion}\"," ++
-  s!"\"moduleName\":\"{escapeJsonFC r.moduleName}\"," ++
-  s!"\"numSamplesPerDecl\":{r.numSamplesPerDecl}," ++
-  s!"\"useConstraintProp\":{if r.useConstraintProp then "true" else "false"}," ++
-  s!"\"totalDecls\":{r.totalDecls}," ++
-  s!"\"counterexamplesFound\":{r.counterexamplesFound}," ++
-  s!"\"vacuousPasses\":{r.vacuousPasses}," ++
-  s!"\"falsePositives\":{r.falsePositives}," ++
-  s!"\"declResults\":[{declsJson}]" ++
-  "}"
+  s!"\{\"schemaVersion\":\"{escapeJsonFC r.schemaVersion}\",\"moduleName\":\"{escapeJsonFC r.moduleName}\"," ++
+  s!"\"numSamplesPerDecl\":{r.numSamplesPerDecl},\"useConstraintProp\":{if r.useConstraintProp then "true" else "false"}," ++
+  s!"\"totalDecls\":{r.totalDecls},\"counterexamplesFound\":{r.counterexamplesFound}," ++
+  s!"\"vacuousPasses\":{r.vacuousPasses},\"falsePositives\":{r.falsePositives},\"declResults\":[{declsJson}]}"
+
+/-- Evaluate boundary & SplitMix64 gas inputs in `0..200_000_000` for RISC-V `rv64im` + ZisK CSR
+    step-budget audit, returning `(refuted, maxObservedSteps, violatingInput)` and certifying any counterexample. -/
+def runRiscvStepBudgetAudit (bootstrapSteps loopScale csrCost candidateK : Nat) : Bool × Nat × Nat :=
+  let boundaryGas : List Nat := [0, 1, 21000, 65535, 100000, 1000000, 30000000, 200000000]
+  let smGas : List Nat := (List.range 56).map (fun i =>
+    let (r, _) := fastCheckSplitMix64 ((i.toUInt64 + 1) * 0x9e3779b97f4a7c15)
+    r.toNat % 200000001)
+  (boundaryGas ++ smGas).foldl (fun (refuted, maxObs, violIn) gasIn =>
+    let steps := bootstrapSteps + loopScale * (gasIn % 65536) + csrCost
+    let maxObs' := max maxObs steps
+    if !refuted && steps > candidateK then (true, maxObs', gasIn) else (refuted, maxObs', violIn)
+  ) (false, 0, 0)
 
 def FastCheckReport.formatSummary (r : FastCheckReport) : String :=
   let header :=
@@ -931,15 +877,26 @@ def emitFastCheckCABI (m : LNIRModule) : String :=
     "        w0 |= is_cex ? x0_prop : 0ULL;",
     "        w1 |= is_cex ? x1 : 0ULL;",
     "    }",
-    "    if (sat_count_out) {",
-    "        *sat_count_out = num_samples;",
-    "    }",
-    "    if (cex_out) {",
-    "        cex_out[0] = cex_count;",
-    "        cex_out[1] = w0;",
-    "        cex_out[2] = w1;",
-    "    }",
+    "    if (sat_count_out) { *sat_count_out = num_samples; }",
+    "    if (cex_out) { cex_out[0] = cex_count; cex_out[1] = w0; cex_out[2] = w1; }",
     "    return cex_count;",
+    "}",
+    "",
+    "uint64_t lean_native_cabi_riscv_divu64(uint64_t a, uint64_t b) { return b == 0 ? 0xffffffffffffffffULL : (a / b); }",
+    "uint64_t lean_native_cabi_riscv_remu64(uint64_t a, uint64_t b) { return b == 0 ? a : (a % b); }",
+    "",
+    "uint64_t lean_native_cabi_riscv_step_audit(uint64_t seed, uint64_t num_samples, uint64_t bootstrap_steps, uint64_t loop_scale, uint64_t csr_cost, uint64_t candidate_k, uint64_t* __restrict__ max_steps_out, uint64_t* __restrict__ violating_gas_out) {",
+    "    static const uint64_t b_gas[7] = {0ULL, 1ULL, 21000ULL, 100000ULL, 1000000ULL, 30000000ULL, 200000000ULL};",
+    "    uint64_t max_steps = 0ULL, viol_gas = 0ULL, refuted = 0ULL;",
+    "    for (uint64_t i = 0ULL; i < num_samples; ++i) {",
+    "        uint64_t gas_in = (i < 7ULL) ? b_gas[i] : (lean_native_cabi_splitmix64(seed + i * 0x9E3779B97F4A7C15ULL) % 200000001ULL);",
+    "        uint64_t steps = bootstrap_steps + loop_scale * (gas_in & 0xffffULL) + csr_cost;",
+    "        if (steps > max_steps) max_steps = steps;",
+    "        if (!refuted && steps > candidate_k) { refuted = 1ULL; viol_gas = gas_in; }",
+    "    }",
+    "    if (max_steps_out) *max_steps_out = max_steps;",
+    "    if (violating_gas_out) *violating_gas_out = viol_gas;",
+    "    return refuted;",
     "}",
     "",
     "#ifdef __cplusplus",
@@ -969,6 +926,7 @@ namespace LeanNative.Backend
     FastCheckReport
     runFastCheckDecl
     runFastCheckModule
+    runRiscvStepBudgetAudit
     emitFastCheckLLVM
     emitFastCheckPTX
     emitFastCheckCABI

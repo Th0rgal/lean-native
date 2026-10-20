@@ -942,6 +942,16 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
     let modToRun := customModOpt.getD (mkFastCheckSampleModule)
     let rep := runFastCheckModule modToRun numSamples (!noProp)
     s!"\{\"id\":{reqId},\"ok\":true,\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"result\":\{\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"report\":{rep.toJson}}}"
+  | "riscv-step-audit" =>
+    let boot := extractRpcNatField line "bootstrap_steps" 23127
+    let scale := extractRpcNatField line "loop_scale" 1
+    let csr := extractRpcNatField line "csr_cost" 0
+    let candK := extractRpcNatField line "candidate_k" 1000000
+    let verMin := extractRpcNatField line "verify_minutes" 12
+    let (refuted, maxObs, violIn) := runRiscvStepBudgetAudit boot scale csr candK
+    let yukonScore := candK * 10000 + verMin
+    let refStr := if refuted then "true" else "false"
+    s!"\{\"id\":{reqId},\"ok\":true,\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore},\"result\":\{\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore}}}"
   | other =>
     s!"\{\"id\":{reqId},\"ok\":false,\"error\":\"unknown_method:{escapeJsonWorker other}\"}"
 
