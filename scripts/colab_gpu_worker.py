@@ -592,6 +592,7 @@ def client_request(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Google Colab GPU & TPU v5e Worker & Client Bridge for lean-native")
     parser.add_argument("--serve", action="store_true", help="Run HTTP GPU/TPU worker server (inside Google Colab)")
+    parser.add_argument("--cloudflared", action="store_true", help="Automatically download and start a Cloudflare Quick Tunnel for --serve")
     parser.add_argument("--port", type=int, default=8765, help="Port for --serve (default: 8765)")
     parser.add_argument("--token", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_TOKEN", ""), help="Bearer token")
     parser.add_argument("--api-url", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_API_URL", ""), help="Remote Colab URL")
@@ -675,12 +676,38 @@ def main() -> int:
         token = args.token or secrets.token_urlsafe(24)
         ColabGPUHandler.token = token
         hw = detect_gpu_info()
+        cf_url = ""
+        if args.cloudflared:
+            cf_bin = shutil.which("cloudflared") or "/tmp/cloudflared"
+            if not os.path.exists(cf_bin):
+                arch = "arm64" if "aarch64" in platform.machine().lower() else "amd64"
+                dl_url = f"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-{arch}"
+                subprocess.run(["curl", "-fsSL", dl_url, "-o", cf_bin], check=False)
+                os.chmod(cf_bin, 0o755)
+            cf_log = Path("/tmp/cloudflared_lean_native.log")
+            if cf_log.exists():
+                cf_log.unlink()
+            with open(cf_log, "w") as lf:
+                subprocess.Popen(
+                    [cf_bin, "tunnel", "--url", f"http://127.0.0.1:{args.port}", "--no-autoupdate"],
+                    stdout=lf,
+                    stderr=subprocess.STDOUT,
+                )
+            for _ in range(30):
+                time.sleep(0.5)
+                if cf_log.exists():
+                    m = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", cf_log.read_text(errors="ignore"))
+                    if m:
+                        cf_url = m.group(0)
+                        break
         print("=" * 72)
         print(
             f"[lean-native Colab Worker] Hardware: GPU={hw['gpu_name']}, TPU={hw['tpu_name']} "
             f"(backend={hw['accelerator_backend']}, CPU={hw['cpu_model']})"
         )
         print(f"[lean-native Colab Worker] Listening on http://127.0.0.1:{args.port}")
+        if cf_url:
+            print(f'export LEAN_NATIVE_COLAB_API_URL="{cf_url}"')
         print(f'export LEAN_NATIVE_COLAB_TOKEN="{token}"')
         print("=" * 72)
         sys.stdout.flush()
