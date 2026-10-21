@@ -309,6 +309,33 @@ pub extern "C" fn rust_bench_babybear_poseidon2_sbox_u64(n: u64) -> u64 {
 
 #[no_mangle]
 #[inline(never)]
+pub extern "C" fn rust_bench_mersenne31_circle_butterfly_u64(n: u64) -> u64 {
+    const P: u64 = 2147483647;
+    const MASK: u64 = 0x3FFFFFFF;
+    let mut total: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let a = (i.wrapping_mul(2654435761).wrapping_add(17)) & MASK;
+        let b = (i.wrapping_mul(2246822519).wrapping_add(29)) & MASK;
+        let c = (i.wrapping_mul(3266489917).wrapping_add(43)) & MASK;
+        let d = (i.wrapping_mul(668265263).wrapping_add(59)) & MASK;
+        let w = (i.wrapping_mul(1664525).wrapping_add(1013904223)) & MASK;
+        let tw_r = (c * w) % P;
+        let tw_i = (d * ((w ^ 0x15555555) & MASK)) % P;
+        let y0 = (a + tw_r) % P;
+        let y1 = (a + P - tw_r) % P;
+        let y2 = (b + tw_i) % P;
+        let y3 = (b + P - tw_i) % P;
+        let s = ((y0 * y2) % P) ^ ((y1 * y3) % P);
+        let step_val = s.wrapping_add((y0 ^ (y1 << 16)).wrapping_add(y2 ^ (y3 << 32)));
+        total = total.wrapping_add(step_val);
+        i += 1;
+    }
+    total
+}
+
+#[no_mangle]
+#[inline(never)]
 pub extern "C" fn rust_bench_holdout_bitwise(n: u64) -> u64 {
     let mut acc: u64 = 0x123456789ABCDEF0;
     let mut i: u64 = 0;
@@ -455,6 +482,13 @@ fn main() {
         let c = rust_bench_babybear_poseidon2_sbox_u64(black_box(5_000_000));
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         println!("BENCH babybear_poseidon2_sbox_u64 checksum={} time_ms={:.4}", c, dt);
+    }
+
+    if filter == "all" || filter == "mersenne31_circle_butterfly_u64" {
+        let t0 = Instant::now();
+        let c = rust_bench_mersenne31_circle_butterfly_u64(black_box(5_000_000));
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("BENCH mersenne31_circle_butterfly_u64 checksum={} time_ms={:.4}", c, dt);
     }
 
     if filter == "all" || filter == "holdout_bitwise" {

@@ -200,6 +200,23 @@
       "assurance_level": "VerifiedKernelProof",
       "gpu_offload_eligible": true,
       "description": "5M-state Proximity Prize / EIP-8200 / Plonky3 BabyBear prime field (P = 2^31 - 2^27 + 1 = 2013265921) 4-lane Poseidon2 degree-7 S-box (x^7 mod P) with Barrett multiplication."
+    },
+    {
+      "id": "mersenne31_circle_butterfly_u64",
+      "category": "proximity_eip8200_circle_stark_ntt",
+      "input_size": 5000000,
+      "input_unit": "butterflies",
+      "expected_checksum_u64": 13605335436704834831,
+      "targeted_passes": [
+        "UnboxTupleSROA",
+        "AlgebraicOpt",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "5M-butterfly Proximity Prize / EIP-8200 / Stwo / Plonky3 Mersenne-31 Circle STARK (P = 2^31 - 1 = 2147483647) 4-lane butterfly with branchless Mersenne folding ((z & P) + (z >> 31))."
     }
   ],
   "holdout_benchmarks": [

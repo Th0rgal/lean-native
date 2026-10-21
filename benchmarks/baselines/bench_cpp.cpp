@@ -251,6 +251,30 @@ uint64_t bench_babybear_poseidon2_sbox_u64(uint64_t N) {
     return total;
 }
 
+// 12. mersenne31_circle_butterfly_u64 (N = 5,000,000)
+// Proximity Prize / EIP-8200 / Stwo / Plonky3 Mersenne-31 Circle STARK (P = 2^31 - 1) 4-lane butterfly
+uint64_t bench_mersenne31_circle_butterfly_u64(uint64_t N) {
+    const uint64_t P = 2147483647ULL;
+    const uint64_t MASK = 0x3FFFFFFFULL;
+    uint64_t total = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t a = (i * 2654435761ULL + 17ULL) & MASK;
+        uint64_t b = (i * 2246822519ULL + 29ULL) & MASK;
+        uint64_t c = (i * 3266489917ULL + 43ULL) & MASK;
+        uint64_t d = (i * 668265263ULL + 59ULL) & MASK;
+        uint64_t w = (i * 1664525ULL + 1013904223ULL) & MASK;
+        uint64_t tw_r = (c * w) % P;
+        uint64_t tw_i = (d * ((w ^ 0x15555555ULL) & MASK)) % P;
+        uint64_t y0 = (a + tw_r) % P;
+        uint64_t y1 = (a + P - tw_r) % P;
+        uint64_t y2 = (b + tw_i) % P;
+        uint64_t y3 = (b + P - tw_i) % P;
+        uint64_t s = ((y0 * y2) % P) ^ ((y1 * y3) % P);
+        total += s + ((y0 ^ (y1 << 16)) + (y2 ^ (y3 << 32)));
+    }
+    return total;
+}
+
 // Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
 uint64_t bench_holdout_bitwise(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -398,6 +422,15 @@ int main(int argc, char** argv) {
         uint64_t c = bench_babybear_poseidon2_sbox_u64(N);
         double t1 = now_ms();
         std::printf("BENCH babybear_poseidon2_sbox_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "mersenne31_circle_butterfly_u64") {
+        uint64_t N = 5000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_mersenne31_circle_butterfly_u64(N);
+        double t1 = now_ms();
+        std::printf("BENCH mersenne31_circle_butterfly_u64 checksum=%llu time_ms=%.4f\n",
                     (unsigned long long)c, t1 - t0);
     }
 

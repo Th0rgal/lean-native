@@ -231,6 +231,56 @@ uint64_t run_cuda_babybear_poseidon2_sbox(uint64_t N, double* elapsed_ms) {
     return (uint64_t)h_sum;
 }
 
+__device__ __forceinline__ uint64_t dev_m31_reduce(uint64_t z) {
+    const uint64_t P = 0x7FFFFFFFULL;
+    uint64_t t = (z & P) + (z >> 31);
+    return (t >= P) ? (t - P) : t;
+}
+
+__global__ void mersenne31_circle_butterfly_u64_kernel(uint64_t N, unsigned long long* global_sum) {
+    const uint64_t P = 0x7FFFFFFFULL;
+    const uint64_t MASK = 0x3FFFFFFFULL;
+    uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t local_sum = 0ULL;
+    for (uint64_t i = idx; i < N; i += stride) {
+        uint64_t a = (i * 2654435761ULL + 17ULL) & MASK;
+        uint64_t b = (i * 2246822519ULL + 29ULL) & MASK;
+        uint64_t c = (i * 3266489917ULL + 43ULL) & MASK;
+        uint64_t d = (i * 668265263ULL + 59ULL) & MASK;
+        uint64_t w = (i * 1664525ULL + 1013904223ULL) & MASK;
+        uint64_t tw_r = dev_m31_reduce(c * w);
+        uint64_t tw_i = dev_m31_reduce(d * (w ^ 0x15555555ULL));
+        uint64_t y0 = a + tw_r; if (y0 >= P) y0 -= P;
+        uint64_t y1 = a + P - tw_r; if (y1 >= P) y1 -= P;
+        uint64_t y2 = b + tw_i; if (y2 >= P) y2 -= P;
+        uint64_t y3 = b + P - tw_i; if (y3 >= P) y3 -= P;
+        uint64_t s = dev_m31_reduce(y0 * y2) ^ dev_m31_reduce(y1 * y3);
+        local_sum += s + ((y0 ^ (y1 << 16)) + (y2 ^ (y3 << 32)));
+    }
+    for (int offset = 16; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        atomicAdd(global_sum, (unsigned long long)local_sum);
+    }
+}
+
+uint64_t run_cuda_mersenne31_circle_butterfly(uint64_t N, double* elapsed_ms) {
+    unsigned long long* d_sum = nullptr, h_sum = 0;
+    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CUDA_CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    mersenne31_circle_butterfly_u64_kernel<<<1, 32>>>(0, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    double t0 = now_ms();
+    mersenne31_circle_butterfly_u64_kernel<<<512, 256>>>(N, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    *elapsed_ms = now_ms() - t0;
+    CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_sum));
+    return (uint64_t)h_sum;
+}
+
 __global__ void saxpy_u64_kernel(uint64_t N, uint64_t alpha, const uint64_t* __restrict__ X, uint64_t* __restrict__ Y) {
     uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x, stride = (uint64_t)gridDim.x * blockDim.x;
     for (uint64_t i = idx; i < N; i += stride) Y[i] = alpha * X[i] + Y[i];
@@ -521,6 +571,10 @@ int main(int argc, char** argv) {
     if (filter == "all" || filter == "babybear_poseidon2_sbox_u64") {
         uint64_t c = run_cuda_babybear_poseidon2_sbox(5000000ULL, &dt);
         std::printf("BENCH babybear_poseidon2_sbox_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
+    }
+    if (filter == "all" || filter == "mersenne31_circle_butterfly_u64") {
+        uint64_t c = run_cuda_mersenne31_circle_butterfly(5000000ULL, &dt);
+        std::printf("BENCH mersenne31_circle_butterfly_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
     }
     if (filter == "all" || filter == "holdout_bitwise") {
         uint64_t c = run_holdout_bitwise(10000000ULL, &dt);

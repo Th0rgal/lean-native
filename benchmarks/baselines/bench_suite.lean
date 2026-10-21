@@ -344,6 +344,37 @@ partial def babybearLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UI
 def benchBabybearPoseidon2SboxU64 (n : UInt64) : UInt64 :=
   (babybearLoop 0 n (0, 0)).1
 
+-- 12. mersenne31_circle_butterfly_u64 (N = 5,000,000)
+-- Standard Lean 4 baseline: models Proximity Prize / EIP-8200 / Stwo / Plonky3
+-- Mersenne-31 Circle STARK (P = 2^31 - 1 = 2147483647) 4-lane butterfly with boxed state
+-- before `UnboxTupleSROA` + branchless Mersenne folding `(z & P) + (z >> 31)` + SIMD.
+@[inline]
+def mersenne31Step (i : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  let p : UInt64 := 2147483647
+  let mask : UInt64 := 0x3FFFFFFF
+  let a := (i * 2654435761 + 17) &&& mask
+  let b := (i * 2246822519 + 29) &&& mask
+  let c := (i * 3266489917 + 43) &&& mask
+  let d := (i * 668265263 + 59) &&& mask
+  let w := (i * 1664525 + 1013904223) &&& mask
+  let twR := (c * w) % p
+  let twI := (d * ((w ^^^ 0x15555555) &&& mask)) % p
+  let y0 := (a + twR) % p
+  let y1 := (a + p - twR) % p
+  let y2 := (b + twI) % p
+  let y3 := (b + p - twI) % p
+  let s := ((y0 * y2) % p) ^^^ ((y1 * y3) % p)
+  let stepVal := s + ((y0 ^^^ (y1 <<< 16)) + (y2 ^^^ (y3 <<< 32)))
+  (acc.1 + stepVal, acc.2 ^^^ s)
+
+partial def mersenne31Loop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  if i >= n then acc
+  else mersenne31Loop (i + 1) n (applyStep mersenne31Step i acc)
+
+@[noinline]
+def benchMersenne31CircleButterflyU64 (n : UInt64) : UInt64 :=
+  (mersenne31Loop 0 n (0, 0)).1
+
 -- Holdout 1: holdout_bitwise
 partial def holdoutBitwiseLoop (i : UInt64) (n : UInt64) (acc : UInt64) : UInt64 :=
   if i >= n then acc
@@ -462,6 +493,13 @@ def main (args : List String) : IO Unit := do
     let t1 ← IO.monoNanosNow
     let dt := (t1 - t0).toFloat / 1000000.0
     IO.println s!"BENCH babybear_poseidon2_sbox_u64 checksum={c} time_ms={dt}"
+
+  if filter == "all" || filter == "mersenne31_circle_butterfly_u64" then
+    let t0 ← IO.monoNanosNow
+    let c ← forceIO (benchMersenne31CircleButterflyU64 (5000000 + z))
+    let t1 ← IO.monoNanosNow
+    let dt := (t1 - t0).toFloat / 1000000.0
+    IO.println s!"BENCH mersenne31_circle_butterfly_u64 checksum={c} time_ms={dt}"
 
   if filter == "all" || filter == "holdout_bitwise" then
     let t0 ← IO.monoNanosNow

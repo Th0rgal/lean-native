@@ -777,6 +777,176 @@ uint64_t ln_babybear_poseidon2_sbox_u64_cpu(uint64_t N) {
 #endif
 }
 
+static inline uint64_t ln_m31_reduce_scalar(uint64_t z) {
+    const uint64_t P = 0x7FFFFFFFULL;
+    uint64_t t = (z & P) + (z >> 31);
+    return (t >= P) ? (t - P) : t;
+}
+
+uint64_t ln_mersenne31_circle_butterfly_u64_cpu(uint64_t N) {
+    const uint64_t m0 = 2654435761ULL, m1 = 2246822519ULL, m2 = 3266489917ULL, m3 = 668265263ULL, m4 = 1664525ULL;
+    const uint64_t P = 0x7FFFFFFFULL, MASK = 0x3FFFFFFFULL;
+#if defined(__aarch64__)
+    const uint32x4_t v_mask = vdupq_n_u32(0x3FFFFFFFU);
+    const uint32x4_t v_p = vdupq_n_u32(0x7FFFFFFFU);
+    const uint32x4_t v_wxor = vdupq_n_u32(0x15555555U);
+    uint32x4_t va = {17U, 17U + (uint32_t)m0, 17U + 2U * (uint32_t)m0, 17U + 3U * (uint32_t)m0};
+    uint32x4_t vb = {29U, 29U + (uint32_t)m1, 29U + 2U * (uint32_t)m1, 29U + 3U * (uint32_t)m1};
+    uint32x4_t vc = {43U, 43U + (uint32_t)m2, 43U + 2U * (uint32_t)m2, 43U + 3U * (uint32_t)m2};
+    uint32x4_t vd = {59U, 59U + (uint32_t)m3, 59U + 2U * (uint32_t)m3, 59U + 3U * (uint32_t)m3};
+    uint32x4_t vw = {1013904223U, 1013904223U + (uint32_t)m4, 1013904223U + 2U * (uint32_t)m4, 1013904223U + 3U * (uint32_t)m4};
+    const uint32x4_t st0 = vdupq_n_u32(4U * (uint32_t)m0);
+    const uint32x4_t st1 = vdupq_n_u32(4U * (uint32_t)m1);
+    const uint32x4_t st2 = vdupq_n_u32(4U * (uint32_t)m2);
+    const uint32x4_t st3 = vdupq_n_u32(4U * (uint32_t)m3);
+    const uint32x4_t st4 = vdupq_n_u32(4U * (uint32_t)m4);
+    uint64x2_t v_acc0 = vdupq_n_u64(0ULL), v_acc1 = vdupq_n_u64(0ULL);
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        uint32x4_t a = vandq_u32(va, v_mask);
+        uint32x4_t b = vandq_u32(vb, v_mask);
+        uint32x4_t c = vandq_u32(vc, v_mask);
+        uint32x4_t d = vandq_u32(vd, v_mask);
+        uint32x4_t w = vandq_u32(vw, v_mask);
+        uint32x4_t wi = veorq_u32(w, v_wxor);
+        va = vaddq_u32(va, st0);
+        vb = vaddq_u32(vb, st1);
+        vc = vaddq_u32(vc, st2);
+        vd = vaddq_u32(vd, st3);
+        vw = vaddq_u32(vw, st4);
+
+        uint32x4_t tr_hi = vreinterpretq_u32_s32(vqdmulhq_s32(vreinterpretq_s32_u32(c), vreinterpretq_s32_u32(w)));
+        uint32x4_t tr_lo = vandq_u32(vmulq_u32(c, w), v_p);
+        uint32x4_t tr = vaddq_u32(tr_lo, tr_hi);
+        tr = vsubq_u32(tr, vandq_u32(vcgeq_u32(tr, v_p), v_p));
+
+        uint32x4_t ti_hi = vreinterpretq_u32_s32(vqdmulhq_s32(vreinterpretq_s32_u32(d), vreinterpretq_s32_u32(wi)));
+        uint32x4_t ti_lo = vandq_u32(vmulq_u32(d, wi), v_p);
+        uint32x4_t ti = vaddq_u32(ti_lo, ti_hi);
+        ti = vsubq_u32(ti, vandq_u32(vcgeq_u32(ti, v_p), v_p));
+
+        uint32x4_t y0 = vaddq_u32(a, tr);
+        y0 = vsubq_u32(y0, vandq_u32(vcgeq_u32(y0, v_p), v_p));
+        uint32x4_t y1 = vsubq_u32(vaddq_u32(a, v_p), tr);
+        y1 = vsubq_u32(y1, vandq_u32(vcgeq_u32(y1, v_p), v_p));
+        uint32x4_t y2 = vaddq_u32(b, ti);
+        y2 = vsubq_u32(y2, vandq_u32(vcgeq_u32(y2, v_p), v_p));
+        uint32x4_t y3 = vsubq_u32(vaddq_u32(b, v_p), ti);
+        y3 = vsubq_u32(y3, vandq_u32(vcgeq_u32(y3, v_p), v_p));
+
+        uint32x4_t r0_hi = vreinterpretq_u32_s32(vqdmulhq_s32(vreinterpretq_s32_u32(y0), vreinterpretq_s32_u32(y2)));
+        uint32x4_t r0_lo = vandq_u32(vmulq_u32(y0, y2), v_p);
+        uint32x4_t r0 = vaddq_u32(r0_lo, r0_hi);
+        r0 = vsubq_u32(r0, vandq_u32(vcgeq_u32(r0, v_p), v_p));
+
+        uint32x4_t r1_hi = vreinterpretq_u32_s32(vqdmulhq_s32(vreinterpretq_s32_u32(y1), vreinterpretq_s32_u32(y3)));
+        uint32x4_t r1_lo = vandq_u32(vmulq_u32(y1, y3), v_p);
+        uint32x4_t r1 = vaddq_u32(r1_lo, r1_hi);
+        r1 = vsubq_u32(r1, vandq_u32(vcgeq_u32(r1, v_p), v_p));
+
+        uint32x4_t s32 = veorq_u32(r0, r1);
+        uint32x4_t yx_lo32 = veorq_u32(y0, vshlq_n_u32(y1, 16));
+        uint32x4_t hi32 = vaddq_u32(vshrq_n_u32(y1, 16), y3);
+
+        uint64x2_t sum_lo = vaddl_u32(vget_low_u32(s32), vget_low_u32(y2));
+        uint64x2_t sum_hi = vaddl_high_u32(s32, y2);
+        sum_lo = vaddw_u32(sum_lo, vget_low_u32(yx_lo32));
+        sum_hi = vaddw_high_u32(sum_hi, yx_lo32);
+        sum_lo = vaddq_u64(sum_lo, vshlq_n_u64(vmovl_u32(vget_low_u32(hi32)), 32));
+        sum_hi = vaddq_u64(sum_hi, vshlq_n_u64(vmovl_high_u32(hi32), 32));
+
+        v_acc0 = vaddq_u64(v_acc0, sum_lo);
+        v_acc1 = vaddq_u64(v_acc1, sum_hi);
+    }
+    uint64_t total = vaddvq_u64(vaddq_u64(v_acc0, v_acc1));
+    for (; i < N; ++i) {
+        uint64_t a = (i * m0 + 17ULL) & MASK;
+        uint64_t b = (i * m1 + 29ULL) & MASK;
+        uint64_t c = (i * m2 + 43ULL) & MASK;
+        uint64_t d = (i * m3 + 59ULL) & MASK;
+        uint64_t w = (i * m4 + 1013904223ULL) & MASK;
+        uint64_t tw_r = ln_m31_reduce_scalar(c * w);
+        uint64_t tw_i = ln_m31_reduce_scalar(d * (w ^ 0x15555555ULL));
+        uint64_t y0 = a + tw_r; if (y0 >= P) y0 -= P;
+        uint64_t y1 = a + P - tw_r; if (y1 >= P) y1 -= P;
+        uint64_t y2 = b + tw_i; if (y2 >= P) y2 -= P;
+        uint64_t y3 = b + P - tw_i; if (y3 >= P) y3 -= P;
+        uint64_t s = ln_m31_reduce_scalar(y0 * y2) ^ ln_m31_reduce_scalar(y1 * y3);
+        total += s + ((y0 ^ (y1 << 16)) + (y2 ^ (y3 << 32)));
+    }
+    return total;
+#else
+    const v4u64 v_mask = {MASK, MASK, MASK, MASK};
+    const v4u64 v_p = {P, P, P, P};
+    const v4u64 v_pm1 = {P - 1ULL, P - 1ULL, P - 1ULL, P - 1ULL};
+    const v4u64 v_wxor = {0x15555555ULL, 0x15555555ULL, 0x15555555ULL, 0x15555555ULL};
+    v4u64 va = {17ULL, 17ULL + m0, 17ULL + 2ULL * m0, 17ULL + 3ULL * m0};
+    v4u64 vb = {29ULL, 29ULL + m1, 29ULL + 2ULL * m1, 29ULL + 3ULL * m1};
+    v4u64 vc = {43ULL, 43ULL + m2, 43ULL + 2ULL * m2, 43ULL + 3ULL * m2};
+    v4u64 vd = {59ULL, 59ULL + m3, 59ULL + 2ULL * m3, 59ULL + 3ULL * m3};
+    v4u64 vw = {1013904223ULL, 1013904223ULL + m4, 1013904223ULL + 2ULL * m4, 1013904223ULL + 3ULL * m4};
+    const v4u64 st0 = {4ULL * m0, 4ULL * m0, 4ULL * m0, 4ULL * m0};
+    const v4u64 st1 = {4ULL * m1, 4ULL * m1, 4ULL * m1, 4ULL * m1};
+    const v4u64 st2 = {4ULL * m2, 4ULL * m2, 4ULL * m2, 4ULL * m2};
+    const v4u64 st3 = {4ULL * m3, 4ULL * m3, 4ULL * m3, 4ULL * m3};
+    const v4u64 st4 = {4ULL * m4, 4ULL * m4, 4ULL * m4, 4ULL * m4};
+    v4u64 v_acc = {0ULL, 0ULL, 0ULL, 0ULL};
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        v4u64 a = va & v_mask;
+        v4u64 b = vb & v_mask;
+        v4u64 c = vc & v_mask;
+        v4u64 d = vd & v_mask;
+        v4u64 w = vw & v_mask;
+        v4u64 wi = w ^ v_wxor;
+
+        v4u64 zr = (v4u64)_mm256_mul_epu32((__m256i)c, (__m256i)w);
+        v4u64 zi = (v4u64)_mm256_mul_epu32((__m256i)d, (__m256i)wi);
+        v4u64 tr = (zr & v_p) + (zr >> 31);
+        v4u64 ti = (zi & v_p) + (zi >> 31);
+        tr -= (v4u64)_mm256_cmpgt_epi64((__m256i)tr, (__m256i)v_pm1) & v_p;
+        ti -= (v4u64)_mm256_cmpgt_epi64((__m256i)ti, (__m256i)v_pm1) & v_p;
+
+        v4u64 y0 = a + tr;
+        y0 -= (v4u64)_mm256_cmpgt_epi64((__m256i)y0, (__m256i)v_pm1) & v_p;
+        v4u64 y1 = (a + v_p) - tr;
+        y1 -= (v4u64)_mm256_cmpgt_epi64((__m256i)y1, (__m256i)v_pm1) & v_p;
+        v4u64 y2 = b + ti;
+        y2 -= (v4u64)_mm256_cmpgt_epi64((__m256i)y2, (__m256i)v_pm1) & v_p;
+        v4u64 y3 = (b + v_p) - ti;
+        y3 -= (v4u64)_mm256_cmpgt_epi64((__m256i)y3, (__m256i)v_pm1) & v_p;
+
+        v4u64 p0 = (v4u64)_mm256_mul_epu32((__m256i)y0, (__m256i)y2);
+        v4u64 p1 = (v4u64)_mm256_mul_epu32((__m256i)y1, (__m256i)y3);
+        v4u64 r0 = (p0 & v_p) + (p0 >> 31);
+        v4u64 r1 = (p1 & v_p) + (p1 >> 31);
+        r0 -= (v4u64)_mm256_cmpgt_epi64((__m256i)r0, (__m256i)v_pm1) & v_p;
+        r1 -= (v4u64)_mm256_cmpgt_epi64((__m256i)r1, (__m256i)v_pm1) & v_p;
+
+        v4u64 s = r0 ^ r1;
+        v_acc += s + ((y0 ^ (y1 << 16)) + (y2 ^ (y3 << 32)));
+        va += st0; vb += st1; vc += st2; vd += st3; vw += st4;
+    }
+    uint64_t total = (v_acc[0] + v_acc[1]) + (v_acc[2] + v_acc[3]);
+    for (; i < N; ++i) {
+        uint64_t a = (i * m0 + 17ULL) & MASK;
+        uint64_t b = (i * m1 + 29ULL) & MASK;
+        uint64_t c = (i * m2 + 43ULL) & MASK;
+        uint64_t d = (i * m3 + 59ULL) & MASK;
+        uint64_t w = (i * m4 + 1013904223ULL) & MASK;
+        uint64_t tw_r = ln_m31_reduce_scalar(c * w);
+        uint64_t tw_i = ln_m31_reduce_scalar(d * (w ^ 0x15555555ULL));
+        uint64_t y0 = a + tw_r; if (y0 >= P) y0 -= P;
+        uint64_t y1 = a + P - tw_r; if (y1 >= P) y1 -= P;
+        uint64_t y2 = b + tw_i; if (y2 >= P) y2 -= P;
+        uint64_t y3 = b + P - tw_i; if (y3 >= P) y3 -= P;
+        uint64_t s = ln_m31_reduce_scalar(y0 * y2) ^ ln_m31_reduce_scalar(y1 * y3);
+        total += s + ((y0 ^ (y1 << 16)) + (y2 ^ (y3 << 32)));
+    }
+    return total;
+#endif
+}
+
 uint64_t ln_holdout_bitwise_cpu(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL, i26 = 0ULL;
 #if defined(__clang__)
@@ -855,6 +1025,7 @@ int main(int argc, char** argv) {
     RUN_BENCH("uint256_wad_muldiv_u64", ln_uint256_wad_muldiv_u64_cpu(5000000ULL));
     RUN_BENCH("goldilocks_ntt_modmul_u64", ln_goldilocks_ntt_modmul_u64_cpu(5000000ULL));
     RUN_BENCH("babybear_poseidon2_sbox_u64", ln_babybear_poseidon2_sbox_u64_cpu(5000000ULL));
+    RUN_BENCH("mersenne31_circle_butterfly_u64", ln_mersenne31_circle_butterfly_u64_cpu(5000000ULL));
     RUN_BENCH("holdout_bitwise", ln_holdout_bitwise_cpu(10000000ULL));
     RUN_BENCH("holdout_loop_bounds", ln_holdout_loop_bounds_cpu(10000000ULL));
     return 0;
