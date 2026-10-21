@@ -134,6 +134,8 @@ uint64_t run_cuda_dot_product(uint64_t N, const uint64_t* h_A, const uint64_t* h
     CUDA_CHECK(cudaDeviceSynchronize());
     *elapsed_ms = now_ms() - t0;
     CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
     CUDA_CHECK(cudaFree(d_sum));
     return (uint64_t)h_sum;
 }
@@ -173,6 +175,55 @@ uint64_t run_cuda_goldilocks_ntt_modmul(uint64_t N, double* elapsed_ms) {
     CUDA_CHECK(cudaDeviceSynchronize());
     double t0 = now_ms();
     goldilocks_ntt_modmul_u64_kernel<<<512, 256>>>(N, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    *elapsed_ms = now_ms() - t0;
+    CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_sum));
+    return (uint64_t)h_sum;
+}
+
+__device__ __forceinline__ uint64_t dev_babybear_sbox(uint64_t x) {
+    const uint64_t P = 2013265921ULL;
+    const uint64_t MU = 2290649223ULL;
+    uint64_t z2 = x * x, q2 = ((z2 >> 29) * MU) >> 33, r2 = z2 - q2 * P;
+    if (r2 >= P) r2 -= P;
+    uint64_t z3 = r2 * x, q3 = ((z3 >> 29) * MU) >> 33, r3 = z3 - q3 * P;
+    if (r3 >= P) r3 -= P;
+    uint64_t z4 = r2 * r2, q4 = ((z4 >> 29) * MU) >> 33, r4 = z4 - q4 * P;
+    if (r4 >= P) r4 -= P;
+    uint64_t z7 = r4 * r3, q7 = ((z7 >> 29) * MU) >> 33, r7 = z7 - q7 * P;
+    if (r7 >= P) r7 -= P;
+    return r7;
+}
+
+__global__ void babybear_poseidon2_sbox_u64_kernel(uint64_t N, unsigned long long* global_sum) {
+    uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t local_sum = 0ULL;
+    for (uint64_t i = idx; i < N; i += stride) {
+        uint64_t y0 = dev_babybear_sbox((i * 2654435761ULL + 17ULL) & 0x3FFFFFFFULL);
+        uint64_t y1 = dev_babybear_sbox((i * 2246822519ULL + 29ULL) & 0x3FFFFFFFULL);
+        uint64_t y2 = dev_babybear_sbox((i * 3266489917ULL + 43ULL) & 0x3FFFFFFFULL);
+        uint64_t y3 = dev_babybear_sbox((i * 668265263ULL + 59ULL) & 0x3FFFFFFFULL);
+        uint64_t t = y0 + y1 + y2 + y3;
+        local_sum += ((y0 + t) ^ ((y1 + t) << 16)) + ((y2 + t) ^ ((y3 + t) << 32));
+    }
+    for (int offset = 16; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        atomicAdd(global_sum, (unsigned long long)local_sum);
+    }
+}
+
+uint64_t run_cuda_babybear_poseidon2_sbox(uint64_t N, double* elapsed_ms) {
+    unsigned long long* d_sum = nullptr, h_sum = 0;
+    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CUDA_CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    babybear_poseidon2_sbox_u64_kernel<<<1, 32>>>(0, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    double t0 = now_ms();
+    babybear_poseidon2_sbox_u64_kernel<<<512, 256>>>(N, d_sum);
     CUDA_CHECK(cudaDeviceSynchronize());
     *elapsed_ms = now_ms() - t0;
     CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
@@ -466,6 +517,10 @@ int main(int argc, char** argv) {
     if (filter == "all" || filter == "goldilocks_ntt_modmul_u64") {
         uint64_t c = run_cuda_goldilocks_ntt_modmul(5000000ULL, &dt);
         std::printf("BENCH goldilocks_ntt_modmul_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
+    }
+    if (filter == "all" || filter == "babybear_poseidon2_sbox_u64") {
+        uint64_t c = run_cuda_babybear_poseidon2_sbox(5000000ULL, &dt);
+        std::printf("BENCH babybear_poseidon2_sbox_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
     }
     if (filter == "all" || filter == "holdout_bitwise") {
         uint64_t c = run_holdout_bitwise(10000000ULL, &dt);

@@ -304,6 +304,46 @@ partial def goldilocksLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : 
 def benchGoldilocksNttModmulU64 (n : UInt64) : UInt64 :=
   (goldilocksLoop 0 n (0, 0)).1
 
+-- 11. babybear_poseidon2_sbox_u64 (N = 5,000,000)
+-- Standard Lean 4 baseline: models Proximity Prize / EIP-8200 / Plonky3 / RISC Zero
+-- BabyBear prime field (P = 2^31 - 2^27 + 1 = 2013265921) Poseidon2 degree-7 S-box (x^7 mod P)
+-- across 4 parallel 31-bit field lanes with boxed 4-tuple state before `UnboxTupleSROA` + SIMD.
+@[inline]
+def babybearStep (i : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  let p : UInt64 := 2013265921
+  let mask : UInt64 := 0x3FFFFFFF
+  let x0 := (i * 2654435761 + 17) &&& mask
+  let x1 := (i * 2246822519 + 29) &&& mask
+  let x2 := (i * 3266489917 + 43) &&& mask
+  let x3 := (i * 668265263 + 59) &&& mask
+  let x0_2 := (x0 * x0) % p
+  let x0_3 := (x0_2 * x0) % p
+  let x0_4 := (x0_2 * x0_2) % p
+  let y0 := (x0_4 * x0_3) % p
+  let x1_2 := (x1 * x1) % p
+  let x1_3 := (x1_2 * x1) % p
+  let x1_4 := (x1_2 * x1_2) % p
+  let y1 := (x1_4 * x1_3) % p
+  let x2_2 := (x2 * x2) % p
+  let x2_3 := (x2_2 * x2) % p
+  let x2_4 := (x2_2 * x2_2) % p
+  let y2 := (x2_4 * x2_3) % p
+  let x3_2 := (x3 * x3) % p
+  let x3_3 := (x3_2 * x3) % p
+  let x3_4 := (x3_2 * x3_2) % p
+  let y3 := (x3_4 * x3_3) % p
+  let t := y0 + y1 + y2 + y3
+  let stepVal := ((y0 + t) ^^^ ((y1 + t) <<< 16)) + ((y2 + t) ^^^ ((y3 + t) <<< 32))
+  (acc.1 + stepVal, acc.2 ^^^ t)
+
+partial def babybearLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  if i >= n then acc
+  else babybearLoop (i + 1) n (applyStep babybearStep i acc)
+
+@[noinline]
+def benchBabybearPoseidon2SboxU64 (n : UInt64) : UInt64 :=
+  (babybearLoop 0 n (0, 0)).1
+
 -- Holdout 1: holdout_bitwise
 partial def holdoutBitwiseLoop (i : UInt64) (n : UInt64) (acc : UInt64) : UInt64 :=
   if i >= n then acc
@@ -415,6 +455,13 @@ def main (args : List String) : IO Unit := do
     let t1 ← IO.monoNanosNow
     let dt := (t1 - t0).toFloat / 1000000.0
     IO.println s!"BENCH goldilocks_ntt_modmul_u64 checksum={c} time_ms={dt}"
+
+  if filter == "all" || filter == "babybear_poseidon2_sbox_u64" then
+    let t0 ← IO.monoNanosNow
+    let c ← forceIO (benchBabybearPoseidon2SboxU64 (5000000 + z))
+    let t1 ← IO.monoNanosNow
+    let dt := (t1 - t0).toFloat / 1000000.0
+    IO.println s!"BENCH babybear_poseidon2_sbox_u64 checksum={c} time_ms={dt}"
 
   if filter == "all" || filter == "holdout_bitwise" then
     let t0 ← IO.monoNanosNow

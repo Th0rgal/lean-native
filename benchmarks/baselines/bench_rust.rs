@@ -274,6 +274,41 @@ pub extern "C" fn rust_bench_goldilocks_ntt_modmul_u64(n: u64) -> u64 {
 
 #[no_mangle]
 #[inline(never)]
+pub extern "C" fn rust_bench_babybear_poseidon2_sbox_u64(n: u64) -> u64 {
+    const P: u64 = 2013265921;
+    let mut total: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let x0 = (i.wrapping_mul(2654435761).wrapping_add(17)) & 0x3FFFFFFF;
+        let x1 = (i.wrapping_mul(2246822519).wrapping_add(29)) & 0x3FFFFFFF;
+        let x2 = (i.wrapping_mul(3266489917).wrapping_add(43)) & 0x3FFFFFFF;
+        let x3 = (i.wrapping_mul(668265263).wrapping_add(59)) & 0x3FFFFFFF;
+        let x0_2 = (x0 * x0) % P;
+        let x0_3 = (x0_2 * x0) % P;
+        let x0_4 = (x0_2 * x0_2) % P;
+        let y0 = (x0_4 * x0_3) % P;
+        let x1_2 = (x1 * x1) % P;
+        let x1_3 = (x1_2 * x1) % P;
+        let x1_4 = (x1_2 * x1_2) % P;
+        let y1 = (x1_4 * x1_3) % P;
+        let x2_2 = (x2 * x2) % P;
+        let x2_3 = (x2_2 * x2) % P;
+        let x2_4 = (x2_2 * x2_2) % P;
+        let y2 = (x2_4 * x2_3) % P;
+        let x3_2 = (x3 * x3) % P;
+        let x3_3 = (x3_2 * x3) % P;
+        let x3_4 = (x3_2 * x3_2) % P;
+        let y3 = (x3_4 * x3_3) % P;
+        let t = y0 + y1 + y2 + y3;
+        let step_val = ((y0 + t) ^ ((y1 + t) << 16)).wrapping_add((y2 + t) ^ ((y3 + t) << 32));
+        total = total.wrapping_add(step_val);
+        i += 1;
+    }
+    total
+}
+
+#[no_mangle]
+#[inline(never)]
 pub extern "C" fn rust_bench_holdout_bitwise(n: u64) -> u64 {
     let mut acc: u64 = 0x123456789ABCDEF0;
     let mut i: u64 = 0;
@@ -413,6 +448,13 @@ fn main() {
         let c = rust_bench_goldilocks_ntt_modmul_u64(black_box(5_000_000));
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         println!("BENCH goldilocks_ntt_modmul_u64 checksum={} time_ms={:.4}", c, dt);
+    }
+
+    if filter == "all" || filter == "babybear_poseidon2_sbox_u64" {
+        let t0 = Instant::now();
+        let c = rust_bench_babybear_poseidon2_sbox_u64(black_box(5_000_000));
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("BENCH babybear_poseidon2_sbox_u64 checksum={} time_ms={:.4}", c, dt);
     }
 
     if filter == "all" || filter == "holdout_bitwise" {

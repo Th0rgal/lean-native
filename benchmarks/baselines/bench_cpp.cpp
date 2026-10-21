@@ -231,6 +231,26 @@ uint64_t bench_goldilocks_ntt_modmul_u64(uint64_t N) {
     return total;
 }
 
+// 11. babybear_poseidon2_sbox_u64 (N = 5,000,000)
+// Proximity Prize / EIP-8200 / Plonky3 BabyBear prime field (P = 2^31 - 2^27 + 1) Poseidon2 S-box (x^7 mod P)
+uint64_t bench_babybear_poseidon2_sbox_u64(uint64_t N) {
+    const uint64_t P = 2013265921ULL;
+    uint64_t total = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t x0 = (i * 2654435761ULL + 17ULL) & 0x3FFFFFFFULL;
+        uint64_t x1 = (i * 2246822519ULL + 29ULL) & 0x3FFFFFFFULL;
+        uint64_t x2 = (i * 3266489917ULL + 43ULL) & 0x3FFFFFFFULL;
+        uint64_t x3 = (i * 668265263ULL + 59ULL) & 0x3FFFFFFFULL;
+        uint64_t x0_2 = (x0 * x0) % P, x0_3 = (x0_2 * x0) % P, x0_4 = (x0_2 * x0_2) % P, y0 = (x0_4 * x0_3) % P;
+        uint64_t x1_2 = (x1 * x1) % P, x1_3 = (x1_2 * x1) % P, x1_4 = (x1_2 * x1_2) % P, y1 = (x1_4 * x1_3) % P;
+        uint64_t x2_2 = (x2 * x2) % P, x2_3 = (x2_2 * x2) % P, x2_4 = (x2_2 * x2_2) % P, y2 = (x2_4 * x2_3) % P;
+        uint64_t x3_2 = (x3 * x3) % P, x3_3 = (x3_2 * x3) % P, x3_4 = (x3_2 * x3_2) % P, y3 = (x3_4 * x3_3) % P;
+        uint64_t t = y0 + y1 + y2 + y3;
+        total += ((y0 + t) ^ ((y1 + t) << 16)) + ((y2 + t) ^ ((y3 + t) << 32));
+    }
+    return total;
+}
+
 // Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
 uint64_t bench_holdout_bitwise(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -369,6 +389,15 @@ int main(int argc, char** argv) {
         uint64_t c = bench_goldilocks_ntt_modmul_u64(N);
         double t1 = now_ms();
         std::printf("BENCH goldilocks_ntt_modmul_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "babybear_poseidon2_sbox_u64") {
+        uint64_t N = 5000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_babybear_poseidon2_sbox_u64(N);
+        double t1 = now_ms();
+        std::printf("BENCH babybear_poseidon2_sbox_u64 checksum=%llu time_ms=%.4f\n",
                     (unsigned long long)c, t1 - t0);
     }
 

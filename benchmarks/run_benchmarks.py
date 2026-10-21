@@ -246,18 +246,21 @@ def run_local_spark_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[st
 set -e
 cd {remote_dir}
 LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
-[ -x "$LEAN_ROOT/bin/lean" ] || LEAN_ROOT="$HOME/.elan/toolchains/leanprover--lean4---v4.31.0"
+if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="$HOME/.elan/toolchains/leanprover--lean4---v4.31.0"; fi
 RUSTC_BIN=$(which rustc 2>/dev/null || echo "$HOME/.cargo/bin/rustc")
-[ -x "$RUSTC_BIN" ] || RUSTC_BIN="/var/lib/sandboxed-node/.cargo/bin/rustc"
+if [ ! -x "$RUSTC_BIN" ]; then RUSTC_BIN="/var/lib/sandboxed-node/.cargo/bin/rustc"; fi
 NVCC=$(which nvcc || echo /usr/local/cuda-13.0/bin/nvcc)
 t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); g++ -O3 -std=c++20 -mcpu=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$RUSTC_BIN" -C opt-level=3 -C target-cpu=native bench_rust.rs -o bench_rust_o3; echo "COMPILE_MS rust_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); clang -O3 -mcpu=native -march=armv9-a+sve2+sha3 -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$NVCC" -O3 -arch=native bench_cuda.cu -o bench_cuda_ptx; echo "COMPILE_MS cuda_o3 $(($(date +%s%3N) - t0))"
+sudo sync 2>/dev/null || true
+echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
+echo 1 | sudo tee /proc/sys/vm/compact_memory >/dev/null 2>&1 || true
 for b in official_lean4 cpp_o3 rust_o3 lean_native_cpu cuda_ptx; do
     for t in $(seq 1 {trials}); do
-        echo "BEGIN_RUN $b $t"; taskset -c 19 /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1; echo "END_RUN $b $t"
+        echo "BEGIN_RUN $b $t"; CUDA_MODULE_LOADING=LAZY taskset -c 19 /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1; echo "END_RUN $b $t"
     done
 done
 rm -rf {remote_dir}
@@ -349,9 +352,9 @@ def run_remote_ashur_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[s
 set -e
 cd {remote_dir}
 LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
-[ -x "$LEAN_ROOT/bin/lean" ] || LEAN_ROOT="/opt/actions-runner/verity-medium-1/.elan/toolchains/leanprover--lean4---v4.31.0"
+if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="/opt/actions-runner/verity-medium-1/.elan/toolchains/leanprover--lean4---v4.31.0"; fi
 RUSTC_BIN=$(which rustc 2>/dev/null || echo "/var/lib/sandboxed-node/f0193f28-1b1b-422e-ae57-3d1be9b1d42f/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc")
-[ -x "$RUSTC_BIN" ] || RUSTC_BIN="$HOME/.cargo/bin/rustc"
+if [ ! -x "$RUSTC_BIN" ]; then RUSTC_BIN="$HOME/.cargo/bin/rustc"; fi
 t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); g++ -O3 -std=c++20 -march=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$RUSTC_BIN" -C opt-level=3 -C target-cpu=native bench_rust.rs -o bench_rust_o3; echo "COMPILE_MS rust_o3 $(($(date +%s%3N) - t0))"

@@ -183,6 +183,23 @@
       "assurance_level": "VerifiedKernelProof",
       "gpu_offload_eligible": true,
       "description": "5M-operation Proximity Prize / EIP-8200 Goldilocks prime field (M = 2^64 - 2^32 + 1) 64x64->128 modular multiplication via branchless Solinas reduction (2^64 == 2^32 - 1 mod M)."
+    },
+    {
+      "id": "babybear_poseidon2_sbox_u64",
+      "category": "proximity_eip8200_poseidon2_sbox",
+      "input_size": 5000000,
+      "input_unit": "states",
+      "expected_checksum_u64": 11514767664959043523,
+      "targeted_passes": [
+        "UnboxTupleSROA",
+        "AlgebraicOpt",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "5M-state Proximity Prize / EIP-8200 / Plonky3 BabyBear prime field (P = 2^31 - 2^27 + 1 = 2013265921) 4-lane Poseidon2 degree-7 S-box (x^7 mod P) with Barrett multiplication."
     }
   ],
   "holdout_benchmarks": [

@@ -643,6 +643,140 @@ uint64_t ln_goldilocks_ntt_modmul_u64_cpu(uint64_t N) {
 #endif
 }
 
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE2)
+static inline void ln_babybear_sbox2_sve(svbool_t pg, svuint64_t a, svuint64_t b, svuint64_t v_p, svuint64_t v_m27, svuint64_t v_m28, svuint64_t v_m29, svuint64_t *ra, svuint64_t *rb) {
+    svuint64_t za2 = svmul_x(pg, a, a), zb2 = svmul_x(pg, b, b);
+    svuint64_t qa2 = svlsr_x(pg, svmulh_x(pg, za2, v_m27), 27), qb2 = svlsr_x(pg, svmulh_x(pg, zb2, v_m27), 27);
+    svuint64_t xa2 = svmls_x(pg, za2, qa2, v_p), xb2 = svmls_x(pg, zb2, qb2, v_p);
+    svuint64_t za3 = svmul_x(pg, xa2, a), zb3 = svmul_x(pg, xb2, b);
+    svuint64_t za4 = svmul_x(pg, xa2, xa2), zb4 = svmul_x(pg, xb2, xb2);
+    svuint64_t qa3 = svlsr_x(pg, svmulh_x(pg, za3, v_m28), 28), qb3 = svlsr_x(pg, svmulh_x(pg, zb3, v_m28), 28);
+    svuint64_t qa4 = svlsr_x(pg, svmulh_x(pg, za4, v_m29), 29), qb4 = svlsr_x(pg, svmulh_x(pg, zb4, v_m29), 29);
+    svuint64_t xa3 = svmls_x(pg, za3, qa3, v_p), xb3 = svmls_x(pg, zb3, qb3, v_p);
+    svuint64_t xa4 = svmls_x(pg, za4, qa4, v_p), xb4 = svmls_x(pg, zb4, qb4, v_p);
+    svuint64_t za7 = svmul_x(pg, xa4, xa3), zb7 = svmul_x(pg, xb4, xb3);
+    svuint64_t qa7 = svlsr_x(pg, svmulh_x(pg, za7, v_m29), 29), qb7 = svlsr_x(pg, svmulh_x(pg, zb7, v_m29), 29);
+    *ra = svmls_x(pg, za7, qa7, v_p);
+    *rb = svmls_x(pg, zb7, qb7, v_p);
+}
+#else
+static inline v4u64 ln_babybear_sbox_v4(v4u64 x) {
+    const v4u64 v_p = {2013265921ULL, 2013265921ULL, 2013265921ULL, 2013265921ULL};
+    const v4u64 v_mu = {2290649223ULL, 2290649223ULL, 2290649223ULL, 2290649223ULL};
+    const v4u64 v_pm1 = {2013265920ULL, 2013265920ULL, 2013265920ULL, 2013265920ULL};
+    v4u64 z2 = (v4u64)_mm256_mul_epu32((__m256i)x, (__m256i)x);
+    v4u64 q2 = ((v4u64)_mm256_mul_epu32((__m256i)(z2 >> 30), (__m256i)v_mu)) >> 32;
+    v4u64 r2 = z2 - (v4u64)_mm256_mul_epu32((__m256i)q2, (__m256i)v_p);
+    v4u64 x2 = r2 - ((v4u64)_mm256_cmpgt_epi64((__m256i)r2, (__m256i)v_pm1) & v_p);
+
+    v4u64 z3 = (v4u64)_mm256_mul_epu32((__m256i)x2, (__m256i)x);
+    v4u64 z4 = (v4u64)_mm256_mul_epu32((__m256i)x2, (__m256i)x2);
+    v4u64 q3 = ((v4u64)_mm256_mul_epu32((__m256i)(z3 >> 30), (__m256i)v_mu)) >> 32;
+    v4u64 q4 = ((v4u64)_mm256_mul_epu32((__m256i)(z4 >> 30), (__m256i)v_mu)) >> 32;
+    v4u64 r3 = z3 - (v4u64)_mm256_mul_epu32((__m256i)q3, (__m256i)v_p);
+    v4u64 r4 = z4 - (v4u64)_mm256_mul_epu32((__m256i)q4, (__m256i)v_p);
+    v4u64 x3 = r3 - ((v4u64)_mm256_cmpgt_epi64((__m256i)r3, (__m256i)v_pm1) & v_p);
+    v4u64 x4 = r4 - ((v4u64)_mm256_cmpgt_epi64((__m256i)r4, (__m256i)v_pm1) & v_p);
+
+    v4u64 z7 = (v4u64)_mm256_mul_epu32((__m256i)x4, (__m256i)x3);
+    v4u64 q7 = ((v4u64)_mm256_mul_epu32((__m256i)(z7 >> 30), (__m256i)v_mu)) >> 32;
+    v4u64 r7 = z7 - (v4u64)_mm256_mul_epu32((__m256i)q7, (__m256i)v_p);
+    return r7 - ((v4u64)_mm256_cmpgt_epi64((__m256i)r7, (__m256i)v_pm1) & v_p);
+}
+#endif
+
+static inline uint64_t ln_babybear_sbox_scalar(uint64_t x) {
+    const uint64_t P = 2013265921ULL;
+    uint64_t x2 = (x * x) % P;
+    uint64_t x3 = (x2 * x) % P;
+    uint64_t x4 = (x2 * x2) % P;
+    return (x4 * x3) % P;
+}
+
+uint64_t ln_babybear_poseidon2_sbox_u64_cpu(uint64_t N) {
+    const uint64_t m0 = 2654435761ULL, m1 = 2246822519ULL, m2 = 3266489917ULL, m3 = 668265263ULL;
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE2)
+    svbool_t pg = svptrue_pat_b64(SV_VL2);
+    svuint64_t v_acc0 = svdup_n_u64(0ULL), v_acc1 = svdup_n_u64(0ULL);
+    svuint64_t v_idx = svindex_u64(0ULL, 1ULL);
+    svuint64_t v_p = svdup_n_u64(2013265921ULL);
+    svuint64_t v_m27 = svdup_n_u64(0x11111110eca86421ULL);
+    svuint64_t v_m28 = svdup_n_u64(0x22222221d950c841ULL);
+    svuint64_t v_m29 = svdup_n_u64(0x44444443b2a19081ULL);
+    svuint64_t v_m0 = svdup_n_u64(m0), v_m1 = svdup_n_u64(m1), v_m2 = svdup_n_u64(m2), v_m3 = svdup_n_u64(m3);
+    svuint64_t v_c0 = svdup_n_u64(17ULL), v_c1 = svdup_n_u64(29ULL), v_c2 = svdup_n_u64(43ULL), v_c3 = svdup_n_u64(59ULL);
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        svuint64_t v_idx1 = svadd_n_u64_x(pg, v_idx, 2ULL);
+        svuint64_t x0_0 = svand_n_u64_x(pg, svmla_x(pg, v_c0, v_idx, v_m0), 0x3FFFFFFFULL);
+        svuint64_t x0_1 = svand_n_u64_x(pg, svmla_x(pg, v_c0, v_idx1, v_m0), 0x3FFFFFFFULL);
+        svuint64_t x1_0 = svand_n_u64_x(pg, svmla_x(pg, v_c1, v_idx, v_m1), 0x3FFFFFFFULL);
+        svuint64_t x1_1 = svand_n_u64_x(pg, svmla_x(pg, v_c1, v_idx1, v_m1), 0x3FFFFFFFULL);
+        svuint64_t x2_0 = svand_n_u64_x(pg, svmla_x(pg, v_c2, v_idx, v_m2), 0x3FFFFFFFULL);
+        svuint64_t x2_1 = svand_n_u64_x(pg, svmla_x(pg, v_c2, v_idx1, v_m2), 0x3FFFFFFFULL);
+        svuint64_t x3_0 = svand_n_u64_x(pg, svmla_x(pg, v_c3, v_idx, v_m3), 0x3FFFFFFFULL);
+        svuint64_t x3_1 = svand_n_u64_x(pg, svmla_x(pg, v_c3, v_idx1, v_m3), 0x3FFFFFFFULL);
+        v_idx = svadd_n_u64_x(pg, v_idx, 4ULL);
+
+        svuint64_t y0_0, y0_1, y1_0, y1_1, y2_0, y2_1, y3_0, y3_1;
+        ln_babybear_sbox2_sve(pg, x0_0, x0_1, v_p, v_m27, v_m28, v_m29, &y0_0, &y0_1);
+        ln_babybear_sbox2_sve(pg, x1_0, x1_1, v_p, v_m27, v_m28, v_m29, &y1_0, &y1_1);
+        ln_babybear_sbox2_sve(pg, x2_0, x2_1, v_p, v_m27, v_m28, v_m29, &y2_0, &y2_1);
+        ln_babybear_sbox2_sve(pg, x3_0, x3_1, v_p, v_m27, v_m28, v_m29, &y3_0, &y3_1);
+
+        svuint64_t t0 = svadd_x(pg, svadd_x(pg, y0_0, y1_0), svadd_x(pg, y2_0, y3_0));
+        svuint64_t t1 = svadd_x(pg, svadd_x(pg, y0_1, y1_1), svadd_x(pg, y2_1, y3_1));
+        svuint64_t a0 = sveor_x(pg, svadd_x(pg, y0_0, t0), svlsl_n_u64_x(pg, svadd_x(pg, y1_0, t0), 16));
+        svuint64_t b0 = sveor_x(pg, svadd_x(pg, y2_0, t0), svlsl_n_u64_x(pg, svadd_x(pg, y3_0, t0), 32));
+        svuint64_t a1 = sveor_x(pg, svadd_x(pg, y0_1, t1), svlsl_n_u64_x(pg, svadd_x(pg, y1_1, t1), 16));
+        svuint64_t b1 = sveor_x(pg, svadd_x(pg, y2_1, t1), svlsl_n_u64_x(pg, svadd_x(pg, y3_1, t1), 32));
+        v_acc0 = svadd_x(pg, v_acc0, svadd_x(pg, a0, b0));
+        v_acc1 = svadd_x(pg, v_acc1, svadd_x(pg, a1, b1));
+    }
+    uint64_t total = svaddv_u64(pg, svadd_x(pg, v_acc0, v_acc1));
+    for (; i < N; ++i) {
+        uint64_t y0 = ln_babybear_sbox_scalar((i * m0 + 17ULL) & 0x3FFFFFFFULL);
+        uint64_t y1 = ln_babybear_sbox_scalar((i * m1 + 29ULL) & 0x3FFFFFFFULL);
+        uint64_t y2 = ln_babybear_sbox_scalar((i * m2 + 43ULL) & 0x3FFFFFFFULL);
+        uint64_t y3 = ln_babybear_sbox_scalar((i * m3 + 59ULL) & 0x3FFFFFFFULL);
+        uint64_t t = y0 + y1 + y2 + y3;
+        total += ((y0 + t) ^ ((y1 + t) << 16)) + ((y2 + t) ^ ((y3 + t) << 32));
+    }
+    return total;
+#else
+    const v4u64 v_mask = {0x3FFFFFFFULL, 0x3FFFFFFFULL, 0x3FFFFFFFULL, 0x3FFFFFFFULL};
+    v4u64 vx0 = {17ULL, 17ULL + m0, 17ULL + 2ULL * m0, 17ULL + 3ULL * m0};
+    v4u64 vx1 = {29ULL, 29ULL + m1, 29ULL + 2ULL * m1, 29ULL + 3ULL * m1};
+    v4u64 vx2 = {43ULL, 43ULL + m2, 43ULL + 2ULL * m2, 43ULL + 3ULL * m2};
+    v4u64 vx3 = {59ULL, 59ULL + m3, 59ULL + 2ULL * m3, 59ULL + 3ULL * m3};
+    const v4u64 st0 = {4ULL * m0, 4ULL * m0, 4ULL * m0, 4ULL * m0};
+    const v4u64 st1 = {4ULL * m1, 4ULL * m1, 4ULL * m1, 4ULL * m1};
+    const v4u64 st2 = {4ULL * m2, 4ULL * m2, 4ULL * m2, 4ULL * m2};
+    const v4u64 st3 = {4ULL * m3, 4ULL * m3, 4ULL * m3, 4ULL * m3};
+    v4u64 v_acc = {0ULL, 0ULL, 0ULL, 0ULL};
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        v4u64 y0 = ln_babybear_sbox_v4(vx0 & v_mask);
+        v4u64 y1 = ln_babybear_sbox_v4(vx1 & v_mask);
+        v4u64 y2 = ln_babybear_sbox_v4(vx2 & v_mask);
+        v4u64 y3 = ln_babybear_sbox_v4(vx3 & v_mask);
+        v4u64 t = (y0 + y1) + (y2 + y3);
+        v_acc += ((y0 + t) ^ ((y1 + t) << 16)) + ((y2 + t) ^ ((y3 + t) << 32));
+        vx0 += st0; vx1 += st1; vx2 += st2; vx3 += st3;
+    }
+    uint64_t total = (v_acc[0] + v_acc[1]) + (v_acc[2] + v_acc[3]);
+    for (; i < N; ++i) {
+        uint64_t y0 = ln_babybear_sbox_scalar((i * m0 + 17ULL) & 0x3FFFFFFFULL);
+        uint64_t y1 = ln_babybear_sbox_scalar((i * m1 + 29ULL) & 0x3FFFFFFFULL);
+        uint64_t y2 = ln_babybear_sbox_scalar((i * m2 + 43ULL) & 0x3FFFFFFFULL);
+        uint64_t y3 = ln_babybear_sbox_scalar((i * m3 + 59ULL) & 0x3FFFFFFFULL);
+        uint64_t t = y0 + y1 + y2 + y3;
+        total += ((y0 + t) ^ ((y1 + t) << 16)) + ((y2 + t) ^ ((y3 + t) << 32));
+    }
+    return total;
+#endif
+}
+
 uint64_t ln_holdout_bitwise_cpu(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL, i26 = 0ULL;
 #if defined(__clang__)
@@ -720,6 +854,7 @@ int main(int argc, char** argv) {
     RUN_BENCH("keccak256_sponge_u64", ln_keccak256_sponge_u64_cpu(2000000ULL));
     RUN_BENCH("uint256_wad_muldiv_u64", ln_uint256_wad_muldiv_u64_cpu(5000000ULL));
     RUN_BENCH("goldilocks_ntt_modmul_u64", ln_goldilocks_ntt_modmul_u64_cpu(5000000ULL));
+    RUN_BENCH("babybear_poseidon2_sbox_u64", ln_babybear_poseidon2_sbox_u64_cpu(5000000ULL));
     RUN_BENCH("holdout_bitwise", ln_holdout_bitwise_cpu(10000000ULL));
     RUN_BENCH("holdout_loop_bounds", ln_holdout_loop_bounds_cpu(10000000ULL));
     return 0;
