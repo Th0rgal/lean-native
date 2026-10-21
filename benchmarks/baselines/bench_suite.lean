@@ -153,6 +153,28 @@ def benchMatmulTiledU64 (m : Nat) (a b c : Array UInt64) : UInt64 :=
   let cOut := matmulOuterI 0 m a b c
   hashStride 0 (m * m) 1 cOut fnvOffset
 
+-- 7. evm_gas_schedule_u64 (N = 10,000,000)
+-- Standard Lean 4 baseline: models EVMYulLean 2.0 `Gas.lean` memory expansion & Keccak256 dynamic gas
+-- with boxed structure / tuple step before `lean-native` `UnboxTupleSROA` + `AlgebraicOpt` + SIMD.
+@[inline]
+def evmGasStep (i : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  let oldW := (i * 2654435761 + 11) &&& 0x7FFF
+  let reqW := (i * 2246822519 + 29) &&& 0xFFFF
+  let dataW := (i * 3266489917 + 7) &&& 0xFF
+  let newW := if reqW > oldW then reqW else oldW
+  let newCost := 3 * newW + (newW * newW) / 512
+  let oldCost := 3 * oldW + (oldW * oldW) / 512
+  let opGas := (newCost - oldCost) + 30 + 6 * dataW
+  (acc.1 + opGas, acc.2 ^^^ newW)
+
+partial def evmGasLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  if i >= n then acc
+  else evmGasLoop (i + 1) n (applyStep evmGasStep i acc)
+
+@[noinline]
+def benchEvmGasScheduleU64 (n : UInt64) : UInt64 :=
+  (evmGasLoop 0 n (0, 0)).1
+
 -- Holdout 1: holdout_bitwise
 partial def holdoutBitwiseLoop (i : UInt64) (n : UInt64) (acc : UInt64) : UInt64 :=
   if i >= n then acc
@@ -236,6 +258,13 @@ def main (args : List String) : IO Unit := do
     let t1 ← IO.monoNanosNow
     let dt := (t1 - t0).toFloat / 1000000.0
     IO.println s!"BENCH matmul_tiled_u64 checksum={c} time_ms={dt}"
+
+  if filter == "all" || filter == "evm_gas_schedule_u64" then
+    let t0 ← IO.monoNanosNow
+    let c ← forceIO (benchEvmGasScheduleU64 (10000000 + z))
+    let t1 ← IO.monoNanosNow
+    let dt := (t1 - t0).toFloat / 1000000.0
+    IO.println s!"BENCH evm_gas_schedule_u64 checksum={c} time_ms={dt}"
 
   if filter == "all" || filter == "holdout_bitwise" then
     let t0 ← IO.monoNanosNow

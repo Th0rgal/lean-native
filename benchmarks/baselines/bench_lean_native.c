@@ -11,6 +11,11 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#elif defined(__AVX2__)
+#include <immintrin.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,6 +142,146 @@ uint64_t ln_matmul_tiled_u64_cpu(uint64_t M, const uint64_t* __restrict__ A,
     return h;
 }
 
+uint64_t ln_evm_gas_schedule_u64_cpu(uint64_t N) {
+#if defined(__aarch64__)
+    uint64x2_t vs0 = vdupq_n_u64(0ULL), vs1 = vdupq_n_u64(0ULL);
+    uint64x2_t vs2 = vdupq_n_u64(0ULL), vs3 = vdupq_n_u64(0ULL);
+    uint32x4_t v_old0 = {11u, 11u + 2654435761u, 11u + 2u * 2654435761u, 11u + 3u * 2654435761u};
+    uint32x4_t v_old1 = {11u + 4u * 2654435761u, 11u + 5u * 2654435761u, 11u + 6u * 2654435761u, 11u + 7u * 2654435761u};
+    uint32x4_t v_req0 = {29u, 29u + 2246822519u, 29u + 2u * 2246822519u, 29u + 3u * 2246822519u};
+    uint32x4_t v_req1 = {29u + 4u * 2246822519u, 29u + 5u * 2246822519u, 29u + 6u * 2246822519u, 29u + 7u * 2246822519u};
+    uint32x4_t v_dat0 = {7u, 7u + 3266489917u, 7u + 2u * 3266489917u, 7u + 3u * 3266489917u};
+    uint32x4_t v_dat1 = {7u + 4u * 3266489917u, 7u + 5u * 3266489917u, 7u + 6u * 3266489917u, 7u + 7u * 3266489917u};
+    const uint32x4_t s_old = vdupq_n_u32(8u * 2654435761u);
+    const uint32x4_t s_req = vdupq_n_u32(8u * 2246822519u);
+    const uint32x4_t s_dat = vdupq_n_u32(8u * 3266489917u);
+    const uint32x4_t m7fff = vdupq_n_u32(0x7FFFu);
+    const uint32x4_t mffff = vdupq_n_u32(0xFFFFu);
+    const uint32x4_t mff = vdupq_n_u32(0xFFu);
+    const uint32x4_t c30 = vdupq_n_u32(30u);
+    uint64_t i = 0ULL;
+    for (; i + 8ULL <= N; i += 8ULL) {
+        uint32x4_t o0 = vandq_u32(v_old0, m7fff), r0 = vandq_u32(v_req0, mffff), d0 = vandq_u32(v_dat0, mff);
+        uint32x4_t nw0 = vmaxq_u32(r0, o0);
+        uint32x4_t q0 = vsubq_u32(vshrq_n_u32(vmulq_u32(nw0, nw0), 9), vshrq_n_u32(vmulq_u32(o0, o0), 9));
+        uint32x4_t op0 = vaddq_u32(vaddq_u32(vmulq_n_u32(vsubq_u32(nw0, o0), 3u), q0), vaddq_u32(c30, vmulq_n_u32(d0, 6u)));
+        vs0 = vpadalq_u32(vs0, op0);
+
+        uint32x4_t o1 = vandq_u32(v_old1, m7fff), r1 = vandq_u32(v_req1, mffff), d1 = vandq_u32(v_dat1, mff);
+        uint32x4_t nw1 = vmaxq_u32(r1, o1);
+        uint32x4_t q1 = vsubq_u32(vshrq_n_u32(vmulq_u32(nw1, nw1), 9), vshrq_n_u32(vmulq_u32(o1, o1), 9));
+        uint32x4_t op1 = vaddq_u32(vaddq_u32(vmulq_n_u32(vsubq_u32(nw1, o1), 3u), q1), vaddq_u32(c30, vmulq_n_u32(d1, 6u)));
+        vs1 = vpadalq_u32(vs1, op1);
+
+        v_old0 = vaddq_u32(v_old0, s_old); v_old1 = vaddq_u32(v_old1, s_old);
+        v_req0 = vaddq_u32(v_req0, s_req); v_req1 = vaddq_u32(v_req1, s_req);
+        v_dat0 = vaddq_u32(v_dat0, s_dat); v_dat1 = vaddq_u32(v_dat1, s_dat);
+    }
+    uint64x2_t vs = vaddq_u64(vaddq_u64(vs0, vs1), vaddq_u64(vs2, vs3));
+    uint64_t total_gas = vgetq_lane_u64(vs, 0) + vgetq_lane_u64(vs, 1);
+    for (; i < N; ++i) {
+        uint64_t old_w = (i * 2654435761ULL + 11ULL) & 0x7FFFULL;
+        uint64_t req_w = (i * 2246822519ULL + 29ULL) & 0xFFFFULL;
+        uint64_t data_w = (i * 3266489917ULL + 7ULL) & 0xFFULL;
+        uint64_t new_w = (req_w > old_w) ? req_w : old_w;
+        uint64_t op_gas = 3ULL * (new_w - old_w) + (((new_w * new_w) >> 9) - ((old_w * old_w) >> 9)) + 30ULL + 6ULL * data_w;
+        total_gas += op_gas;
+    }
+    return total_gas;
+#elif defined(__AVX2__)
+    __m256i vs0 = _mm256_setzero_si256(), vs1 = _mm256_setzero_si256();
+    __m256i v_old = _mm256_setr_epi32(
+        11u, 11u + 2654435761u, 11u + 2u * 2654435761u, 11u + 3u * 2654435761u,
+        11u + 4u * 2654435761u, 11u + 5u * 2654435761u, 11u + 6u * 2654435761u, 11u + 7u * 2654435761u
+    );
+    __m256i v_req = _mm256_setr_epi32(
+        29u, 29u + 2246822519u, 29u + 2u * 2246822519u, 29u + 3u * 2246822519u,
+        29u + 4u * 2246822519u, 29u + 5u * 2246822519u, 29u + 6u * 2246822519u, 29u + 7u * 2246822519u
+    );
+    __m256i v_dat = _mm256_setr_epi32(
+        7u, 7u + 3266489917u, 7u + 2u * 3266489917u, 7u + 3u * 3266489917u,
+        7u + 4u * 3266489917u, 7u + 5u * 3266489917u, 7u + 6u * 3266489917u, 7u + 7u * 3266489917u
+    );
+    const __m256i s_old = _mm256_set1_epi32((int)(8u * 2654435761u));
+    const __m256i s_req = _mm256_set1_epi32((int)(8u * 2246822519u));
+    const __m256i s_dat = _mm256_set1_epi32((int)(8u * 3266489917u));
+    const __m256i m7fff = _mm256_set1_epi32(0x7FFF);
+    const __m256i mffff = _mm256_set1_epi32(0xFFFF);
+    const __m256i mff = _mm256_set1_epi32(0xFF);
+    const __m256i c30 = _mm256_set1_epi32(30);
+    const __m256i z = _mm256_setzero_si256();
+    uint64_t i = 0ULL;
+    for (; i + 8ULL <= N; i += 8ULL) {
+        __m256i o = _mm256_and_si256(v_old, m7fff);
+        __m256i r = _mm256_and_si256(v_req, mffff);
+        __m256i d = _mm256_and_si256(v_dat, mff);
+        __m256i nw = _mm256_max_epu32(r, o);
+        __m256i nw2 = _mm256_srli_epi32(_mm256_mullo_epi32(nw, nw), 9);
+        __m256i o2 = _mm256_srli_epi32(_mm256_mullo_epi32(o, o), 9);
+        __m256i diff = _mm256_sub_epi32(nw, o);
+        __m256i diff3 = _mm256_add_epi32(_mm256_slli_epi32(diff, 1), diff);
+        __m256i d6 = _mm256_add_epi32(_mm256_slli_epi32(d, 2), _mm256_slli_epi32(d, 1));
+        __m256i op = _mm256_add_epi32(_mm256_add_epi32(diff3, _mm256_sub_epi32(nw2, o2)), _mm256_add_epi32(c30, d6));
+        vs0 = _mm256_add_epi64(vs0, _mm256_unpacklo_epi32(op, z));
+        vs1 = _mm256_add_epi64(vs1, _mm256_unpackhi_epi32(op, z));
+        v_old = _mm256_add_epi32(v_old, s_old);
+        v_req = _mm256_add_epi32(v_req, s_req);
+        v_dat = _mm256_add_epi32(v_dat, s_dat);
+    }
+    __m256i vs = _mm256_add_epi64(vs0, vs1);
+    uint64_t lanes[4];
+    _mm256_storeu_si256((__m256i*)lanes, vs);
+    uint64_t total_gas = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+    for (; i < N; ++i) {
+        uint64_t old_w = (i * 2654435761ULL + 11ULL) & 0x7FFFULL;
+        uint64_t req_w = (i * 2246822519ULL + 29ULL) & 0xFFFFULL;
+        uint64_t data_w = (i * 3266489917ULL + 7ULL) & 0xFFULL;
+        uint64_t new_w = (req_w > old_w) ? req_w : old_w;
+        uint64_t op_gas = 3ULL * (new_w - old_w) + (((new_w * new_w) >> 9) - ((old_w * old_w) >> 9)) + 30ULL + 6ULL * data_w;
+        total_gas += op_gas;
+    }
+    return total_gas;
+#else
+    v4u64 vs0 = {0ULL, 0ULL, 0ULL, 0ULL}, vs1 = {0ULL, 0ULL, 0ULL, 0ULL};
+    v4u64 vi0 = {0ULL, 1ULL, 2ULL, 3ULL}, vi1 = {4ULL, 5ULL, 6ULL, 7ULL};
+    const v4u64 v8 = {8ULL, 8ULL, 8ULL, 8ULL};
+    const v4u64 m7fff = {0x7FFFULL, 0x7FFFULL, 0x7FFFULL, 0x7FFFULL};
+    const v4u64 mffff = {0xFFFFULL, 0xFFFFULL, 0xFFFFULL, 0xFFFFULL};
+    const v4u64 mff = {0xFFULL, 0xFFULL, 0xFFULL, 0xFFULL};
+    uint64_t i = 0ULL;
+    for (; i + 8ULL <= N; i += 8ULL) {
+        v4u64 old0 = (vi0 * 2654435761ULL + 11ULL) & m7fff;
+        v4u64 req0 = (vi0 * 2246822519ULL + 29ULL) & mffff;
+        v4u64 dat0 = (vi0 * 3266489917ULL + 7ULL) & mff;
+        v4u64 cmp0 = (v4u64)(req0 > old0);
+        v4u64 new0 = (req0 & cmp0) | (old0 & ~cmp0);
+        v4u64 op0 = (3ULL * (new0 - old0)) + (((new0 * new0) >> 9) - ((old0 * old0) >> 9)) + 30ULL + 6ULL * dat0;
+        vs0 += op0;
+
+        v4u64 old1 = (vi1 * 2654435761ULL + 11ULL) & m7fff;
+        v4u64 req1 = (vi1 * 2246822519ULL + 29ULL) & mffff;
+        v4u64 dat1 = (vi1 * 3266489917ULL + 7ULL) & mff;
+        v4u64 cmp1 = (v4u64)(req1 > old1);
+        v4u64 new1 = (req1 & cmp1) | (old1 & ~cmp1);
+        v4u64 op1 = (3ULL * (new1 - old1)) + (((new1 * new1) >> 9) - ((old1 * old1) >> 9)) + 30ULL + 6ULL * dat1;
+        vs1 += op1;
+
+        vi0 += v8; vi1 += v8;
+    }
+    v4u64 vs = vs0 + vs1;
+    uint64_t total_gas = (vs[0] + vs[1]) + (vs[2] + vs[3]);
+    for (; i < N; ++i) {
+        uint64_t old_w = (i * 2654435761ULL + 11ULL) & 0x7FFFULL;
+        uint64_t req_w = (i * 2246822519ULL + 29ULL) & 0xFFFFULL;
+        uint64_t data_w = (i * 3266489917ULL + 7ULL) & 0xFFULL;
+        uint64_t new_w = (req_w > old_w) ? req_w : old_w;
+        uint64_t op_gas = 3ULL * (new_w - old_w) + (((new_w * new_w) >> 9) - ((old_w * old_w) >> 9)) + 30ULL + 6ULL * data_w;
+        total_gas += op_gas;
+    }
+    return total_gas;
+#endif
+}
+
 uint64_t ln_holdout_bitwise_cpu(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL, i26 = 0ULL;
 #if defined(__clang__)
@@ -210,6 +355,7 @@ int main(int argc, char** argv) {
         RUN_BENCH("matmul_tiled_u64", ln_matmul_tiled_u64_cpu(M, A, B, C));
         free(A); free(B); free(C);
     }
+    RUN_BENCH("evm_gas_schedule_u64", ln_evm_gas_schedule_u64_cpu(10000000ULL));
     RUN_BENCH("holdout_bitwise", ln_holdout_bitwise_cpu(10000000ULL));
     RUN_BENCH("holdout_loop_bounds", ln_holdout_loop_bounds_cpu(10000000ULL));
     return 0;

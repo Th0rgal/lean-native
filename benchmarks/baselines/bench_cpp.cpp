@@ -127,6 +127,23 @@ uint64_t bench_matmul_tiled_u64(uint64_t M, const uint64_t* __restrict__ A, cons
     return h;
 }
 
+// 7. evm_gas_schedule_u64 (N = 10,000,000)
+// EVMYulLean 2.0 dynamic quadratic memory expansion + Keccak256 gas schedule (Gas.lean)
+uint64_t bench_evm_gas_schedule_u64(uint64_t N) {
+    uint64_t total_gas = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t old_w = (i * 2654435761ULL + 11ULL) & 0x7FFFULL;
+        uint64_t req_w = (i * 2246822519ULL + 29ULL) & 0xFFFFULL;
+        uint64_t data_w = (i * 3266489917ULL + 7ULL) & 0xFFULL;
+        uint64_t new_w = (req_w > old_w) ? req_w : old_w;
+        uint64_t new_cost = 3ULL * new_w + (new_w * new_w) / 512ULL;
+        uint64_t old_cost = 3ULL * old_w + (old_w * old_w) / 512ULL;
+        uint64_t op_gas = (new_cost - old_cost) + 30ULL + 6ULL * data_w;
+        total_gas += op_gas;
+    }
+    return total_gas;
+}
+
 // Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
 uint64_t bench_holdout_bitwise(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -229,6 +246,15 @@ int main(int argc, char** argv) {
         uint64_t c = bench_matmul_tiled_u64(M, A.data(), B.data(), C.data());
         double t1 = now_ms();
         std::printf("BENCH matmul_tiled_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "evm_gas_schedule_u64") {
+        uint64_t N = 10000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_evm_gas_schedule_u64(N);
+        double t1 = now_ms();
+        std::printf("BENCH evm_gas_schedule_u64 checksum=%llu time_ms=%.4f\n",
                     (unsigned long long)c, t1 - t0);
     }
 

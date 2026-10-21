@@ -116,6 +116,22 @@
       "assurance_level": "TranslationValidated",
       "gpu_offload_eligible": true,
       "description": "Dense 512x512 64-bit matrix multiplication (134.2M multiply-adds); compares Lean 4 nested loops against lean-native cache-tiled SIMD CPU and shared-memory tiled PTX GPU."
+    },
+    {
+      "id": "evm_gas_schedule_u64",
+      "category": "evm_yul_lean_gas_model",
+      "input_size": 10000000,
+      "input_unit": "transactions",
+      "expected_checksum_u64": 23299983278533,
+      "targeted_passes": [
+        "AlgebraicOpt",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "10M-transaction EVMYulLean 2.0 dynamic quadratic memory expansion + Keccak256 gas schedule (Gas.lean); tests branchless smax/umin, shift strength reduction (w^2 / 512 -> w^2 >> 9), 4-way SIMD vectorization, and GPU warp-shuffle reduction."
     }
   ],
   "holdout_benchmarks": [

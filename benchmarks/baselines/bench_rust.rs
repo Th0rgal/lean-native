@@ -156,6 +156,27 @@ pub unsafe extern "C" fn rust_bench_matmul_tiled_u64(
 
 #[no_mangle]
 #[inline(never)]
+pub extern "C" fn rust_bench_evm_gas_schedule_u64(n: u64) -> u64 {
+    let mut total_gas: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let old_w = (i.wrapping_mul(2654435761).wrapping_add(11)) & 0x7FFF;
+        let req_w = (i.wrapping_mul(2246822519).wrapping_add(29)) & 0xFFFF;
+        let data_w = (i.wrapping_mul(3266489917).wrapping_add(7)) & 0xFF;
+        let new_w = if req_w > old_w { req_w } else { old_w };
+        let new_cost = 3u64.wrapping_mul(new_w).wrapping_add((new_w.wrapping_mul(new_w)) / 512);
+        let old_cost = 3u64.wrapping_mul(old_w).wrapping_add((old_w.wrapping_mul(old_w)) / 512);
+        let op_gas = (new_cost.wrapping_sub(old_cost))
+            .wrapping_add(30)
+            .wrapping_add(6u64.wrapping_mul(data_w));
+        total_gas = total_gas.wrapping_add(op_gas);
+        i += 1;
+    }
+    total_gas
+}
+
+#[no_mangle]
+#[inline(never)]
 pub extern "C" fn rust_bench_holdout_bitwise(n: u64) -> u64 {
     let mut acc: u64 = 0x123456789ABCDEF0;
     let mut i: u64 = 0;
@@ -267,6 +288,13 @@ fn main() {
         };
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         println!("BENCH matmul_tiled_u64 checksum={} time_ms={:.4}", chk, dt);
+    }
+
+    if filter == "all" || filter == "evm_gas_schedule_u64" {
+        let t0 = Instant::now();
+        let c = rust_bench_evm_gas_schedule_u64(black_box(10_000_000));
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("BENCH evm_gas_schedule_u64 checksum={} time_ms={:.4}", c, dt);
     }
 
     if filter == "all" || filter == "holdout_bitwise" {

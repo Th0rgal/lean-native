@@ -200,6 +200,41 @@ uint64_t run_cuda_matmul_tiled(uint64_t M, const uint64_t* h_A, const uint64_t* 
     return h;
 }
 
+__global__ void evm_gas_schedule_u64_kernel(uint64_t N, unsigned long long* global_sum) {
+    uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t local_gas = 0ULL;
+    for (uint64_t i = idx; i < N; i += stride) {
+        uint64_t old_w = (i * 2654435761ULL + 11ULL) & 0x7FFFULL;
+        uint64_t req_w = (i * 2246822519ULL + 29ULL) & 0xFFFFULL;
+        uint64_t data_w = (i * 3266489917ULL + 7ULL) & 0xFFULL;
+        uint64_t new_w = (req_w > old_w) ? req_w : old_w;
+        uint64_t op_gas = 3ULL * (new_w - old_w) + (((new_w * new_w) >> 9) - ((old_w * old_w) >> 9)) + 30ULL + 6ULL * data_w;
+        local_gas += op_gas;
+    }
+    for (int offset = 16; offset > 0; offset /= 2) {
+        local_gas += __shfl_down_sync(0xffffffff, local_gas, offset);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        atomicAdd(global_sum, (unsigned long long)local_gas);
+    }
+}
+
+uint64_t run_cuda_evm_gas_schedule(uint64_t N, double* elapsed_ms) {
+    unsigned long long* d_sum = nullptr, h_sum = 0;
+    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CUDA_CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    evm_gas_schedule_u64_kernel<<<1, 32>>>(0, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    double t0 = now_ms();
+    evm_gas_schedule_u64_kernel<<<512, 256>>>(N, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    *elapsed_ms = now_ms() - t0;
+    CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_sum));
+    return (uint64_t)h_sum;
+}
+
 uint64_t run_holdout_bitwise(uint64_t N, double* elapsed_ms) {
     double t0 = now_ms();
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -269,6 +304,10 @@ int main(int argc, char** argv) {
         }
         uint64_t c = run_cuda_matmul_tiled(M, A.data(), B.data(), &dt);
         std::printf("BENCH matmul_tiled_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
+    }
+    if (filter == "all" || filter == "evm_gas_schedule_u64") {
+        uint64_t c = run_cuda_evm_gas_schedule(10000000ULL, &dt);
+        std::printf("BENCH evm_gas_schedule_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
     }
     if (filter == "all" || filter == "holdout_bitwise") {
         uint64_t c = run_holdout_bitwise(10000000ULL, &dt);
