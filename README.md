@@ -30,7 +30,7 @@ See [`benchmarks/BENCHMARK_REPORT.md`](benchmarks/BENCHMARK_REPORT.md) and [`ben
 
 ## Architecture (v0.5)
 
-`lean-native` v0.5 adopts the **"Pinned Formal Spec vs. Segregated Optimization Plugin"** architecture of [`Th0rgal/turbo-lean`](https://github.com/Th0rgal/turbo-lean) (Season 8) so any contributor PR or autonomous `autoresearch` experiment can aggressively optimize compiler passes without ever risking soundness regressions:
+`lean-native` v0.5 adopts the **"Pinned Formal Spec vs. Segregated Optimization Plugin"** architecture of [`Th0rgal/turbo-lean`](https://github.com/Th0rgal/turbo-lean) (Season 8) so any contributor PR or automated optimization pass can aggressively optimize compiler passes without ever risking soundness regressions:
 
 1. **Pinned Formal Executable Specification ([`LeanNative/Spec.lean`](LeanNative/Spec.lean)) — 15 Laws Theorems (102 In-Kernel Audited Proofs / 184 Total Repo Theorems)**:
    - Zero `import Lean`, zero `sorryAx`, audited in `0.14 ms` as **15/15 non-vacuous and tight** by `turbo-lean audit-spec LeanNative/Spec.lean`:

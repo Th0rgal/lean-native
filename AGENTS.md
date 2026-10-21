@@ -27,7 +27,7 @@ Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lea
    - **Layer I (Universal Meta-Specifications & Combinators)**: Structural reasoning is factored into reusable combinators (`MetaGateSpec`, `MetaAlgorithmSpec`, `SpeculativeGate`, `VerifiedTransformContract`, `ClockedStepBudget`).
    - **Layer II (Declarative Corollaries)**: Concrete pass, ABI, partitioner, and PR-gate properties are expressed as `MetaGateSpec` bundles or corollaries of **≤ 3 lines** instantiating Layer I.
 
-3. **Hermetic Segregation of Formal Kernel vs. `autoresearch` Plugins behind `SpeculativeGate`**:
+3. **Hermetic Segregation of Formal Kernel vs. Untrusted Optimization Plugins behind `SpeculativeGate`**:
    All optimization plugins, superoptimizer rules, and hardware kernel emitters are untrusted proposals gated by `SpeculativeGate` (`evalWithUntrustedOptPlugin`) and verified by `SymbolicTV` / `CodeRefines` (`0 sorryAx`, `0 native_decide`), falling back transparently to the unoptimized IR on timeout or rejection.
 
 4. **Mathlib4 Algebraic Proof Style**:
