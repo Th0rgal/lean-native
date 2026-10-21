@@ -112,124 +112,55 @@ def emitDeclHostGlue (minGpuElements : Nat) (actionOpt : Option TransferAction) 
   let primaryKernel := match regions with
     | (_, _, _, _, k) :: _ => k
     | [] => .mapScaleAdd 1 0
-  let dispatchBody := match primaryKernel with
-    | .mapScaleAdd scale bias =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0) \{",
-        s!"    {modeComment}",
-        "    if (!out || !in0) return -1;",
-        "    size_t n = in0->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 2u)) \{",
-        s!"        int rc = lean_native_hybrid_map_scale_add_u64(out->m_data, in0->m_data, (uint64_t){scale}ULL, (uint64_t){bias}ULL, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    for (size_t i = 0; i < n; ++i) {",
-        s!"        out->m_data[i] = in0->m_data[i] * (uint64_t){scale}ULL + (uint64_t){bias}ULL;",
-        "    }",
-        "    return 0;",
-        "}"
-      ]
-    | .zipAdd =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1) \{",
-        s!"    {modeComment}",
-        "    if (!out || !in0 || !in1) return -1;",
-        "    size_t n = in0->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 3u)) \{",
-        "        int rc = lean_native_hybrid_zip_add_u64(out->m_data, in0->m_data, in1->m_data, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    for (size_t i = 0; i < n; ++i) {",
-        "        out->m_data[i] = in0->m_data[i] + in1->m_data[i];",
-        "    }",
-        "    return 0;",
-        "}"
-      ]
-    | .zipMul =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1) \{",
-        s!"    {modeComment}",
-        "    if (!out || !in0 || !in1) return -1;",
-        "    size_t n = in0->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 3u)) \{",
-        "        void* args[4] = { (void*)&out->m_data, (void*)&in0->m_data, (void*)&in1->m_data, (void*)&n };",
-        "        int rc = lean_native_launch_ptx_kernel(\"lean_native_kernel_zip_mul\", args, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    for (size_t i = 0; i < n; ++i) {",
-        "        out->m_data[i] = in0->m_data[i] * in1->m_data[i];",
-        "    }",
-        "    return 0;",
-        "}"
-      ]
-    | .dotProduct =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1) \{",
-        s!"    {modeComment}",
-        "    if (!out || !in0 || !in1 || out->m_size == 0) return -1;",
-        "    size_t n = in0->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 2u)) \{",
-        "        int rc = lean_native_hybrid_dot_product_u64(&out->m_data[0], in0->m_data, in1->m_data, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    lean_native_cpu_dot_product_u64(&out->m_data[0], in0->m_data, in1->m_data, n);",
-        "    return 0;",
-        "}"
-      ]
-    | .saxpy alphaBits =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* x, const lean_native_sarray_u64* y) \{",
-        s!"    {modeComment}",
-        "    if (!out || !x || !y) return -1;",
-        "    size_t n = x->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 3u)) \{",
-        s!"        int rc = lean_native_hybrid_saxpy_u64(out->m_data, x->m_data, y->m_data, (uint64_t){alphaBits}ULL, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    for (size_t i = 0; i < n; ++i) {",
-        s!"        out->m_data[i] = (uint64_t){alphaBits}ULL * x->m_data[i] + y->m_data[i];",
-        "    }",
-        "    return 0;",
-        "}"
-      ]
-    | .stencil1D3Pt wLeft wCenter wRight =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0) \{",
-        s!"    {modeComment}",
-        "    if (!out || !in0) return -1;",
-        "    size_t n = in0->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 2u)) \{",
-        s!"        int rc = lean_native_hybrid_stencil1d_u64(out->m_data, in0->m_data, (uint64_t){wLeft}ULL, (uint64_t){wCenter}ULL, (uint64_t){wRight}ULL, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    for (size_t i = 0; i < n; ++i) {",
-        "        if (i == 0 || i + 1 >= n) {",
-        "            out->m_data[i] = in0->m_data[i];",
-        "        } else {",
-        s!"            out->m_data[i] = in0->m_data[i - 1] * {wLeft}ULL + in0->m_data[i] * {wCenter}ULL + in0->m_data[i + 1] * {wRight}ULL;",
-        "        }",
-        "    }",
-        "    return 0;",
-        "}"
-      ]
-    | .customScalar _ _ _ =>
-      String.intercalate "\n" [
-        s!"int lean_native_hybrid_dispatch_{d.name}(lean_native_sarray_u64* out, const lean_native_sarray_u64* in0) \{",
-        s!"    {modeComment}",
-        "    if (!out || !in0) return -1;",
-        "    size_t n = in0->m_size;",
-        s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * 2u)) \{",
-        "        void* args[3] = { (void*)&out->m_data, (void*)&in0->m_data, (void*)&n };",
-        s!"        int rc = lean_native_launch_ptx_kernel(\"lean_native_decl_{d.name}\", args, n);",
-        "        if (rc == 0) return 0;",
-        "    }",
-        "    for (size_t i = 0; i < n; ++i) {",
-        "        out->m_data[i] = in0->m_data[i] + (uint64_t)i;",
-        "    }",
-        "    return 0;",
-        "}"
-      ]
-  dispatchBody
+  let mkGlue (sig nullChk : String) (numBufs : Nat) (gpuCall cpuFallback : String) : String :=
+    String.intercalate "\n" [
+      s!"int lean_native_hybrid_dispatch_{d.name}({sig}) \{",
+      s!"    {modeComment}",
+      s!"    if ({nullChk}) return -1;",
+      s!"    if (n >= {minGpuElements}ULL && lean_native_gpu_available() && lean_native_gpu_has_headroom(n * sizeof(uint64_t) * {numBufs}u)) \{",
+      s!"{gpuCall}",
+      "        if (rc == 0) return 0;",
+      "    }",
+      s!"{cpuFallback}",
+      "    return 0;",
+      "}"
+    ]
+  match primaryKernel with
+  | .mapScaleAdd scale bias =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* in0" "!out || !in0" 2
+      s!"        int rc = lean_native_hybrid_map_scale_add_u64(out->m_data, in0->m_data, (uint64_t){scale}ULL, (uint64_t){bias}ULL, n);"
+      s!"    for (size_t i = 0; i < n; ++i) \{\n        out->m_data[i] = in0->m_data[i] * (uint64_t){scale}ULL + (uint64_t){bias}ULL;\n    }"
+      |>.replace "if (!out || !in0) return -1;" "if (!out || !in0) return -1;\n    size_t n = in0->m_size;"
+  | .zipAdd =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1" "!out || !in0 || !in1" 3
+      "        int rc = lean_native_hybrid_zip_add_u64(out->m_data, in0->m_data, in1->m_data, n);"
+      "    for (size_t i = 0; i < n; ++i) {\n        out->m_data[i] = in0->m_data[i] + in1->m_data[i];\n    }"
+      |>.replace "if (!out || !in0 || !in1) return -1;" "if (!out || !in0 || !in1) return -1;\n    size_t n = in0->m_size;"
+  | .zipMul =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1" "!out || !in0 || !in1" 3
+      "        void* args[4] = { (void*)&out->m_data, (void*)&in0->m_data, (void*)&in1->m_data, (void*)&n };\n        int rc = lean_native_launch_ptx_kernel(\"lean_native_kernel_zip_mul\", args, n);"
+      "    for (size_t i = 0; i < n; ++i) {\n        out->m_data[i] = in0->m_data[i] * in1->m_data[i];\n    }"
+      |>.replace "if (!out || !in0 || !in1) return -1;" "if (!out || !in0 || !in1) return -1;\n    size_t n = in0->m_size;"
+  | .dotProduct =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* in0, const lean_native_sarray_u64* in1" "!out || !in0 || !in1 || out->m_size == 0" 2
+      "        int rc = lean_native_hybrid_dot_product_u64(&out->m_data[0], in0->m_data, in1->m_data, n);"
+      "    lean_native_cpu_dot_product_u64(&out->m_data[0], in0->m_data, in1->m_data, n);"
+      |>.replace "if (!out || !in0 || !in1 || out->m_size == 0) return -1;" "if (!out || !in0 || !in1 || out->m_size == 0) return -1;\n    size_t n = in0->m_size;"
+  | .saxpy alphaBits =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* x, const lean_native_sarray_u64* y" "!out || !x || !y" 3
+      s!"        int rc = lean_native_hybrid_saxpy_u64(out->m_data, x->m_data, y->m_data, (uint64_t){alphaBits}ULL, n);"
+      s!"    for (size_t i = 0; i < n; ++i) \{\n        out->m_data[i] = (uint64_t){alphaBits}ULL * x->m_data[i] + y->m_data[i];\n    }"
+      |>.replace "if (!out || !x || !y) return -1;" "if (!out || !x || !y) return -1;\n    size_t n = x->m_size;"
+  | .stencil1D3Pt wLeft wCenter wRight =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* in0" "!out || !in0" 2
+      s!"        int rc = lean_native_hybrid_stencil1d_u64(out->m_data, in0->m_data, (uint64_t){wLeft}ULL, (uint64_t){wCenter}ULL, (uint64_t){wRight}ULL, n);"
+      s!"    for (size_t i = 0; i < n; ++i) \{\n        if (i == 0 || i + 1 >= n) \{\n            out->m_data[i] = in0->m_data[i];\n        } else \{\n            out->m_data[i] = in0->m_data[i - 1] * {wLeft}ULL + in0->m_data[i] * {wCenter}ULL + in0->m_data[i + 1] * {wRight}ULL;\n        }\n    }"
+      |>.replace "if (!out || !in0) return -1;" "if (!out || !in0) return -1;\n    size_t n = in0->m_size;"
+  | .customScalar _ _ _ =>
+    mkGlue "lean_native_sarray_u64* out, const lean_native_sarray_u64* in0" "!out || !in0" 2
+      s!"        void* args[3] = \{ (void*)&out->m_data, (void*)&in0->m_data, (void*)&n };\n        int rc = lean_native_launch_ptx_kernel(\"lean_native_decl_{d.name}\", args, n);"
+      "    for (size_t i = 0; i < n; ++i) {\n        out->m_data[i] = in0->m_data[i] + (uint64_t)i;\n    }"
+      |>.replace "if (!out || !in0) return -1;" "if (!out || !in0) return -1;\n    size_t n = in0->m_size;"
 
 /-- Generate C/LLVM host dispatch glue (`emitHybridHostGlue`) from a `HybridPartitionPlan`.
     Automatically selects GPU execution when `N >= minGpuElements` and a CUDA device is available,

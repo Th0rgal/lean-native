@@ -124,44 +124,31 @@ def parseCoreCLIOptions (args : List String) : CoreCLIOptions :=
     `mkCanonicalBenchmarkModule` when an explicit `--input` or `--lnir` file is passed. -/
 def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args : List String)
     (defaultFastCheck : Bool := false) : IO LNIRModule := do
-  let lnirFile := findFlagValue args "--lnir" ""
-  if !lnirFile.isEmpty then
-    if !(← System.FilePath.pathExists lnirFile) then
-      return if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
-    let raw ← IO.FS.readFile lnirFile
+  let defaultMod := if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
+  let parseWireOrJsonFile (path : String) : IO LNIRModule := do
+    if !(← System.FilePath.pathExists path) then return defaultMod
+    let raw ← IO.FS.readFile path
     match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
     | some mod =>
       if mod.decls.isEmpty then
-        throw <| IO.userError s!"[lean-native] Failed to extract any LNIR declarations from '{lnirFile}'"
+        throw <| IO.userError s!"[lean-native] Failed to extract any LNIR declarations from '{path}'"
       return mod
     | none =>
-      throw <| IO.userError s!"[lean-native] Failed to parse LNIR wire/JSON module from '{lnirFile}'"
+      throw <| IO.userError s!"[lean-native] Failed to parse LNIR wire/JSON module from '{path}'"
+  let lnirFile := findFlagValue args "--lnir" ""
+  if !lnirFile.isEmpty then return (← parseWireOrJsonFile lnirFile)
   let inFileExplicit := findFlagValue args "--input" ""
   let inFilePos := findFirstPositional args
   let inFile := if !inFileExplicit.isEmpty then inFileExplicit else inFilePos
-  if inFile.isEmpty then
-    return if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
+  if inFile.isEmpty then return defaultMod
   else if inFile == "canonical" || inFile == "benchmarks" || inFile == "examples/Benchmark.lnir" then
     if ← System.FilePath.pathExists inFile then
       let raw ← IO.FS.readFile inFile
-      match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
-      | some mod => return mod
-      | none => return mkCanonicalBenchmarkModule
-    else
-      return mkCanonicalBenchmarkModule
-  else if inFile == "fastcheck" || inFile == "fastcheck-sample" then
-    return mkFastCheckSampleModule
+      return (LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw).getD mkCanonicalBenchmarkModule
+    else return mkCanonicalBenchmarkModule
+  else if inFile == "fastcheck" || inFile == "fastcheck-sample" then return mkFastCheckSampleModule
   else if inFile.endsWith ".lnir" || inFile.endsWith ".json" then
-    if !(← System.FilePath.pathExists inFile) then
-      return if defaultFastCheck then mkFastCheckSampleModule else mkCanonicalBenchmarkModule
-    let raw ← IO.FS.readFile inFile
-    match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
-    | some mod =>
-      if mod.decls.isEmpty then
-        throw <| IO.userError s!"[lean-native] Failed to extract any LNIR declarations from '{inFile}'"
-      return mod
-    | none =>
-      throw <| IO.userError s!"[lean-native] Failed to parse LNIR wire/JSON module from '{inFile}'"
+    parseWireOrJsonFile inFile
   else
     match elaborateHook? with
     | some ingestFn =>
@@ -174,10 +161,16 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
         let raw ← IO.FS.readFile inFile
         match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
         | some mod => return mod
-        | none =>
-          throw <| IO.userError s!"[lean-native-core] Cannot parse '{inFile}' as LNIR wire/JSON (use full 'lean-native' for .lean source elaboration)"
+        | none => throw <| IO.userError s!"[lean-native-core] Cannot parse '{inFile}' as LNIR wire/JSON (use full 'lean-native' for .lean source elaboration)"
       else
         throw <| IO.userError s!"[lean-native-core] Input file '{inFile}' does not exist"
+
+private def writeOrPrint (outPath text : String) (msg? : Option String := none) : IO UInt32 := do
+  if outPath.isEmpty then IO.println text
+  else
+    IO.FS.writeFile outPath text
+    if let some m := msg? then IO.println m
+  return 0
 
 def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let opts := parseCoreCLIOptions args
@@ -186,25 +179,15 @@ def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let _ ← emitModuleTelemetryEvents telCfg .x86_64 false baseMod
   let (optMod, _) := if opts.isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   if opts.emitCABI then
-    let cText := LeanNative.Backend.emitFastCheckCABI optMod
-    if opts.outputPath.isEmpty then
-      IO.println cText
-    else
-      IO.FS.writeFile opts.outputPath cText
-      IO.println s!"[{tag}] Wrote Zero-Boxing C-ABI SIMD FastCheck & Routing kernel to {opts.outputPath}"
-    return 0
+    writeOrPrint opts.outputPath (LeanNative.Backend.emitFastCheckCABI optMod)
+      (some s!"[{tag}] Wrote Zero-Boxing C-ABI SIMD FastCheck & Routing kernel to {opts.outputPath}")
   else if opts.emitPTX then
-    let ptxText := emitPTXModule optMod opts.smArch
-    if opts.outputPath.isEmpty then IO.println ptxText else IO.FS.writeFile opts.outputPath ptxText
-    return 0
+    writeOrPrint opts.outputPath (emitPTXModule optMod opts.smArch)
   else if opts.emitMetal then
-    let mslText := emitMetalModule optMod
-    if opts.outputPath.isEmpty then IO.println mslText else IO.FS.writeFile opts.outputPath mslText
-    return 0
+    writeOrPrint opts.outputPath (emitMetalModule optMod)
   else
     let irText := if opts.isBaseline then emitLLVMBaseline optMod opts.arch else emitLLVMOptimized optMod opts.arch
-    if opts.outputPath.isEmpty then IO.println irText else IO.FS.writeFile opts.outputPath irText
-    return 0
+    writeOrPrint opts.outputPath irText
 
 def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
@@ -215,12 +198,8 @@ def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let _ ← emitModuleTelemetryEvents telCfg .x86_64 false baseMod
   let (modToEmit, _) := if isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   let irText := if isBaseline then emitLLVMBaseline modToEmit arch else emitLLVMOptimized modToEmit arch
-  if outPath.isEmpty then
-    IO.println irText
-  else
-    IO.FS.writeFile outPath irText
-    IO.println s!"[{tag}] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}"
-  return 0
+  writeOrPrint outPath irText
+    (some s!"[{tag}] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}")
 
 private def lnirTypeToCType : LNIRType → String
   | .i1 => "uint8_t"
@@ -321,19 +300,11 @@ def runCompileMLIR (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let baseMod ← loadInputModule elaborateHook? args
   let (optMod, _) := runDefaultPipeline baseMod
   let mlirText :=
-    if isPallas then
-      emitTPUPallasModule optMod
-    else if isStableHLO then
-      emitStableHLOModule optMod
-    else
-      emitMLIRModule optMod
-  if outPath.isEmpty then
-    IO.println mlirText
-  else
-    IO.FS.writeFile outPath mlirText
-    let kind := if isPallas then "TPU Pallas" else if isStableHLO then "TPU v5e StableHLO" else "GPU MLIR"
-    IO.println s!"[{tag}] Wrote {kind} module to {outPath}"
-  return 0
+    if isPallas then emitTPUPallasModule optMod
+    else if isStableHLO then emitStableHLOModule optMod
+    else emitMLIRModule optMod
+  let kind := if isPallas then "TPU Pallas" else if isStableHLO then "TPU v5e StableHLO" else "GPU MLIR"
+  writeOrPrint outPath mlirText (some s!"[{tag}] Wrote {kind} module to {outPath}")
 
 def runCompilePTX (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let smArch := findFlagValue args "--sm" "sm_90"
@@ -341,38 +312,23 @@ def runCompilePTX (tag : String) (elaborateHook? : Option (String → IO LNIRMod
   let isFastCheck := hasFlag args "--fastcheck"
   let baseMod ← loadInputModule elaborateHook? args isFastCheck
   let ptxText :=
-    if isFastCheck then
-      emitFastCheckPTX baseMod smArch
-    else
-      let (optMod, _) := runDefaultPipeline baseMod
-      emitPTXModule optMod smArch
-  if outPath.isEmpty then
-    IO.println ptxText
-  else
-    IO.FS.writeFile outPath ptxText
-    IO.println s!"[{tag}] Wrote NVIDIA PTX 8.0 ({smArch}, fastcheck={isFastCheck}) to {outPath}"
-  return 0
+    if isFastCheck then emitFastCheckPTX baseMod smArch
+    else emitPTXModule (runDefaultPipeline baseMod).1 smArch
+  writeOrPrint outPath ptxText (some s!"[{tag}] Wrote NVIDIA PTX 8.0 ({smArch}, fastcheck={isFastCheck}) to {outPath}")
 
 def runCompileMetal (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
   let isFastCheck := hasFlag args "--fastcheck"
   let baseMod ← loadInputModule elaborateHook? args isFastCheck
   let mslText :=
-    if isFastCheck then
-      emitFastCheckMetal baseMod
-    else
-      let (optMod, _) := runDefaultPipeline baseMod
-      emitMetalModule optMod
+    if isFastCheck then emitFastCheckMetal baseMod
+    else emitMetalModule (runDefaultPipeline baseMod).1
   let (valid, errs) := validateMetalShader mslText
   if !valid then
     IO.eprintln s!"[{tag}] Metal shader validation errors: {errs}"
     return 1
-  if outPath.isEmpty then
-    IO.println mslText
-  else
-    IO.FS.writeFile outPath mslText
-    IO.println s!"[{tag}] Wrote Apple Metal Shading Language 3.0 (fastcheck={isFastCheck}, valid={valid}) to {outPath}"
-  return 0
+  writeOrPrint outPath mslText
+    (some s!"[{tag}] Wrote Apple Metal Shading Language 3.0 (fastcheck={isFastCheck}, valid={valid}) to {outPath}")
 
 def runCompileFastCheck (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
@@ -387,33 +343,17 @@ def runCompileFastCheck (tag : String) (elaborateHook? : Option (String → IO L
   let useCanonical := hasFlag args "--canonical"
   let mod ← loadInputModule elaborateHook? args (!useCanonical)
   if emitCAbiFlag then
-    let cText := LeanNative.Backend.emitFastCheckCABI mod
-    if outPath.isEmpty then IO.println cText
-    else
-      IO.FS.writeFile outPath cText
-      IO.println s!"[{tag}] Wrote FastCheck Zero-Boxing C-ABI SIMD source to {outPath}"
-    return 0
+    writeOrPrint outPath (LeanNative.Backend.emitFastCheckCABI mod)
+      (some s!"[{tag}] Wrote FastCheck Zero-Boxing C-ABI SIMD source to {outPath}")
   else if emitLlvmFlag then
-    let irText := emitFastCheckLLVM mod
-    if outPath.isEmpty then IO.println irText
-    else
-      IO.FS.writeFile outPath irText
-      IO.println s!"[{tag}] Wrote FastCheck SIMD LLVM 18 IR to {outPath}"
-    return 0
+    writeOrPrint outPath (emitFastCheckLLVM mod)
+      (some s!"[{tag}] Wrote FastCheck SIMD LLVM 18 IR to {outPath}")
   else if emitPtxFlag then
-    let ptxText := emitFastCheckPTX mod smArch
-    if outPath.isEmpty then IO.println ptxText
-    else
-      IO.FS.writeFile outPath ptxText
-      IO.println s!"[{tag}] Wrote FastCheck NVIDIA PTX 8.0 ({smArch}) to {outPath}"
-    return 0
+    writeOrPrint outPath (emitFastCheckPTX mod smArch)
+      (some s!"[{tag}] Wrote FastCheck NVIDIA PTX 8.0 ({smArch}) to {outPath}")
   else if emitMetalFlag then
-    let mslText := emitFastCheckMetal mod
-    if outPath.isEmpty then IO.println mslText
-    else
-      IO.FS.writeFile outPath mslText
-      IO.println s!"[{tag}] Wrote FastCheck Apple Metal 3.0 shader to {outPath}"
-    return 0
+    writeOrPrint outPath (emitFastCheckMetal mod)
+      (some s!"[{tag}] Wrote FastCheck Apple Metal 3.0 shader to {outPath}")
   else
     let report := runFastCheckModule mod numSamples useConstraintProp
     let jsonText := report.toJson
@@ -434,12 +374,8 @@ def runCompileHybrid (tag : String) (elaborateHook? : Option (String → IO LNIR
   let (optMod, _) := runDefaultPipeline baseMod
   let plan := partitionModule optMod minGpuElems
   let glueText := emitHybridHostGlue plan
-  if outPath.isEmpty then
-    IO.println glueText
-  else
-    IO.FS.writeFile outPath glueText
-    IO.println s!"[{tag}] Wrote Hybrid CPU/GPU dispatch glue (gpuDecls={plan.gpuDecls.length}, cpuDecls={plan.cpuOnlyDecls.length}, minGpuElements={minGpuElems}) to {outPath}"
-  return 0
+  writeOrPrint outPath glueText
+    (some s!"[{tag}] Wrote Hybrid CPU/GPU dispatch glue (gpuDecls={plan.gpuDecls.length}, cpuDecls={plan.cpuOnlyDecls.length}, minGpuElements={minGpuElems}) to {outPath}")
 
 def runSuperopt (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let targetStr := findFlagValue args "--target" (findFlagValue args "--arch" "x86_64")

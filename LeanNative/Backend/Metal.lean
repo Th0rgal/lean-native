@@ -170,6 +170,41 @@ def emitMetal1DKernel (fnName : String) (bufferDecls : List String) (bodyLine : 
       "    }",
       "}" ]
   )
+def emitMetalMatMulTiledKernel (fnName : String) : String :=
+  String.intercalate "\n" [
+    s!"kernel void {fnName}(",
+    "    device const ulong* A [[buffer(0)]],",
+    "    device const ulong* B [[buffer(1)]],",
+    "    device ulong* C [[buffer(2)]],",
+    "    constant ulong& dim [[buffer(3)]],",
+    "    uint2 gid [[thread_position_in_grid]],",
+    "    uint2 tid [[thread_position_in_threadgroup]],",
+    "    uint2 ctaid [[threadgroup_position_in_grid]]",
+    ") {",
+    "    // Bank-conflict-free +1 padded threadgroup tiles (16 x 17 = 272 ulongs)",
+    "    threadgroup ulong tileA[272];",
+    "    threadgroup ulong tileB[272];",
+    "    ulong row = (ulong)(ctaid.y * 16u + tid.y);",
+    "    ulong col = (ulong)(ctaid.x * 16u + tid.x);",
+    "    ulong acc = 0UL;",
+    "    ulong num_tiles = (dim + 15UL) / 16UL;",
+    "    for (ulong t = 0UL; t < num_tiles; ++t) {",
+    "        ulong a_col = t * 16UL + (ulong)tid.x;",
+    "        ulong b_row = t * 16UL + (ulong)tid.y;",
+    "        tileA[tid.y * 17u + tid.x] = (row < dim && a_col < dim) ? A[row * dim + a_col] : 0UL;",
+    "        tileB[tid.y * 17u + tid.x] = (b_row < dim && col < dim) ? B[b_row * dim + col] : 0UL;",
+    "        threadgroup_barrier(mem_flags::mem_threadgroup);",
+    "        for (uint k = 0u; k < 16u; ++k) {",
+    "            acc += tileA[tid.y * 17u + k] * tileB[k * 17u + tid.x];",
+    "        }",
+    "        threadgroup_barrier(mem_flags::mem_threadgroup);",
+    "    }",
+    "    if (row < dim && col < dim) {",
+    "        C[row * dim + col] = acc;",
+    "    }",
+    "}"
+  ]
+
 def emitMetalDeclKernel (d : LNIRDecl) : String :=
   let fnName := s!"lean_native_metal_decl_{d.name}"
   let is256 := d.retTy.is256Bit || d.params.any (fun p => p.ty.is256Bit || p.ty == .storageMap)
@@ -189,9 +224,7 @@ def emitMetalDeclKernel (d : LNIRDecl) : String :=
       "    threadgroup ulong sdata[8];",
       "    ulong local_sum = (gid < n) ? (in0[gid] * in1[gid]) : 0UL;",
       "    ulong sg_sum = simd_sum(local_sum);",
-      "    if (simd_lane == 0u) {",
-      "        sdata[simd_id] = sg_sum;",
-      "    }",
+      "    if (simd_lane == 0u) { sdata[simd_id] = sg_sum; }",
       "    threadgroup_barrier(mem_flags::mem_threadgroup);",
       "    if (simd_id == 0u) {",
       "        ulong final_val = (simd_lane < 8u) ? sdata[simd_lane] : 0UL;",
@@ -207,39 +240,7 @@ def emitMetalDeclKernel (d : LNIRDecl) : String :=
       "}"
     ]
   else if d.name == "matmul_tiled_u64" then
-    String.intercalate "\n" [
-      s!"kernel void {fnName}(",
-      "    device const ulong* A [[buffer(0)]],",
-      "    device const ulong* B [[buffer(1)]],",
-      "    device ulong* C [[buffer(2)]],",
-      "    constant ulong& dim [[buffer(3)]],",
-      "    uint2 gid [[thread_position_in_grid]],",
-      "    uint2 tid [[thread_position_in_threadgroup]],",
-      "    uint2 ctaid [[threadgroup_position_in_grid]]",
-      ") {",
-      "    // Bank-conflict-free +1 padded threadgroup tiles (16 x 17 = 272 ulongs)",
-      "    threadgroup ulong tileA[272];",
-      "    threadgroup ulong tileB[272];",
-      "    ulong row = (ulong)(ctaid.y * 16u + tid.y);",
-      "    ulong col = (ulong)(ctaid.x * 16u + tid.x);",
-      "    ulong acc = 0UL;",
-      "    ulong num_tiles = (dim + 15UL) / 16UL;",
-      "    for (ulong t = 0UL; t < num_tiles; ++t) {",
-      "        ulong a_col = t * 16UL + (ulong)tid.x;",
-      "        ulong b_row = t * 16UL + (ulong)tid.y;",
-      "        tileA[tid.y * 17u + tid.x] = (row < dim && a_col < dim) ? A[row * dim + a_col] : 0UL;",
-      "        tileB[tid.y * 17u + tid.x] = (b_row < dim && col < dim) ? B[b_row * dim + col] : 0UL;",
-      "        threadgroup_barrier(mem_flags::mem_threadgroup);",
-      "        for (uint k = 0u; k < 16u; ++k) {",
-      "            acc += tileA[tid.y * 17u + k] * tileB[k * 17u + tid.x];",
-      "        }",
-      "        threadgroup_barrier(mem_flags::mem_threadgroup);",
-      "    }",
-      "    if (row < dim && col < dim) {",
-      "        C[row * dim + col] = acc;",
-      "    }",
-      "}"
-    ]
+    emitMetalMatMulTiledKernel fnName
   else if is256 then
     emitMetal1DKernel fnName
       ["device const ln_u256* in_a", "device const ln_u256* in_b", "device ln_u256* out", "constant ulong& n"]
@@ -334,39 +335,7 @@ def emitMetalModule (m : LNIRModule) : String :=
     "}"
   ]
 
-  let kMatMulTiledU64 := String.intercalate "\n" [
-    "kernel void lean_native_kernel_matmul_tiled_u64(",
-    "    device const ulong* A [[buffer(0)]],",
-    "    device const ulong* B [[buffer(1)]],",
-    "    device ulong* C [[buffer(2)]],",
-    "    constant ulong& dim [[buffer(3)]],",
-    "    uint2 gid [[thread_position_in_grid]],",
-    "    uint2 tid [[thread_position_in_threadgroup]],",
-    "    uint2 ctaid [[threadgroup_position_in_grid]]",
-    ") {",
-    "    // Bank-conflict-free +1 padded threadgroup tiles (16 x 17 = 272 ulongs)",
-    "    threadgroup ulong tileA[272];",
-    "    threadgroup ulong tileB[272];",
-    "    ulong row = (ulong)(ctaid.y * 16u + tid.y);",
-    "    ulong col = (ulong)(ctaid.x * 16u + tid.x);",
-    "    ulong acc = 0UL;",
-    "    ulong num_tiles = (dim + 15UL) / 16UL;",
-    "    for (ulong t = 0UL; t < num_tiles; ++t) {",
-    "        ulong a_col = t * 16UL + (ulong)tid.x;",
-    "        ulong b_row = t * 16UL + (ulong)tid.y;",
-    "        tileA[tid.y * 17u + tid.x] = (row < dim && a_col < dim) ? A[row * dim + a_col] : 0UL;",
-    "        tileB[tid.y * 17u + tid.x] = (b_row < dim && col < dim) ? B[b_row * dim + col] : 0UL;",
-    "        threadgroup_barrier(mem_flags::mem_threadgroup);",
-    "        for (uint k = 0u; k < 16u; ++k) {",
-    "            acc += tileA[tid.y * 17u + k] * tileB[k * 17u + tid.x];",
-    "        }",
-    "        threadgroup_barrier(mem_flags::mem_threadgroup);",
-    "    }",
-    "    if (row < dim && col < dim) {",
-    "        C[row * dim + col] = acc;",
-    "    }",
-    "}"
-  ]
+  let kMatMulTiledU64 := emitMetalMatMulTiledKernel "lean_native_kernel_matmul_tiled_u64"
 
   let kEvmU256Batch := String.intercalate "\n" [
     "kernel void lean_native_kernel_evm_u256_batch(",

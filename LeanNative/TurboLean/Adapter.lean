@@ -774,6 +774,19 @@ private def varIndexFor (name : String) (vars : List String) : Nat × List Strin
     let idx := vars.length % 4
     (idx, vars ++ [name])
 
+partial def parseBinLevel (sub : List Token → List String → Expr × List Token × List String)
+    (ops : List String) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
+  let rec loop (lhs : Expr) (ts : List Token) (vs : List String) : Expr × List Token × List String :=
+    match ts with
+    | .op opStr :: rest =>
+      if ops.contains opStr then
+        let (rhs, r1, v1) := sub rest vs
+        loop (.bin opStr lhs rhs) r1 v1
+      else (lhs, ts, vs)
+    | _ => (lhs, ts, vs)
+  let (lhs, r1, v1) := sub toks vars
+  loop lhs r1 v1
+
 mutual
   partial def parsePrimary (toks : List Token) (vars : List String) : Expr × List Token × List String :=
     match toks with
@@ -782,113 +795,25 @@ mutual
       match r1 with
       | .op ")" :: r2 => (e, r2, v1)
       | _ => (e, r1, v1)
-    | .op "~" :: rest =>
-      let (e, r1, v1) := parsePrimary rest vars
-      (.unary "~" e, r1, v1)
-    | .op "-" :: rest =>
-      let (e, r1, v1) := parsePrimary rest vars
-      (.unary "-" e, r1, v1)
-    | .op "!" :: rest =>
-      let (e, r1, v1) := parsePrimary rest vars
-      (.unary "!" e, r1, v1)
-    | .num n :: rest =>
-      (.constVal n, rest, vars)
+    | .op opStr :: rest =>
+      if opStr == "~" || opStr == "-" || opStr == "!" then
+        let (e, r1, v1) := parsePrimary rest vars
+        (.unary opStr e, r1, v1)
+      else (.constVal 0, rest, vars)
+    | .num n :: rest => (.constVal n, rest, vars)
     | .ident name :: rest =>
       let (slot, v1) := varIndexFor name vars
       (.varSlot slot, rest, v1)
-    | _ :: rest =>
-      (.constVal 0, rest, vars)
-    | [] =>
-      (.constVal 0, [], vars)
-
-  partial def parseMul (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parsePrimary toks vars
-    parseMulLoop lhs r1 v1
-
-  partial def parseMulLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op opStr :: rest =>
-      if opStr == "*" || opStr == "/" || opStr == "%" then
-        let (rhs, r1, v1) := parsePrimary rest vars
-        parseMulLoop (.bin opStr lhs rhs) r1 v1
-      else
-        (lhs, toks, vars)
-    | _ => (lhs, toks, vars)
-
-  partial def parseAdd (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parseMul toks vars
-    parseAddLoop lhs r1 v1
-
-  partial def parseAddLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op opStr :: rest =>
-      if opStr == "+" || opStr == "-" then
-        let (rhs, r1, v1) := parseMul rest vars
-        parseAddLoop (.bin opStr lhs rhs) r1 v1
-      else
-        (lhs, toks, vars)
-    | _ => (lhs, toks, vars)
-
-  partial def parseShift (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parseAdd toks vars
-    parseShiftLoop lhs r1 v1
-
-  partial def parseShiftLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op opStr :: rest =>
-      if opStr == "<<" || opStr == ">>" then
-        let (rhs, r1, v1) := parseAdd rest vars
-        parseShiftLoop (.bin opStr lhs rhs) r1 v1
-      else
-        (lhs, toks, vars)
-    | _ => (lhs, toks, vars)
-
-  partial def parseCmp (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parseShift toks vars
-    parseCmpLoop lhs r1 v1
-
-  partial def parseCmpLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op opStr :: rest =>
-      if opStr == "==" || opStr == "!=" || opStr == "<" || opStr == "<=" || opStr == ">" || opStr == ">=" then
-        let (rhs, r1, v1) := parseShift rest vars
-        parseCmpLoop (.bin opStr lhs rhs) r1 v1
-      else
-        (lhs, toks, vars)
-    | _ => (lhs, toks, vars)
-
-  partial def parseBitAnd (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parseCmp toks vars
-    parseBitAndLoop lhs r1 v1
-
-  partial def parseBitAndLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op "&" :: rest =>
-      let (rhs, r1, v1) := parseCmp rest vars
-      parseBitAndLoop (.bin "&" lhs rhs) r1 v1
-    | _ => (lhs, toks, vars)
-
-  partial def parseBitXor (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parseBitAnd toks vars
-    parseBitXorLoop lhs r1 v1
-
-  partial def parseBitXorLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op "^" :: rest =>
-      let (rhs, r1, v1) := parseBitAnd rest vars
-      parseBitXorLoop (.bin "^" lhs rhs) r1 v1
-    | _ => (lhs, toks, vars)
+    | [] => (.constVal 0, [], vars)
 
   partial def parseBitOr (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    let (lhs, r1, v1) := parseBitXor toks vars
-    parseBitOrLoop lhs r1 v1
-
-  partial def parseBitOrLoop (lhs : Expr) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
-    match toks with
-    | .op "|" :: rest =>
-      let (rhs, r1, v1) := parseBitXor rest vars
-      parseBitOrLoop (.bin "|" lhs rhs) r1 v1
-    | _ => (lhs, toks, vars)
+    let parseMul := parseBinLevel parsePrimary ["*", "/", "%"]
+    let parseAdd := parseBinLevel parseMul ["+", "-"]
+    let parseShift := parseBinLevel parseAdd ["<<", ">>"]
+    let parseCmp := parseBinLevel parseShift ["==", "!=", "<", "<=", ">", ">="]
+    let parseBitAnd := parseBinLevel parseCmp ["&"]
+    let parseBitXor := parseBinLevel parseBitAnd ["^"]
+    parseBinLevel parseBitXor ["|"] toks vars
 end
 
 def parseExprPair (lhsStr rhsStr : String) : Expr × Expr × List String :=
@@ -998,6 +923,16 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
   let vName0 := varNames[0]?.getD "x"
   let vName1 := varNames[1]?.getD "y"
 
+  let mkCexResult (tested : Nat) (wit : String) : IO FastCheckResult := do
+    let dt := (← IO.monoMsNow) - t0
+    let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"elapsed_ms\":{dt}}"
+    return {
+      ok := false, status := "counterexample_found", lhsExpr, rhsExpr
+      statesTested := tested, satisfiedPreconditionsCount := tested
+      counterexampleFound := true, witness := some wit, counterexample := some wit
+      elapsedMs := dt, rawJson := raw
+    }
+
   -- 1. Check all 256 pairs of 64-bit boundary values
   let mut tested : Nat := 0
   for i in [:FastExpr.boundaryU64.size] do
@@ -1010,23 +945,7 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
       let rv := FastExpr.evalU64 rhsAst v0 v1 v2 v3
       tested := tested + 1
       if lv != rv then
-        let t1 ← IO.monoMsNow
-        let dt := t1 - t0
-        let wit := s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}"
-        let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"elapsed_ms\":{dt}}"
-        return {
-          ok := false
-          status := "counterexample_found"
-          lhsExpr
-          rhsExpr
-          statesTested := tested
-          satisfiedPreconditionsCount := tested
-          counterexampleFound := true
-          witness := some wit
-          counterexample := some wit
-          elapsedMs := dt
-          rawJson := raw
-        }
+        return (← mkCexResult tested s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}")
 
   -- 2. Check all 36 pairs of 256-bit EVM boundary values (`UInt256`)
   for i in [:FastExpr.boundaryU256.size] do
@@ -1039,23 +958,7 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
       let rv := FastExpr.evalU256 rhsAst w0 w1 w2 w3
       tested := tested + 1
       if lv != rv then
-        let t1 ← IO.monoMsNow
-        let dt := t1 - t0
-        let wit := s!"\{\"{vName0}\":\"{w0.toDecimalString}\",\"{vName1}\":\"{w1.toDecimalString}\",\"lhs_val\":\"{lv.toDecimalString}\",\"rhs_val\":\"{rv.toDecimalString}\"}"
-        let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"elapsed_ms\":{dt}}"
-        return {
-          ok := false
-          status := "counterexample_found"
-          lhsExpr
-          rhsExpr
-          statesTested := tested
-          satisfiedPreconditionsCount := tested
-          counterexampleFound := true
-          witness := some wit
-          counterexample := some wit
-          elapsedMs := dt
-          rawJson := raw
-        }
+        return (← mkCexResult tested s!"\{\"{vName0}\":\"{w0.toDecimalString}\",\"{vName1}\":\"{w1.toDecimalString}\",\"lhs_val\":\"{lv.toDecimalString}\",\"rhs_val\":\"{rv.toDecimalString}\"}")
 
   -- 3. Native SplitMix64 random state sweep
   let randomBudget := if lhsAst == rhsAst then 128 else Nat.min numStates 708
@@ -1070,40 +973,16 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
     let rv := FastExpr.evalU64 rhsAst v0 v1 v2 v3
     tested := tested + 1
     if lv != rv then
-      let t1 ← IO.monoMsNow
-      let dt := t1 - t0
-      let wit := s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}"
-      let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"elapsed_ms\":{dt}}"
-      return {
-        ok := false
-        status := "counterexample_found"
-        lhsExpr
-        rhsExpr
-        statesTested := tested
-        satisfiedPreconditionsCount := tested
-        counterexampleFound := true
-        witness := some wit
-        counterexample := some wit
-        elapsedMs := dt
-        rawJson := raw
-      }
+      return (← mkCexResult tested s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}")
 
   let totalStates := Nat.max numStates tested
-  let t1 ← IO.monoMsNow
-  let dt := t1 - t0
+  let dt := (← IO.monoMsNow) - t0
   let raw := s!"\{\"ok\":true,\"status\":\"no_counterexample_found\",\"states_tested\":{totalStates},\"satisfied_preconditions\":{totalStates},\"elapsed_ms\":{dt}}"
   return {
-    ok := true
-    status := "no_counterexample_found"
-    lhsExpr
-    rhsExpr
-    statesTested := totalStates
-    satisfiedPreconditionsCount := totalStates
-    counterexampleFound := false
-    witness := none
-    counterexample := none
-    elapsedMs := dt
-    rawJson := raw
+    ok := true, status := "no_counterexample_found", lhsExpr, rhsExpr
+    statesTested := totalStates, satisfiedPreconditionsCount := totalStates
+    counterexampleFound := false, witness := none, counterexample := none
+    elapsedMs := dt, rawJson := raw
   }
 
 /-- Backward-compatible alias for `fastCheckRewrite`. -/
