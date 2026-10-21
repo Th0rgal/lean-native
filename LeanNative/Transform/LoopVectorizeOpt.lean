@@ -87,28 +87,14 @@ def isBorrowedReadOnlyIn (objVar : VarId) : LNIRCode → Bool
 /-- Remove matching `decRef objVar count` from `code` if present along the continuation spine. -/
 def removeMatchingDecRef (objVar : VarId) (count : Nat) : LNIRCode → Option LNIRCode
   | .decRef v c k =>
-    if v == objVar && c == count then
-      some k
-    else
-      match removeMatchingDecRef objVar count k with
-      | some k' => some (.decRef v c k')
-      | none => none
-  | .letBind dst ty val k =>
-    match removeMatchingDecRef objVar count k with
-    | some k' => some (.letBind dst ty val k')
-    | none => none
-  | .rawStore p i v elemTy k =>
-    match removeMatchingDecRef objVar count k with
-    | some k' => some (.rawStore p i v elemTy k')
-    | none => none
+    if v == objVar && c == count then some k
+    else (removeMatchingDecRef objVar count k).map (.decRef v c)
+  | .letBind dst ty val k => (removeMatchingDecRef objVar count k).map (.letBind dst ty val)
+  | .rawStore p i v elemTy k => (removeMatchingDecRef objVar count k).map (.rawStore p i v elemTy)
   | .seqFor idx lo hi acc init accTy s k =>
-    match removeMatchingDecRef objVar count k with
-    | some k' => some (.seqFor idx lo hi acc init accTy s k')
-    | none => none
+    (removeMatchingDecRef objVar count k).map (.seqFor idx lo hi acc init accTy s)
   | .parFor out len ins elemTy kernel k =>
-    match removeMatchingDecRef objVar count k with
-    | some k' => some (.parFor out len ins elemTy kernel k')
-    | none => none
+    (removeMatchingDecRef objVar count k).map (.parFor out len ins elemTy kernel)
   | _ => none
 
 /-- Attempt to recognize an in-place `rawLoad` + `fma` + `rawStore` `seqFor` step body

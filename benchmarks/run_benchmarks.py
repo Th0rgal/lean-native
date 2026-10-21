@@ -251,6 +251,7 @@ RUSTC_BIN=$(which rustc 2>/dev/null || echo "$HOME/.cargo/bin/rustc")
 if [ ! -x "$RUSTC_BIN" ]; then RUSTC_BIN="/var/lib/sandboxed-node/.cargo/bin/rustc"; fi
 NVCC=$(which nvcc || echo /usr/local/cuda-13.0/bin/nvcc)
 t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); gcc -O3 -std=c11 -mcpu=native -x c bench_cpp.cpp -o bench_c_o3; echo "COMPILE_MS c_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); g++ -O3 -std=c++20 -mcpu=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$RUSTC_BIN" -C opt-level=3 -C target-cpu=native bench_rust.rs -o bench_rust_o3; echo "COMPILE_MS rust_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); clang -O3 -mcpu=native -march=armv9-a+sve2+sha3 -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
@@ -258,7 +259,7 @@ t0=$(date +%s%3N); "$NVCC" -O3 -arch=native bench_cuda.cu -o bench_cuda_ptx; ech
 sudo sync 2>/dev/null || true
 echo 3 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
 echo 1 | sudo tee /proc/sys/vm/compact_memory >/dev/null 2>&1 || true
-for b in official_lean4 cpp_o3 rust_o3 lean_native_cpu cuda_ptx; do
+for b in official_lean4 c_o3 cpp_o3 rust_o3 lean_native_cpu cuda_ptx; do
     for t in $(seq 1 {trials}); do
         echo "BEGIN_RUN $b $t"; CUDA_MODULE_LOADING=LAZY taskset -c 19 /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1; echo "END_RUN $b $t"
     done
@@ -267,11 +268,12 @@ rm -rf {remote_dir}
 """
         proc = subprocess.run(ssh_base + ["dgx-spark", "bash -s"], input=remote_script, capture_output=True, text=True, check=True)
         compile_times_ms, times_map, chks_map, rss_map = parse_remote_stdout(
-            proc.stdout, ["official_lean4", "cpp_o3", "rust_o3", "lean_native_cpu", "cuda_ptx"]
+            proc.stdout, ["official_lean4", "c_o3", "cpp_o3", "rust_o3", "lean_native_cpu", "cuda_ptx"]
         )
         compile_times_ms["lean_native_gpu_ptx"] = compile_times_ms.get("cuda_o3", 0.0)
         compile_times_ms["lean_native_hybrid"] = round(compile_times_ms.get("lean_native_cpu", 0.0) + compile_times_ms.get("cuda_o3", 0.0) * 0.5, 2)
         lean_times, lean_chks, lean_rss = times_map["official_lean4"], chks_map["official_lean4"], rss_map["official_lean4"]
+        c_times, c_chks, c_rss = times_map["c_o3"], chks_map["c_o3"], rss_map["c_o3"]
         cpp_times, cpp_chks, cpp_rss = times_map["cpp_o3"], chks_map["cpp_o3"], rss_map["cpp_o3"]
         rust_times, rust_chks, rust_rss = times_map["rust_o3"], chks_map["rust_o3"], rss_map["rust_o3"]
         lncpu_times, lncpu_chks, lncpu_rss = times_map["lean_native_cpu"], chks_map["lean_native_cpu"], rss_map["lean_native_cpu"]
@@ -287,6 +289,10 @@ rm -rf {remote_dir}
         subprocess.run([str(lean_bin), "-c", str(c_out), str(BASELINES_DIR / "bench_suite.lean")], check=True, capture_output=True)
         subprocess.run([str(leanc_bin), "-O3", str(c_out), "-o", str(lean_exe)], check=True, capture_output=True)
         compile_times_ms["official_lean4"] = round((time.perf_counter() - t0) * 1000.0, 2)
+        t0 = time.perf_counter()
+        c_exe = build_dir / "bench_c_o3"
+        subprocess.run(["gcc", "-O3", "-std=c11", "-mcpu=native", "-x", "c", str(BASELINES_DIR / "bench_cpp.cpp"), "-o", str(c_exe)], check=True, capture_output=True)
+        compile_times_ms["c_o3"] = round((time.perf_counter() - t0) * 1000.0, 2)
         t0 = time.perf_counter()
         cpp_exe = build_dir / "bench_cpp_o3"
         subprocess.run(["g++", "-O3", "-std=c++20", "-mcpu=native", str(BASELINES_DIR / "bench_cpp.cpp"), "-o", str(cpp_exe)], check=True, capture_output=True)
@@ -308,6 +314,7 @@ rm -rf {remote_dir}
         compile_times_ms["cuda_o3"] = compile_times_ms["lean_native_gpu_ptx"] = cuda_compile_ms
         compile_times_ms["lean_native_hybrid"] = round(compile_times_ms["lean_native_cpu"] + cuda_compile_ms * 0.5, 2)
         lean_times, lean_chks, lean_rss = measure_local_binary(lean_exe, trials)
+        c_times, c_chks, c_rss = measure_local_binary(c_exe, trials)
         cpp_times, cpp_chks, cpp_rss = measure_local_binary(cpp_exe, trials)
         rust_times, rust_chks, rust_rss = measure_local_binary(rust_exe, trials)
         lncpu_times, lncpu_chks, lncpu_rss = measure_local_binary(ln_cpu_exe, trials)
@@ -325,15 +332,15 @@ rm -rf {remote_dir}
         "trials": trials,
         "compile_times_ms": compile_times_ms,
         "peak_rss_kb": {
-            "official_lean4": lean_rss, "cpp_o3": cpp_rss, "rust_o3": rust_rss, "lean_native_cpu": lncpu_rss,
+            "official_lean4": lean_rss, "c_o3": c_rss, "cpp_o3": cpp_rss, "rust_o3": rust_rss, "lean_native_cpu": lncpu_rss,
             "cuda_o3": cuda_rss, "lean_native_gpu_ptx": cuda_rss, "lean_native_hybrid": max(lncpu_rss, cuda_rss),
         },
         "raw_times_ms": {
-            "official_lean4": lean_times, "cpp_o3": cpp_times, "rust_o3": rust_times, "lean_native_cpu": lncpu_times,
+            "official_lean4": lean_times, "c_o3": c_times, "cpp_o3": cpp_times, "rust_o3": rust_times, "lean_native_cpu": lncpu_times,
             "cuda_o3": cuda_times, "lean_native_gpu_ptx": cuda_times, "lean_native_hybrid": hybrid_times,
         },
         "checksums": {
-            "official_lean4": lean_chks, "cpp_o3": cpp_chks, "rust_o3": rust_chks, "lean_native_cpu": lncpu_chks,
+            "official_lean4": lean_chks, "c_o3": c_chks, "cpp_o3": cpp_chks, "rust_o3": rust_chks, "lean_native_cpu": lncpu_chks,
             "cuda_o3": cuda_chks, "lean_native_gpu_ptx": cuda_chks, "lean_native_hybrid": hybrid_chks,
         },
     }
@@ -356,10 +363,11 @@ if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="/opt/actions-runner/verity-me
 RUSTC_BIN=$(which rustc 2>/dev/null || echo "/var/lib/sandboxed-node/f0193f28-1b1b-422e-ae57-3d1be9b1d42f/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc")
 if [ ! -x "$RUSTC_BIN" ]; then RUSTC_BIN="$HOME/.cargo/bin/rustc"; fi
 t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); gcc -O3 -std=c11 -march=native -x c bench_cpp.cpp -o bench_c_o3; echo "COMPILE_MS c_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); g++ -O3 -std=c++20 -march=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$RUSTC_BIN" -C opt-level=3 -C target-cpu=native bench_rust.rs -o bench_rust_o3; echo "COMPILE_MS rust_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); clang -O3 -march=native -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
-for b in official_lean4 cpp_o3 rust_o3 lean_native_cpu; do
+for b in official_lean4 c_o3 cpp_o3 rust_o3 lean_native_cpu; do
     for t in $(seq 1 {trials}); do
         echo "BEGIN_RUN $b $t"; /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1; echo "END_RUN $b $t"
     done
@@ -368,7 +376,7 @@ rm -rf {remote_dir}
 """
     proc = subprocess.run(ssh_base + ["ashur", "bash -s"], input=remote_script, capture_output=True, text=True, check=True)
     compile_times_ms, times_by_backend, checksums_by_backend, peak_rss_kb = parse_remote_stdout(
-        proc.stdout, ["official_lean4", "cpp_o3", "rust_o3", "lean_native_cpu"]
+        proc.stdout, ["official_lean4", "c_o3", "cpp_o3", "rust_o3", "lean_native_cpu"]
     )
     compile_times_ms["lean_native_hybrid"] = compile_times_ms.get("lean_native_cpu", 0.0)
     times_by_backend["lean_native_hybrid"] = {k: list(v) for k, v in times_by_backend["lean_native_cpu"].items()}
@@ -447,12 +455,12 @@ def analyze_host_metrics(
                 stats_by_backend[backend][b_id] = compute_summary_stats(bench_map[b_id])
 
     comparisons: Dict[str, Any] = {}
-    # Compare lean_native_cpu and lean_native_hybrid against official_lean4, cpp_o3, and rust_o3
+    # Compare lean_native_cpu and lean_native_hybrid against official_lean4, c_o3, cpp_o3, and rust_o3
     for cand in ["lean_native_cpu", "lean_native_gpu_ptx", "lean_native_hybrid"]:
         if cand not in hr["raw_times_ms"]:
             continue
         comparisons[cand] = {}
-        for base in ["official_lean4", "cpp_o3", "rust_o3"]:
+        for base in ["official_lean4", "c_o3", "cpp_o3", "rust_o3"]:
             if base not in hr["raw_times_ms"]:
                 continue
             per_bench: Dict[str, Any] = {}
@@ -511,20 +519,21 @@ def generate_markdown_report(full_report: Dict[str, Any]) -> str:
         "",
         "## 1. Executive Summary: Geometric-Mean Speedups",
         "",
-        "| Host / Architecture | Hardware | `lean_native_cpu` vs `official_lean4` | `lean_native_cpu` vs `cpp_o3` | `lean_native_cpu` vs `rust_o3` | `lean_native_hybrid` vs `official_lean4` | `lean_native_hybrid` vs `rust_o3` |",
-        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
+        "| Host / Architecture | Hardware | `lean_native_cpu` vs `official_lean4` | `lean_native_cpu` vs `c_o3` | `lean_native_cpu` vs `cpp_o3` | `lean_native_cpu` vs `rust_o3` | `lean_native_hybrid` vs `official_lean4` | `lean_native_hybrid` vs `rust_o3` |",
+        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
     ]
 
     for h_id, h_data in hosts.items():
         comp = h_data["analysis"]["comparisons"]
         cpu_vs_lean = comp.get("lean_native_cpu", {}).get("vs_official_lean4", {}).get("geomean_speedup_x", 0.0)
+        cpu_vs_c = comp.get("lean_native_cpu", {}).get("vs_c_o3", {}).get("geomean_speedup_x", 0.0)
         cpu_vs_cpp = comp.get("lean_native_cpu", {}).get("vs_cpp_o3", {}).get("geomean_speedup_x", 0.0)
         cpu_vs_rust = comp.get("lean_native_cpu", {}).get("vs_rust_o3", {}).get("geomean_speedup_x", 0.0)
         hyb_vs_lean = comp.get("lean_native_hybrid", {}).get("vs_official_lean4", {}).get("geomean_speedup_x", 0.0)
         hyb_vs_rust = comp.get("lean_native_hybrid", {}).get("vs_rust_o3", {}).get("geomean_speedup_x", 0.0)
         hw_desc = h_data["cpu_model"] + (f" + {h_data['gpu_model']}" if h_data.get("gpu_model") else "")
         lines.append(
-            f"| **`{h_id}` (`{h_data['arch']}`)** | {hw_desc} | **{cpu_vs_lean:.2f}x** | **{cpu_vs_cpp:.2f}x** | **{cpu_vs_rust:.2f}x** | **{hyb_vs_lean:.2f}x** | **{hyb_vs_rust:.2f}x** |"
+            f"| **`{h_id}` (`{h_data['arch']}`)** | {hw_desc} | **{cpu_vs_lean:.2f}x** | **{cpu_vs_c:.2f}x** | **{cpu_vs_cpp:.2f}x** | **{cpu_vs_rust:.2f}x** | **{hyb_vs_lean:.2f}x** | **{hyb_vs_rust:.2f}x** |"
         )
 
     lines.extend(
@@ -578,13 +587,14 @@ def generate_markdown_report(full_report: Dict[str, Any]) -> str:
         if has_gpu:
             lines.extend(
                 [
-                    "| Benchmark | `official_lean4` (ms ± IQR) | `cpp_o3` (ms ± IQR) | `rust_o3` (ms ± IQR) | `lean_native_cpu` (ms ± IQR) | `lean_native_gpu_ptx` (ms ± IQR) | `lean_native_hybrid` (ms ± IQR) | Speedup (`cpu` vs `rust_o3`) | Speedup (`hybrid` vs `rust_o3`) | `p`-value (MWU) |",
-                    "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                    "| Benchmark | `official_lean4` (ms ± IQR) | `c_o3` (ms ± IQR) | `cpp_o3` (ms ± IQR) | `rust_o3` (ms ± IQR) | `lean_native_cpu` (ms ± IQR) | `lean_native_gpu_ptx` (ms ± IQR) | `lean_native_hybrid` (ms ± IQR) | Speedup (`cpu` vs `rust_o3`) | Speedup (`hybrid` vs `rust_o3`) | `p`-value (MWU) |",
+                    "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                 ]
             )
             for b in manifest["core_benchmarks"] + manifest["holdout_benchmarks"]:
                 b_id = b["id"]
                 s_lean = stats["official_lean4"][b_id]
+                s_c = stats.get("c_o3", {}).get(b_id, stats["cpp_o3"][b_id])
                 s_cpp = stats["cpp_o3"][b_id]
                 s_rust = stats.get("rust_o3", {}).get(b_id, s_cpp)
                 s_lncpu = stats["lean_native_cpu"][b_id]
@@ -597,6 +607,7 @@ def generate_markdown_report(full_report: Dict[str, Any]) -> str:
                 pval = c_hyb.get("p_value_mann_whitney_u", 0.000583)
                 lines.append(
                     f"| `{b_id}` | `{s_lean['median_ms']:.2f} ± {s_lean['iqr_ms']:.2f}` | "
+                    f"`{s_c['median_ms']:.2f} ± {s_c['iqr_ms']:.2f}` | "
                     f"`{s_cpp['median_ms']:.2f} ± {s_cpp['iqr_ms']:.2f}` | "
                     f"`{s_rust['median_ms']:.2f} ± {s_rust['iqr_ms']:.2f}` | "
                     f"`{s_lncpu['median_ms']:.2f} ± {s_lncpu['iqr_ms']:.2f}` | "
@@ -607,13 +618,14 @@ def generate_markdown_report(full_report: Dict[str, Any]) -> str:
         else:
             lines.extend(
                 [
-                    "| Benchmark | `official_lean4` (ms ± IQR) | `cpp_o3` (ms ± IQR) | `rust_o3` (ms ± IQR) | `lean_native_cpu` (ms ± IQR) | `lean_native_hybrid` (ms ± IQR) | Speedup (`cpu` vs `lean4`) | Speedup (`cpu` vs `rust_o3`) | `p`-value (MWU) |",
-                    "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                    "| Benchmark | `official_lean4` (ms ± IQR) | `c_o3` (ms ± IQR) | `cpp_o3` (ms ± IQR) | `rust_o3` (ms ± IQR) | `lean_native_cpu` (ms ± IQR) | `lean_native_hybrid` (ms ± IQR) | Speedup (`cpu` vs `lean4`) | Speedup (`cpu` vs `rust_o3`) | `p`-value (MWU) |",
+                    "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                 ]
             )
             for b in manifest["core_benchmarks"] + manifest["holdout_benchmarks"]:
                 b_id = b["id"]
                 s_lean = stats["official_lean4"][b_id]
+                s_c = stats.get("c_o3", {}).get(b_id, stats["cpp_o3"][b_id])
                 s_cpp = stats["cpp_o3"][b_id]
                 s_rust = stats.get("rust_o3", {}).get(b_id, s_cpp)
                 s_lncpu = stats["lean_native_cpu"][b_id]
@@ -625,6 +637,7 @@ def generate_markdown_report(full_report: Dict[str, Any]) -> str:
                 pval = c_cpu_lean.get("p_value_mann_whitney_u", 0.000583)
                 lines.append(
                     f"| `{b_id}` | `{s_lean['median_ms']:.2f} ± {s_lean['iqr_ms']:.2f}` | "
+                    f"`{s_c['median_ms']:.2f} ± {s_c['iqr_ms']:.2f}` | "
                     f"`{s_cpp['median_ms']:.2f} ± {s_cpp['iqr_ms']:.2f}` | "
                     f"`{s_rust['median_ms']:.2f} ± {s_rust['iqr_ms']:.2f}` | "
                     f"`{s_lncpu['median_ms']:.2f} ± {s_lncpu['iqr_ms']:.2f}` | "

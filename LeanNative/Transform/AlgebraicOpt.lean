@@ -34,49 +34,36 @@ def rewriteScalarPeepholeStep (e : ScalarExpr) : ScalarExpr :=
     | other => LeanNative.Proofs.rewriteScalarPeepholeStep other
   -- 3. Apply extended div/mod/cancellation/FMA rules not in `Proofs.rewriteScalarPeepholeStep`
   match e2 with
-  | .binOp .sub x y =>
+  | .binOp .sub x y | .binOp .bitXor x y =>
     if x == y then .constU64 0 else e2
-  | .binOp .mul _ (.constU64 0) => .constU64 0
-  | .binOp .mul (.constU64 0) _ => .constU64 0
+  | .binOp .mul _ (.constU64 0) | .binOp .mul (.constU64 0) _
+  | .binOp .bitAnd _ (.constU64 0) | .binOp .bitAnd (.constU64 0) _
   | .binOp .mod _ (.constU64 1) => .constU64 0
-  | .binOp .mod x (.constU64 2) => .binOp .bitAnd x (.constU64 1)
-  | .binOp .mod x (.constU64 4) => .binOp .bitAnd x (.constU64 3)
-  | .binOp .mod x (.constU64 8) => .binOp .bitAnd x (.constU64 7)
-  | .binOp .mod x (.constU64 16) => .binOp .bitAnd x (.constU64 15)
-  | .binOp .mod x (.constU64 32) => .binOp .bitAnd x (.constU64 31)
-  | .binOp .mod x (.constU64 64) => .binOp .bitAnd x (.constU64 63)
+  | .binOp .mod x (.constU64 d) =>
+    if d == 2 || d == 4 || d == 8 || d == 16 || d == 32 || d == 64 then
+      .binOp .bitAnd x (.constU64 (d - 1))
+    else e2
   | .binOp .div x (.constU64 16) => .binOp .shr x (.constU64 4)
   | .binOp .div x (.constU64 32) => .binOp .shr x (.constU64 5)
   | .binOp .div x (.constU64 64) => .binOp .shr x (.constU64 6)
-  | .binOp .mul x (.constU64 64) => .binOp .shl x (.constU64 6)
+  | .binOp .mul x (.constU64 64) | .binOp .mul (.constU64 64) x => .binOp .shl x (.constU64 6)
   | .binOp .mul (.constU64 16) x => .binOp .shl x (.constU64 4)
   | .binOp .mul (.constU64 32) x => .binOp .shl x (.constU64 5)
-  | .binOp .mul (.constU64 64) x => .binOp .shl x (.constU64 6)
-  | .binOp .bitXor x y =>
-    if x == y then .constU64 0 else e2
-  | .binOp .bitAnd _ (.constU64 0) => .constU64 0
-  | .binOp .bitAnd (.constU64 0) _ => .constU64 0
-  | .binOp .eq x y =>
+  | .binOp .eq x y | .binOp .le x y =>
     if x == y then .constBool true else e2
   | .binOp .lt x y =>
     if x == y then .constBool false else e2
-  | .binOp .le x y =>
-    if x == y then .constBool true else e2
   | .unaryOp .not (.constBool b) => .constBool (!b)
-  | .unaryOp .not (.unaryOp .not x) => x
+  | .unaryOp .not (.unaryOp .not x) | .unaryOp .neg (.unaryOp .neg x) => x
   | .unaryOp .neg (.constU64 a) => .constU64 (0 - a)
-  | .unaryOp .neg (.unaryOp .neg x) => x
   | .select (.constU64 c) t f =>
     if c != 0 then t else f
   | .select _ t f =>
     if t == f then t else e2
   | .fma (.constU64 a) (.constU64 b) (.constU64 c) => .constU64 (a * b + c)
-  | .fma x (.constU64 1) c =>
+  | .fma x (.constU64 1) c | .fma (.constU64 1) x c =>
     LeanNative.Proofs.rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteConstFoldStep (.binOp .add x c))
-  | .fma (.constU64 1) x c =>
-    LeanNative.Proofs.rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteConstFoldStep (.binOp .add x c))
-  | .fma _ (.constU64 0) c => c
-  | .fma (.constU64 0) _ c => c
+  | .fma _ (.constU64 0) c | .fma (.constU64 0) _ c => c
   | .fma a b (.constU64 0) =>
     LeanNative.Proofs.rewriteScalarPeepholeStep (LeanNative.Proofs.rewriteConstFoldStep (.binOp .mul a b))
   | _ => e2

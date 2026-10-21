@@ -13,6 +13,7 @@
  *   8. holdout_VerifyLoopBounds  (N = 10,000,000)
  */
 
+#ifdef __cplusplus
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,15 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#else
+#define _POSIX_C_SOURCE 200809L
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#define constexpr const
+#endif
 
 static inline uint64_t fnv1a_u64(uint64_t h, uint64_t val) {
     return (h ^ val) * 1099511628211ULL;
@@ -104,8 +114,8 @@ uint64_t bench_saxpy_kernel(uint64_t N, uint64_t alpha, const uint64_t* __restri
 // 6. matmul_tiled_u64 (M = N = K = 512)
 // Dense 512x512 matrix multiplication with 32x32 cache tiling
 uint64_t bench_matmul_tiled_u64(uint64_t M, const uint64_t* __restrict__ A, const uint64_t* __restrict__ B, uint64_t* __restrict__ C) {
-    std::memset(C, 0, M * M * sizeof(uint64_t));
-    constexpr uint64_t TILE = 32;
+    memset(C, 0, M * M * sizeof(uint64_t));
+    const uint64_t TILE = 32;
     for (uint64_t i0 = 0; i0 < M; i0 += TILE) {
         for (uint64_t k0 = 0; k0 < M; k0 += TILE) {
             for (uint64_t j0 = 0; j0 < M; j0 += TILE) {
@@ -298,159 +308,82 @@ uint64_t bench_holdout_loop_bounds(uint64_t N) {
     return sum1 ^ sum2;
 }
 
-static double now_ms() {
+static double now_ms(void) {
+#ifdef __cplusplus
     auto now = std::chrono::steady_clock::now().time_since_epoch();
     return std::chrono::duration<double, std::milli>(now).count();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
+#endif
 }
 
 int main(int argc, char** argv) {
-    std::string filter = (argc > 1) ? argv[1] : "all";
+    const char* f = (argc > 1) ? argv[1] : "all";
+#define RUN_SCALAR_BENCH(id, expr) do { \
+    if (!strcmp(f, "all") || !strcmp(f, id)) { \
+        double t0 = now_ms(); uint64_t c = (expr); double t1 = now_ms(); \
+        printf("BENCH %s checksum=%llu time_ms=%.4f\n", id, (unsigned long long)c, t1 - t0); \
+    } \
+} while (0)
 
-    if (filter == "all" || filter == "collatz_steps") {
-        uint64_t N = 5000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_collatz_steps(N);
-        double t1 = now_ms();
-        std::printf("BENCH collatz_steps checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
+    RUN_SCALAR_BENCH("collatz_steps", bench_collatz_steps(5000000ULL));
+    RUN_SCALAR_BENCH("tuple_accum_sum", bench_tuple_accum_sum(50000000ULL));
 
-    if (filter == "all" || filter == "tuple_accum_sum") {
-        uint64_t N = 50000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_tuple_accum_sum(N);
-        double t1 = now_ms();
-        std::printf("BENCH tuple_accum_sum checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "sarray_scale_bias") {
+    if (!strcmp(f, "all") || !strcmp(f, "sarray_scale_bias")) {
         uint64_t N = 10000000ULL;
-        std::vector<uint64_t> arr(N);
-        for (uint64_t i = 0; i < N; ++i) {
-            arr[i] = (i * 6364136223846793005ULL + 1442695040888963407ULL);
-        }
-        double t0 = now_ms();
-        uint64_t c = bench_sarray_scale_bias(N, arr.data());
-        double t1 = now_ms();
-        std::printf("BENCH sarray_scale_bias checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
+        uint64_t* arr = (uint64_t*)malloc(N * sizeof(uint64_t));
+        for (uint64_t i = 0; i < N; ++i) arr[i] = i * 6364136223846793005ULL + 1442695040888963407ULL;
+        RUN_SCALAR_BENCH("sarray_scale_bias", bench_sarray_scale_bias(N, arr));
+        free(arr);
     }
 
-    if (filter == "all" || filter == "dot_product_u64") {
+    if (!strcmp(f, "all") || !strcmp(f, "dot_product_u64")) {
         uint64_t N = 10000000ULL;
-        std::vector<uint64_t> A(N), B(N);
+        uint64_t* A = (uint64_t*)malloc(N * sizeof(uint64_t));
+        uint64_t* B = (uint64_t*)malloc(N * sizeof(uint64_t));
         for (uint64_t i = 0; i < N; ++i) {
             A[i] = (i * 11400714819323198485ULL + 1ULL) & 0xFFFFFFFFULL;
             B[i] = (i * 14029467366897019727ULL + 3ULL) & 0xFFFFFFFFULL;
         }
-        double t0 = now_ms();
-        uint64_t c = bench_dot_product_u64(N, A.data(), B.data());
-        double t1 = now_ms();
-        std::printf("BENCH dot_product_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
+        RUN_SCALAR_BENCH("dot_product_u64", bench_dot_product_u64(N, A, B));
+        free(A); free(B);
     }
 
-    if (filter == "all" || filter == "saxpy_kernel") {
+    if (!strcmp(f, "all") || !strcmp(f, "saxpy_kernel")) {
         uint64_t N = 16777216ULL;
-        uint64_t alpha = 314159ULL;
-        std::vector<uint64_t> X(N), Y(N);
+        uint64_t* X = (uint64_t*)malloc(N * sizeof(uint64_t));
+        uint64_t* Y = (uint64_t*)malloc(N * sizeof(uint64_t));
         for (uint64_t i = 0; i < N; ++i) {
             X[i] = i * 2654435761ULL + 7ULL;
             Y[i] = i * 2246822519ULL + 13ULL;
         }
-        double t0 = now_ms();
-        uint64_t c = bench_saxpy_kernel(N, alpha, X.data(), Y.data());
-        double t1 = now_ms();
-        std::printf("BENCH saxpy_kernel checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
+        RUN_SCALAR_BENCH("saxpy_kernel", bench_saxpy_kernel(N, 314159ULL, X, Y));
+        free(X); free(Y);
     }
 
-    if (filter == "all" || filter == "matmul_tiled_u64") {
+    if (!strcmp(f, "all") || !strcmp(f, "matmul_tiled_u64")) {
         uint64_t M = 512ULL;
-        std::vector<uint64_t> A(M * M), B(M * M), C(M * M);
+        uint64_t* A = (uint64_t*)malloc(M * M * sizeof(uint64_t));
+        uint64_t* B = (uint64_t*)malloc(M * M * sizeof(uint64_t));
+        uint64_t* C = (uint64_t*)malloc(M * M * sizeof(uint64_t));
         for (uint64_t i = 0; i < M * M; ++i) {
             A[i] = (i * 6364136223846793005ULL + 1ULL) & 0xFFFFULL;
             B[i] = (i * 2862933555777941757ULL + 3ULL) & 0xFFFFULL;
         }
-        double t0 = now_ms();
-        uint64_t c = bench_matmul_tiled_u64(M, A.data(), B.data(), C.data());
-        double t1 = now_ms();
-        std::printf("BENCH matmul_tiled_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
+        RUN_SCALAR_BENCH("matmul_tiled_u64", bench_matmul_tiled_u64(M, A, B, C));
+        free(A); free(B); free(C);
     }
 
-    if (filter == "all" || filter == "evm_gas_schedule_u64") {
-        uint64_t N = 10000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_evm_gas_schedule_u64(N);
-        double t1 = now_ms();
-        std::printf("BENCH evm_gas_schedule_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "keccak256_sponge_u64") {
-        uint64_t N = 2000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_keccak256_sponge_u64(N);
-        double t1 = now_ms();
-        std::printf("BENCH keccak256_sponge_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "uint256_wad_muldiv_u64") {
-        uint64_t N = 5000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_uint256_wad_muldiv_u64(N);
-        double t1 = now_ms();
-        std::printf("BENCH uint256_wad_muldiv_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "goldilocks_ntt_modmul_u64") {
-        uint64_t N = 5000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_goldilocks_ntt_modmul_u64(N);
-        double t1 = now_ms();
-        std::printf("BENCH goldilocks_ntt_modmul_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "babybear_poseidon2_sbox_u64") {
-        uint64_t N = 5000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_babybear_poseidon2_sbox_u64(N);
-        double t1 = now_ms();
-        std::printf("BENCH babybear_poseidon2_sbox_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "mersenne31_circle_butterfly_u64") {
-        uint64_t N = 5000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_mersenne31_circle_butterfly_u64(N);
-        double t1 = now_ms();
-        std::printf("BENCH mersenne31_circle_butterfly_u64 checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "holdout_bitwise") {
-        uint64_t N = 10000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_holdout_bitwise(N);
-        double t1 = now_ms();
-        std::printf("BENCH holdout_bitwise checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
-
-    if (filter == "all" || filter == "holdout_loop_bounds") {
-        uint64_t N = 10000000ULL;
-        double t0 = now_ms();
-        uint64_t c = bench_holdout_loop_bounds(N);
-        double t1 = now_ms();
-        std::printf("BENCH holdout_loop_bounds checksum=%llu time_ms=%.4f\n",
-                    (unsigned long long)c, t1 - t0);
-    }
+    RUN_SCALAR_BENCH("evm_gas_schedule_u64", bench_evm_gas_schedule_u64(10000000ULL));
+    RUN_SCALAR_BENCH("keccak256_sponge_u64", bench_keccak256_sponge_u64(2000000ULL));
+    RUN_SCALAR_BENCH("uint256_wad_muldiv_u64", bench_uint256_wad_muldiv_u64(5000000ULL));
+    RUN_SCALAR_BENCH("goldilocks_ntt_modmul_u64", bench_goldilocks_ntt_modmul_u64(5000000ULL));
+    RUN_SCALAR_BENCH("babybear_poseidon2_sbox_u64", bench_babybear_poseidon2_sbox_u64(5000000ULL));
+    RUN_SCALAR_BENCH("mersenne31_circle_butterfly_u64", bench_mersenne31_circle_butterfly_u64(5000000ULL));
+    RUN_SCALAR_BENCH("holdout_bitwise", bench_holdout_bitwise(10000000ULL));
+    RUN_SCALAR_BENCH("holdout_loop_bounds", bench_holdout_loop_bounds(10000000ULL));
 
     return 0;
 }

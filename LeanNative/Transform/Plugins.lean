@@ -110,12 +110,14 @@ def applyVerifiedOptPlugin
 
 /-! ## 2. Built-In Segregated Optimization Plugins & Adversarial Test Plugin -/
 
-def builtinAlgebraicPlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNIRDecl × OptPluginCertificate) :=
-  let (d', stepCert) := algebraicOptPass.runDecl d
+/-- Adapt a `TransformPass` into a segregated `OptPluginCertificate` producer. -/
+def passToBuiltinPlugin (pluginName : String) (pass : TransformPass) (target : SuperoptTarget) (d : LNIRDecl) :
+    Option (LNIRDecl × OptPluginCertificate) :=
+  let (d', stepCert) := pass.runDecl d
   if !stepCert.changed then none
   else
     some (d', {
-      pluginName := "builtin:algebraic-peephole"
+      pluginName
       kind := "builtin_verified"
       theoremOrRule := stepCert.theoremRef
       costBefore := declScalarCost target d
@@ -123,44 +125,10 @@ def builtinAlgebraicPlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LN
       notes := stepCert.notes
     })
 
-def builtinUnboxTuplePlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNIRDecl × OptPluginCertificate) :=
-  let (d', stepCert) := unboxTupleSROAPass.runDecl d
-  if !stepCert.changed then none
-  else
-    some (d', {
-      pluginName := "builtin:unbox-tuple-sroa"
-      kind := "builtin_verified"
-      theoremOrRule := stepCert.theoremRef
-      costBefore := declScalarCost target d
-      costAfter := declScalarCost target d'
-      notes := stepCert.notes
-    })
-
-def builtinHoistExclusivityPlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNIRDecl × OptPluginCertificate) :=
-  let (d', stepCert) := hoistExclusivityPass.runDecl d
-  if !stepCert.changed then none
-  else
-    some (d', {
-      pluginName := "builtin:hoist-exclusivity"
-      kind := "builtin_verified"
-      theoremOrRule := stepCert.theoremRef
-      costBefore := declScalarCost target d
-      costAfter := declScalarCost target d'
-      notes := stepCert.notes
-    })
-
-def builtinLoopVectorizePlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNIRDecl × OptPluginCertificate) :=
-  let (d', stepCert) := loopVectorizeOptPass.runDecl d
-  if !stepCert.changed then none
-  else
-    some (d', {
-      pluginName := "builtin:loop-vectorize"
-      kind := "builtin_verified"
-      theoremOrRule := stepCert.theoremRef
-      costBefore := declScalarCost target d
-      costAfter := declScalarCost target d'
-      notes := stepCert.notes
-    })
+def builtinAlgebraicPlugin := passToBuiltinPlugin "builtin:algebraic-peephole" algebraicOptPass
+def builtinUnboxTuplePlugin := passToBuiltinPlugin "builtin:unbox-tuple-sroa" unboxTupleSROAPass
+def builtinHoistExclusivityPlugin := passToBuiltinPlugin "builtin:hoist-exclusivity" hoistExclusivityPass
+def builtinLoopVectorizePlugin := passToBuiltinPlugin "builtin:loop-vectorize" loopVectorizeOptPass
 
 def builtinSuperoptPlugin (target : SuperoptTarget) (d : LNIRDecl) : Option (LNIRDecl × OptPluginCertificate) :=
   let (d', rewrites) := superoptDecl target d
@@ -350,16 +318,17 @@ structure PluginPipelineReport where
   declAudits : List PluginDeclAudit
   deriving Repr, Inhabited
 
-private def escapeJsonPlugin (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | _    => acc.push c
-  ) ""
+private abbrev escapeJsonPlugin := LeanNative.IR.jsonEscape
+
+def registeredBuiltinPlugins (target : SuperoptTarget) (includeAdversarial : Bool := false) :
+    List (String × (LNIRDecl → Option (LNIRDecl × OptPluginCertificate))) :=
+  [ ("builtin:algebraic-peephole", builtinAlgebraicPlugin target)
+  , ("builtin:unbox-tuple-sroa", builtinUnboxTuplePlugin target)
+  , ("builtin:hoist-exclusivity", builtinHoistExclusivityPlugin target)
+  , ("builtin:loop-vectorize", builtinLoopVectorizePlugin target)
+  , ("builtin:branchless-select", builtinBranchlessSelectPlugin target)
+  , ("builtin:enumerative-superopt", builtinSuperoptPlugin target)
+  ] ++ (if includeAdversarial then [("adversarial:unsound-alu-corruptor", adversarialBuggyPlugin target)] else [])
 
 def PluginPipelineReport.toJson (r : PluginPipelineReport) : String :=
   let auditsJson := String.intercalate ",\n    " (r.declAudits.map fun a =>
@@ -389,14 +358,7 @@ def runSegregatedPluginPipeline
     (target : SuperoptTarget)
     (includeAdversarialTest : Bool := false)
     (m : LNIRModule) : LNIRModule × PluginPipelineReport :=
-  let builtinFns : List (String × (LNIRDecl → Option (LNIRDecl × OptPluginCertificate))) :=
-    [ ("builtin:algebraic-peephole", builtinAlgebraicPlugin target)
-    , ("builtin:unbox-tuple-sroa", builtinUnboxTuplePlugin target)
-    , ("builtin:hoist-exclusivity", builtinHoistExclusivityPlugin target)
-    , ("builtin:loop-vectorize", builtinLoopVectorizePlugin target)
-    , ("builtin:branchless-select", builtinBranchlessSelectPlugin target)
-    , ("builtin:enumerative-superopt", builtinSuperoptPlugin target)
-    ] ++ (if includeAdversarialTest then [("adversarial:unsound-alu-corruptor", adversarialBuggyPlugin target)] else [])
+  let builtinFns := registeredBuiltinPlugins target includeAdversarialTest
 
   let (optDecls, audits, totBefore, totAfter, accCnt, rejCnt, advRej) :=
     m.decls.foldl
@@ -454,14 +416,7 @@ def emitModuleTelemetryEvents
     (m : LNIRModule) : IO Nat := do
   if !cfg.enabled then
     return 0
-  let builtinFns : List (String × (LNIRDecl → Option (LNIRDecl × OptPluginCertificate))) :=
-    [ ("builtin:algebraic-peephole", builtinAlgebraicPlugin target)
-    , ("builtin:unbox-tuple-sroa", builtinUnboxTuplePlugin target)
-    , ("builtin:hoist-exclusivity", builtinHoistExclusivityPlugin target)
-    , ("builtin:loop-vectorize", builtinLoopVectorizePlugin target)
-    , ("builtin:branchless-select", builtinBranchlessSelectPlugin target)
-    , ("builtin:enumerative-superopt", builtinSuperoptPlugin target)
-    ] ++ (if includeAdversarial then [("adversarial:unsound-alu-corruptor", adversarialBuggyPlugin target)] else [])
+  let builtinFns := registeredBuiltinPlugins target includeAdversarial
   let tsNs ← IO.monoNanosNow
   let mut emitted : Nat := 0
   for d in m.decls do
