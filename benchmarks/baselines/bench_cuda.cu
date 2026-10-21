@@ -134,7 +134,49 @@ uint64_t run_cuda_dot_product(uint64_t N, const uint64_t* h_A, const uint64_t* h
     CUDA_CHECK(cudaDeviceSynchronize());
     *elapsed_ms = now_ms() - t0;
     CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaFree(d_A)); CUDA_CHECK(cudaFree(d_B)); CUDA_CHECK(cudaFree(d_sum));
+    CUDA_CHECK(cudaFree(d_sum));
+    return (uint64_t)h_sum;
+}
+
+__global__ void goldilocks_ntt_modmul_u64_kernel(uint64_t N, unsigned long long* global_sum) {
+    const uint64_t EPS = 0xFFFFFFFFULL;
+    const uint64_t M = 0xFFFFFFFF00000001ULL;
+    uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t local_sum = 0ULL;
+    for (uint64_t i = idx; i < N; i += stride) {
+        uint64_t a = i * 6364136223846793005ULL + 1442695040888963407ULL;
+        uint64_t b = (i ^ 0xAAAAAAAAAAAAAAAAULL) * 11400714819323198485ULL + 7ULL;
+        uint64_t lo = a * b;
+        uint64_t hi = __umul64hi(a, b);
+        uint64_t x2 = hi & EPS, x3 = hi >> 32;
+        uint64_t t0 = lo - x3 - ((lo < x3) ? EPS : 0ULL);
+        uint64_t add2 = (x2 << 32) - x2;
+        uint64_t t1 = t0 + add2;
+        t1 += (t1 < t0) ? EPS : 0ULL;
+        uint64_t r = (t1 >= M) ? (t1 - M) : t1;
+        local_sum += (r ^ (a + b));
+    }
+    for (int offset = 16; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        atomicAdd(global_sum, (unsigned long long)local_sum);
+    }
+}
+
+uint64_t run_cuda_goldilocks_ntt_modmul(uint64_t N, double* elapsed_ms) {
+    unsigned long long* d_sum = nullptr, h_sum = 0;
+    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CUDA_CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    goldilocks_ntt_modmul_u64_kernel<<<1, 32>>>(0, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    double t0 = now_ms();
+    goldilocks_ntt_modmul_u64_kernel<<<512, 256>>>(N, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    *elapsed_ms = now_ms() - t0;
+    CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_sum));
     return (uint64_t)h_sum;
 }
 
@@ -420,6 +462,10 @@ int main(int argc, char** argv) {
     if (filter == "all" || filter == "uint256_wad_muldiv_u64") {
         uint64_t c = run_cuda_uint256_wad_muldiv(5000000ULL, &dt);
         std::printf("BENCH uint256_wad_muldiv_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
+    }
+    if (filter == "all" || filter == "goldilocks_ntt_modmul_u64") {
+        uint64_t c = run_cuda_goldilocks_ntt_modmul(5000000ULL, &dt);
+        std::printf("BENCH goldilocks_ntt_modmul_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
     }
     if (filter == "all" || filter == "holdout_bitwise") {
         uint64_t c = run_holdout_bitwise(10000000ULL, &dt);

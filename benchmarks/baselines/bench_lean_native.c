@@ -13,6 +13,7 @@
 #define _POSIX_C_SOURCE 200809L
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#include <arm_sve.h>
 #elif defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -418,7 +419,53 @@ uint64_t ln_uint256_wad_muldiv_u64_cpu(uint64_t N) {
     const uint64_t m2 = 11400714819323198485ULL;
     const uint64_t m3 = 3266489917ULL;
     const uint64_t wad = 1000000000000000000ULL;
-#if defined(__aarch64__)
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE2)
+    svbool_t pg = svptrue_pat_b64(SV_VL2);
+    svuint64_t v_acc0 = svdup_n_u64(0ULL), v_acc1 = svdup_n_u64(0ULL);
+    svuint64_t v_idx = svindex_u64(0ULL, 1ULL);
+    svuint64_t v_four = svdup_n_u64(4ULL);
+    svuint64_t v_m2 = svdup_n_u64(m2), v_xor = svdup_n_u64(0x5555555555555555ULL);
+    svuint64_t v_wad = svdup_n_u64(wad), v_seven = svdup_n_u64(7ULL);
+    svuint64_t v_x0_0 = svadd_x(pg, svdup_n_u64(c0), svmul_x(pg, v_idx, svdup_n_u64(m0)));
+    svuint64_t v_x0_1 = svadd_x(pg, v_x0_0, svdup_n_u64(2ULL * m0));
+    svuint64_t v_xy1_0 = svadd_x(pg, svdup_n_u64(14ULL), svmul_x(pg, v_idx, svdup_n_u64(m1 + m3)));
+    svuint64_t v_xy1_1 = svadd_x(pg, v_xy1_0, svdup_n_u64(2ULL * (m1 + m3)));
+    svuint64_t v_step_x0 = svdup_n_u64(4ULL * m0);
+    svuint64_t v_step_xy1 = svdup_n_u64(4ULL * (m1 + m3));
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        svuint64_t y0_0 = svmla_x(pg, v_seven, sveor_x(pg, v_idx, v_xor), v_m2);
+        svuint64_t idx1 = svadd_x(pg, v_idx, svdup_n_u64(2ULL));
+        svuint64_t y0_1 = svmla_x(pg, v_seven, sveor_x(pg, idx1, v_xor), v_m2);
+        svuint64_t s0_0 = svadd_x(pg, v_x0_0, y0_0), s0_1 = svadd_x(pg, v_x0_1, y0_1);
+        svuint64_t s1_0 = svadd_m(svcmplt_u64(pg, s0_0, v_x0_0), v_xy1_0, svdup_n_u64(1ULL));
+        svuint64_t s1_1 = svadd_m(svcmplt_u64(pg, s0_1, v_x0_1), v_xy1_1, svdup_n_u64(1ULL));
+        svuint64_t hi0_0 = svmulh_x(pg, v_x0_0, y0_0), lo0_0 = svmul_x(pg, v_x0_0, y0_0);
+        svuint64_t hi0_1 = svmulh_x(pg, v_x0_1, y0_1), lo0_1 = svmul_x(pg, v_x0_1, y0_1);
+        svuint64_t hi1_0 = svmulh_x(pg, s0_0, v_wad), lo1_0 = svmul_x(pg, s0_0, v_wad);
+        svuint64_t hi1_1 = svmulh_x(pg, s0_1, v_wad), lo1_1 = svmul_x(pg, s0_1, v_wad);
+        svuint64_t x_0 = sveor_x(pg, sveor_x(pg, s0_0, s1_0), sveor_x(pg, hi0_0, hi1_0));
+        svuint64_t x_1 = sveor_x(pg, sveor_x(pg, s0_1, s1_1), sveor_x(pg, hi0_1, hi1_1));
+        x_0 = sveor_x(pg, x_0, svlsr_x(pg, sveor_x(pg, lo0_0, lo1_0), 32));
+        x_1 = sveor_x(pg, x_1, svlsr_x(pg, sveor_x(pg, lo0_1, lo1_1), 32));
+        v_acc0 = svadd_x(pg, v_acc0, x_0);
+        v_acc1 = svadd_x(pg, v_acc1, x_1);
+        v_idx = svadd_x(pg, v_idx, v_four);
+        v_x0_0 = svadd_x(pg, v_x0_0, v_step_x0);
+        v_x0_1 = svadd_x(pg, v_x0_1, v_step_x0);
+        v_xy1_0 = svadd_x(pg, v_xy1_0, v_step_xy1);
+        v_xy1_1 = svadd_x(pg, v_xy1_1, v_step_xy1);
+    }
+    uint64_t total = svaddv_u64(pg, svadd_x(pg, v_acc0, v_acc1));
+    for (; i < N; ++i) {
+        uint64_t x0 = i * m0 + c0, x1 = i * m1 + 3ULL;
+        uint64_t y0 = (i ^ 0x5555555555555555ULL) * m2 + 7ULL, y1 = i * m3 + 11ULL;
+        uint64_t s0 = x0 + y0, s1 = x1 + y1 + (s0 < x0);
+        unsigned __int128 p0 = (unsigned __int128)x0 * y0, p1 = (unsigned __int128)s0 * wad;
+        total += s0 ^ s1 ^ (uint64_t)(p0 >> 64) ^ (uint64_t)(p1 >> 64) ^ ((uint64_t)p0 >> 32) ^ ((uint64_t)p1 >> 32);
+    }
+    return total;
+#elif defined(__aarch64__)
     const uint64_t step_x0 = 2ULL * m0, step_x1_y1 = 2ULL * (m1 + m3);
     const uint64_t diff_x0 = m0 - m2;
     const unsigned __int128 diff_p1 = (unsigned __int128)diff_x0 * wad;
@@ -492,6 +539,105 @@ uint64_t ln_uint256_wad_muldiv_u64_cpu(uint64_t N) {
         uint64_t s0 = x0 + y0, s1 = x1 + y1 + (s0 < x0);
         unsigned __int128 p0 = (unsigned __int128)x0 * y0, p1 = (unsigned __int128)s0 * wad;
         total += s0 ^ s1 ^ (uint64_t)(p0 >> 64) ^ (uint64_t)(p1 >> 64) ^ ((uint64_t)p0 >> 32) ^ ((uint64_t)p1 >> 32);
+    }
+    return total;
+#endif
+}
+
+static inline uint64_t ln_goldilocks_reduce_u128(unsigned __int128 p) {
+    const uint64_t EPS = 0xFFFFFFFFULL;
+    const uint64_t M = 0xFFFFFFFF00000001ULL;
+    uint64_t lo = (uint64_t)p, hi = (uint64_t)(p >> 64);
+#if defined(__aarch64__)
+    uint64_t x2_32 = hi << 32;
+    uint64_t x2_plus_x3 = (uint64_t)(uint32_t)hi + (hi >> 32);
+    __int128 s = (__int128)lo + (__int128)x2_32 - (__int128)x2_plus_x3;
+    int64_t hi_s = (int64_t)(s >> 64);
+    uint64_t t1 = (uint64_t)s + (uint64_t)hi_s * EPS;
+    return (t1 >= M) ? (t1 - M) : t1;
+#else
+    uint64_t x2 = hi & EPS, x3 = hi >> 32;
+    uint64_t t0 = lo - x3 - ((lo < x3) ? EPS : 0ULL);
+    uint64_t add2 = (x2 << 32) - x2;
+    uint64_t t1 = t0 + add2;
+    t1 += (t1 < t0) ? EPS : 0ULL;
+    return (t1 >= M) ? (t1 - M) : t1;
+#endif
+}
+
+uint64_t ln_goldilocks_ntt_modmul_u64_cpu(uint64_t N) {
+    const uint64_t m0 = 6364136223846793005ULL, c0 = 1442695040888963407ULL;
+    const uint64_t m2 = 11400714819323198485ULL;
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE2)
+    const uint64_t step4 = 4ULL * m0;
+    svbool_t pg = svptrue_pat_b64(SV_VL2);
+    svuint64_t v_acc0 = svdup_n_u64(0ULL), v_acc1 = svdup_n_u64(0ULL);
+    svuint64_t v_idx = svindex_u64(0ULL, 1ULL);
+    svuint64_t v_four = svdup_n_u64(4ULL);
+    svuint64_t v_m2 = svdup_n_u64(m2), v_xor = svdup_n_u64(0xAAAAAAAAAAAAAAAAULL);
+    svuint64_t v_eps = svdup_n_u64(0xFFFFFFFFULL), v_m = svdup_n_u64(0xFFFFFFFF00000001ULL);
+    svuint64_t v_a0 = svadd_x(pg, svdup_n_u64(c0), svmul_x(pg, v_idx, svdup_n_u64(m0)));
+    svuint64_t v_a1 = svadd_x(pg, v_a0, svdup_n_u64(2ULL * m0));
+    svuint64_t v_step = svdup_n_u64(step4);
+    svuint64_t v_seven = svdup_n_u64(7ULL);
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        svuint64_t b0 = svmla_x(pg, v_seven, sveor_x(pg, v_idx, v_xor), v_m2);
+        svuint64_t idx1 = svadd_x(pg, v_idx, svdup_n_u64(2ULL));
+        svuint64_t b1 = svmla_x(pg, v_seven, sveor_x(pg, idx1, v_xor), v_m2);
+        svuint64_t lo0 = svmul_x(pg, v_a0, b0), hi0 = svmulh_x(pg, v_a0, b0);
+        svuint64_t lo1 = svmul_x(pg, v_a1, b1), hi1 = svmulh_x(pg, v_a1, b1);
+        svuint64_t x3_0 = svlsr_x(pg, hi0, 32), x3_1 = svlsr_x(pg, hi1, 32);
+        svuint64_t t0_0 = svsub_m(svcmplt_u64(pg, lo0, x3_0), svsub_x(pg, lo0, x3_0), v_eps);
+        svuint64_t t0_1 = svsub_m(svcmplt_u64(pg, lo1, x3_1), svsub_x(pg, lo1, x3_1), v_eps);
+        svuint64_t x2_0 = svand_x(pg, hi0, v_eps), x2_1 = svand_x(pg, hi1, v_eps);
+        svuint64_t add2_0 = svsub_x(pg, svlsl_x(pg, x2_0, 32), x2_0);
+        svuint64_t add2_1 = svsub_x(pg, svlsl_x(pg, x2_1, 32), x2_1);
+        svuint64_t t1_0 = svadd_x(pg, t0_0, add2_0), t1_1 = svadd_x(pg, t0_1, add2_1);
+        t1_0 = svadd_m(svcmplt_u64(pg, t1_0, t0_0), t1_0, v_eps);
+        t1_1 = svadd_m(svcmplt_u64(pg, t1_1, t0_1), t1_1, v_eps);
+        svuint64_t r0 = svsub_m(svcmpge_u64(pg, t1_0, v_m), t1_0, v_m);
+        svuint64_t r1 = svsub_m(svcmpge_u64(pg, t1_1, v_m), t1_1, v_m);
+        v_acc0 = svadd_x(pg, v_acc0, sveor_x(pg, r0, svadd_x(pg, v_a0, b0)));
+        v_acc1 = svadd_x(pg, v_acc1, sveor_x(pg, r1, svadd_x(pg, v_a1, b1)));
+        v_idx = svadd_x(pg, v_idx, v_four);
+        v_a0 = svadd_x(pg, v_a0, v_step);
+        v_a1 = svadd_x(pg, v_a1, v_step);
+    }
+    uint64_t total = svaddv_u64(pg, svadd_x(pg, v_acc0, v_acc1));
+    for (; i < N; ++i) {
+        uint64_t a = i * m0 + c0;
+        uint64_t b = (i ^ 0xAAAAAAAAAAAAAAAAULL) * m2 + 7ULL;
+        total += ln_goldilocks_reduce_u128((unsigned __int128)a * b) ^ (a + b);
+    }
+    return total;
+#else
+    const uint64_t step_a = 4ULL * m0;
+    uint64_t acc0 = 0ULL, acc1 = 0ULL, acc2 = 0ULL, acc3 = 0ULL;
+    uint64_t a_e = c0;
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        uint64_t b0 = (i ^ 0xAAAAAAAAAAAAAAAAULL) * m2 + 7ULL;
+        uint64_t b1 = b0 + m2;
+        uint64_t b2 = b0 - 2ULL * m2;
+        uint64_t b3 = b0 - m2;
+        uint64_t a0 = a_e, a1 = a_e + m0, a2 = a_e + 2ULL * m0, a3 = a_e + 3ULL * m0;
+        uint64_t r0 = ln_goldilocks_reduce_u128((unsigned __int128)a0 * b0);
+        uint64_t r1 = ln_goldilocks_reduce_u128((unsigned __int128)a1 * b1);
+        uint64_t r2 = ln_goldilocks_reduce_u128((unsigned __int128)a2 * b2);
+        uint64_t r3 = ln_goldilocks_reduce_u128((unsigned __int128)a3 * b3);
+        acc0 += r0 ^ (a0 + b0);
+        acc1 += r1 ^ (a1 + b1);
+        acc2 += r2 ^ (a2 + b2);
+        acc3 += r3 ^ (a3 + b3);
+        a_e += step_a;
+    }
+    uint64_t total = (acc0 + acc1) + (acc2 + acc3);
+    for (; i < N; ++i) {
+        uint64_t a = i * m0 + c0;
+        uint64_t b = (i ^ 0xAAAAAAAAAAAAAAAAULL) * m2 + 7ULL;
+        uint64_t r = ln_goldilocks_reduce_u128((unsigned __int128)a * b);
+        total += r ^ (a + b);
     }
     return total;
 #endif
@@ -573,6 +719,7 @@ int main(int argc, char** argv) {
     RUN_BENCH("evm_gas_schedule_u64", ln_evm_gas_schedule_u64_cpu(10000000ULL));
     RUN_BENCH("keccak256_sponge_u64", ln_keccak256_sponge_u64_cpu(2000000ULL));
     RUN_BENCH("uint256_wad_muldiv_u64", ln_uint256_wad_muldiv_u64_cpu(5000000ULL));
+    RUN_BENCH("goldilocks_ntt_modmul_u64", ln_goldilocks_ntt_modmul_u64_cpu(5000000ULL));
     RUN_BENCH("holdout_bitwise", ln_holdout_bitwise_cpu(10000000ULL));
     RUN_BENCH("holdout_loop_bounds", ln_holdout_loop_bounds_cpu(10000000ULL));
     return 0;

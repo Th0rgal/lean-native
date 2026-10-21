@@ -208,6 +208,29 @@ uint64_t bench_uint256_wad_muldiv_u64(uint64_t N) {
     return total;
 }
 
+// 10. goldilocks_ntt_modmul_u64 (N = 5,000,000)
+// Proximity Prize / EIP-8200 Goldilocks prime field (M = 2^64 - 2^32 + 1) modular multiplication
+uint64_t bench_goldilocks_ntt_modmul_u64(uint64_t N) {
+    const uint64_t EPS = 0xFFFFFFFFULL;
+    const uint64_t M = 0xFFFFFFFF00000001ULL;
+    uint64_t total = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t a = i * 6364136223846793005ULL + 1442695040888963407ULL;
+        uint64_t b = (i ^ 0xAAAAAAAAAAAAAAAAULL) * 11400714819323198485ULL + 7ULL;
+        unsigned __int128 p = (unsigned __int128)a * (unsigned __int128)b;
+        uint64_t lo = (uint64_t)p, hi = (uint64_t)(p >> 64);
+        uint64_t x2 = hi & EPS, x3 = hi >> 32;
+        uint64_t t0 = lo - x3;
+        if (lo < x3) t0 -= EPS;
+        uint64_t add2 = (x2 << 32) - x2;
+        uint64_t t1 = t0 + add2;
+        if (t1 < t0) t1 += EPS;
+        uint64_t r = (t1 >= M) ? (t1 - M) : t1;
+        total += (r ^ (a + b));
+    }
+    return total;
+}
+
 // Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
 uint64_t bench_holdout_bitwise(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -337,6 +360,15 @@ int main(int argc, char** argv) {
         uint64_t c = bench_uint256_wad_muldiv_u64(N);
         double t1 = now_ms();
         std::printf("BENCH uint256_wad_muldiv_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "goldilocks_ntt_modmul_u64") {
+        uint64_t N = 5000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_goldilocks_ntt_modmul_u64(N);
+        double t1 = now_ms();
+        std::printf("BENCH goldilocks_ntt_modmul_u64 checksum=%llu time_ms=%.4f\n",
                     (unsigned long long)c, t1 - t0);
     }
 

@@ -272,6 +272,38 @@ partial def uint256WadLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : 
 def benchUint256WadMuldivU64 (n : UInt64) : UInt64 :=
   (uint256WadLoop 0 n (0, 0)).1
 
+-- 10. goldilocks_ntt_modmul_u64 (N = 5,000,000)
+-- Standard Lean 4 baseline: models Proximity Prize / EIP-8200 Goldilocks prime field
+-- (M = 2^64 - 2^32 + 1) modular multiplication using 32-bit schoolbook 64x64->128 split.
+@[inline]
+def goldilocksReduce (lo hi : UInt64) : UInt64 :=
+  let eps : UInt64 := 0xFFFFFFFF
+  let m : UInt64 := 0xFFFFFFFF00000001
+  let x2 := hi &&& eps
+  let x3 := hi >>> 32
+  let t0 := lo - x3
+  let t0 := if lo < x3 then t0 - eps else t0
+  let add2 := (x2 <<< 32) - x2
+  let t1 := t0 + add2
+  let t1 := if t1 < t0 then t1 + eps else t1
+  if t1 >= m then t1 - m else t1
+
+@[inline]
+def goldilocksStep (i : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  let a := i * 6364136223846793005 + 1442695040888963407
+  let b := (i ^^^ 0xAAAAAAAAAAAAAAAA) * 11400714819323198485 + 7
+  let (lo, hi) := mul128HiLo a b
+  let r := goldilocksReduce lo hi
+  (acc.1 + (r ^^^ (a + b)), acc.2 ^^^ r)
+
+partial def goldilocksLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  if i >= n then acc
+  else goldilocksLoop (i + 1) n (applyStep goldilocksStep i acc)
+
+@[noinline]
+def benchGoldilocksNttModmulU64 (n : UInt64) : UInt64 :=
+  (goldilocksLoop 0 n (0, 0)).1
+
 -- Holdout 1: holdout_bitwise
 partial def holdoutBitwiseLoop (i : UInt64) (n : UInt64) (acc : UInt64) : UInt64 :=
   if i >= n then acc
@@ -376,6 +408,13 @@ def main (args : List String) : IO Unit := do
     let t1 ← IO.monoNanosNow
     let dt := (t1 - t0).toFloat / 1000000.0
     IO.println s!"BENCH uint256_wad_muldiv_u64 checksum={c} time_ms={dt}"
+
+  if filter == "all" || filter == "goldilocks_ntt_modmul_u64" then
+    let t0 ← IO.monoNanosNow
+    let c ← forceIO (benchGoldilocksNttModmulU64 (5000000 + z))
+    let t1 ← IO.monoNanosNow
+    let dt := (t1 - t0).toFloat / 1000000.0
+    IO.println s!"BENCH goldilocks_ntt_modmul_u64 checksum={c} time_ms={dt}"
 
   if filter == "all" || filter == "holdout_bitwise" then
     let t0 ← IO.monoNanosNow

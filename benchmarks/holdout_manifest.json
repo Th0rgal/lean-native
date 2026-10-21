@@ -166,6 +166,23 @@
       "assurance_level": "VerifiedKernelProof",
       "gpu_offload_eligible": true,
       "description": "5M-operation Verity 2.0 TickLib.wMulDown + EVMYulLean 2.0 UInt256BitVecBridge 128-bit multi-limb carry and 64x64->128 WAD fixed-point widening multiply (`__uint128_t` / `umulh` / `__umul64hi`)."
+    },
+    {
+      "id": "goldilocks_ntt_modmul_u64",
+      "category": "proximity_eip8200_finite_field_alu",
+      "input_size": 5000000,
+      "input_unit": "operations",
+      "expected_checksum_u64": 17681648824075000351,
+      "targeted_passes": [
+        "UnboxTupleSROA",
+        "AlgebraicOpt",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "5M-operation Proximity Prize / EIP-8200 Goldilocks prime field (M = 2^64 - 2^32 + 1) 64x64->128 modular multiplication via branchless Solinas reduction (2^64 == 2^32 - 1 mod M)."
     }
   ],
   "holdout_benchmarks": [

@@ -243,6 +243,37 @@ pub extern "C" fn rust_bench_uint256_wad_muldiv_u64(n: u64) -> u64 {
 
 #[no_mangle]
 #[inline(never)]
+pub extern "C" fn rust_bench_goldilocks_ntt_modmul_u64(n: u64) -> u64 {
+    const EPS: u64 = 0xFFFFFFFF;
+    const M: u64 = 0xFFFFFFFF00000001;
+    let mut total: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let a = i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let b = (i ^ 0xAAAAAAAAAAAAAAAA).wrapping_mul(11400714819323198485).wrapping_add(7);
+        let p = (a as u128).wrapping_mul(b as u128);
+        let lo = p as u64;
+        let hi = (p >> 64) as u64;
+        let x2 = hi & EPS;
+        let x3 = hi >> 32;
+        let (mut t0, borrow) = lo.overflowing_sub(x3);
+        if borrow {
+            t0 = t0.wrapping_sub(EPS);
+        }
+        let add2 = (x2 << 32).wrapping_sub(x2);
+        let (mut t1, carry) = t0.overflowing_add(add2);
+        if carry {
+            t1 = t1.wrapping_add(EPS);
+        }
+        let r = if t1 >= M { t1.wrapping_sub(M) } else { t1 };
+        total = total.wrapping_add(r ^ a.wrapping_add(b));
+        i += 1;
+    }
+    total
+}
+
+#[no_mangle]
+#[inline(never)]
 pub extern "C" fn rust_bench_holdout_bitwise(n: u64) -> u64 {
     let mut acc: u64 = 0x123456789ABCDEF0;
     let mut i: u64 = 0;
@@ -375,6 +406,13 @@ fn main() {
         let c = rust_bench_uint256_wad_muldiv_u64(black_box(5_000_000));
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         println!("BENCH uint256_wad_muldiv_u64 checksum={} time_ms={:.4}", c, dt);
+    }
+
+    if filter == "all" || filter == "goldilocks_ntt_modmul_u64" {
+        let t0 = Instant::now();
+        let c = rust_bench_goldilocks_ntt_modmul_u64(black_box(5_000_000));
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("BENCH goldilocks_ntt_modmul_u64 checksum={} time_ms={:.4}", c, dt);
     }
 
     if filter == "all" || filter == "holdout_bitwise" {
