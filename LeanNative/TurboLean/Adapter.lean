@@ -1312,9 +1312,21 @@ def storeTelemetryBlob (cfg : TelemetryConfig) (payload : String) : IO String :=
     pure ()
   return refStr
 
-/-- Append a single JSONL event line to `<spoolDir>/events.jsonl` and best-effort shared
-    `~/.cache/research-governor/lean_native_events.jsonl`. -/
-def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) : IO Unit := do
+private def escapeJsonBlob (s : String) : String :=
+  s.foldl (fun acc c =>
+    match c with
+    | '"'  => acc ++ "\\\""
+    | '\\' => acc ++ "\\\\"
+    | '\n' => acc ++ "\\n"
+    | '\r' => acc ++ "\\r"
+    | '\t' => acc ++ "\\t"
+    | _    => acc.push c
+  ) ""
+
+/-- Append a single JSONL event line to `<spoolDir>/events.jsonl`, best-effort shared
+    `~/.cache/research-governor/lean_native_events.jsonl`, and best-effort remote `cfg.remoteUrl`
+    (with optional content-addressed `(digest, payload)` blobs). -/
+def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) (blobs : List (String × String) := []) : IO Unit := do
   if !cfg.enabled then
     return ()
   try
@@ -1336,6 +1348,25 @@ def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) : IO U
       h2.flush
   catch _ =>
     pure ()
+  if !cfg.remoteUrl.isEmpty && (cfg.remoteUrl.startsWith "http://" || cfg.remoteUrl.startsWith "https://") then
+    try
+      let body :=
+        if blobs.isEmpty || cfg.mode == "metrics" then
+          jsonLine
+        else
+          let kvs := blobs.map (fun (k, v) =>
+            let cleanK := if k.startsWith "blake3:" then (k.drop 7).toString else k
+            s!"\"{escapeJsonBlob cleanK}\":\"{escapeJsonBlob v}\"")
+          "{\"events\":[" ++ jsonLine ++ "],\"blobs\":{" ++ String.intercalate "," kvs ++ "}}"
+      let _ ← IO.Process.spawn {
+        cmd := "curl"
+        args := #["-fsSL", "--max-time", "2", "-X", "POST", cfg.remoteUrl, "-H", "Content-Type: application/json", "-d", body]
+        stdin := .null
+        stdout := .null
+        stderr := .null
+      }
+    catch _ =>
+      pure ()
 
 end LeanNative.TurboLean
 

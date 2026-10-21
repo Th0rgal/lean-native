@@ -554,7 +554,12 @@ def emitModuleTelemetryEvents
             "}" ++
           "}" ++
           "}"
-        appendTelemetryEventJsonl cfg line
+        appendTelemetryEventJsonl cfg line [
+          (beforeBlob, beforeWire),
+          (afterBlob, afterWire),
+          (debruijnBeforeBlob, debruijnBefore),
+          (debruijnAfterBlob, debruijnAfter)
+        ]
         emitted := emitted + 1
         stepIdx := stepIdx + 1
         if accepted then
