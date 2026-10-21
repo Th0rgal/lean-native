@@ -218,6 +218,31 @@ pub extern "C" fn rust_bench_keccak256_sponge_u64(n: u64) -> u64 {
 
 #[no_mangle]
 #[inline(never)]
+pub extern "C" fn rust_bench_uint256_wad_muldiv_u64(n: u64) -> u64 {
+    let mut total: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let x0 = i.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let x1 = i.wrapping_mul(2862933555777941757).wrapping_add(3);
+        let y0 = (i ^ 0x5555555555555555).wrapping_mul(11400714819323198485).wrapping_add(7);
+        let y1 = i.wrapping_mul(3266489917).wrapping_add(11);
+        let (s0, carry) = x0.overflowing_add(y0);
+        let s1 = x1.wrapping_add(y1).wrapping_add(carry as u64);
+        let p0 = (x0 as u128).wrapping_mul(y0 as u128);
+        let p1 = (s0 as u128).wrapping_mul(1_000_000_000_000_000_000u128);
+        let lo0 = p0 as u64;
+        let hi0 = (p0 >> 64) as u64;
+        let lo1 = p1 as u64;
+        let hi1 = (p1 >> 64) as u64;
+        let step_val = s0 ^ s1 ^ hi0 ^ hi1 ^ (lo0 >> 32) ^ (lo1 >> 32);
+        total = total.wrapping_add(step_val);
+        i += 1;
+    }
+    total
+}
+
+#[no_mangle]
+#[inline(never)]
 pub extern "C" fn rust_bench_holdout_bitwise(n: u64) -> u64 {
     let mut acc: u64 = 0x123456789ABCDEF0;
     let mut i: u64 = 0;
@@ -343,6 +368,13 @@ fn main() {
         let c = rust_bench_keccak256_sponge_u64(black_box(2_000_000));
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         println!("BENCH keccak256_sponge_u64 checksum={} time_ms={:.4}", c, dt);
+    }
+
+    if filter == "all" || filter == "uint256_wad_muldiv_u64" {
+        let t0 = Instant::now();
+        let c = rust_bench_uint256_wad_muldiv_u64(black_box(5_000_000));
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("BENCH uint256_wad_muldiv_u64 checksum={} time_ms={:.4}", c, dt);
     }
 
     if filter == "all" || filter == "holdout_bitwise" {

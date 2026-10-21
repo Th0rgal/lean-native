@@ -298,6 +298,47 @@ uint64_t run_cuda_keccak256_sponge(uint64_t N, double* elapsed_ms) {
     return (uint64_t)h_xor;
 }
 
+__global__ void uint256_wad_muldiv_u64_kernel(uint64_t N, unsigned long long* global_sum) {
+    uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t local_sum = 0ULL;
+    for (uint64_t i = idx; i < N; i += stride) {
+        uint64_t x0 = i * 6364136223846793005ULL + 1442695040888963407ULL;
+        uint64_t x1 = i * 2862933555777941757ULL + 3ULL;
+        uint64_t y0 = (i ^ 0x5555555555555555ULL) * 11400714819323198485ULL + 7ULL;
+        uint64_t y1 = i * 3266489917ULL + 11ULL;
+        uint64_t s0 = x0 + y0;
+        uint64_t carry = (s0 < x0) ? 1ULL : 0ULL;
+        uint64_t s1 = x1 + y1 + carry;
+        uint64_t lo0 = x0 * y0;
+        uint64_t hi0 = __umul64hi(x0, y0);
+        uint64_t lo1 = s0 * 1000000000000000000ULL;
+        uint64_t hi1 = __umul64hi(s0, 1000000000000000000ULL);
+        local_sum += (s0 ^ s1 ^ hi0 ^ hi1 ^ (lo0 >> 32) ^ (lo1 >> 32));
+    }
+    for (int offset = 16; offset > 0; offset /= 2) {
+        local_sum += __shfl_down_sync(0xffffffff, local_sum, offset);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        atomicAdd(global_sum, (unsigned long long)local_sum);
+    }
+}
+
+uint64_t run_cuda_uint256_wad_muldiv(uint64_t N, double* elapsed_ms) {
+    unsigned long long* d_sum = nullptr, h_sum = 0;
+    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(unsigned long long)));
+    CUDA_CHECK(cudaMemset(d_sum, 0, sizeof(unsigned long long)));
+    uint256_wad_muldiv_u64_kernel<<<1, 32>>>(0, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    double t0 = now_ms();
+    uint256_wad_muldiv_u64_kernel<<<512, 256>>>(N, d_sum);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    *elapsed_ms = now_ms() - t0;
+    CUDA_CHECK(cudaMemcpy(&h_sum, d_sum, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_sum));
+    return (uint64_t)h_sum;
+}
+
 uint64_t run_holdout_bitwise(uint64_t N, double* elapsed_ms) {
     double t0 = now_ms();
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -375,6 +416,10 @@ int main(int argc, char** argv) {
     if (filter == "all" || filter == "keccak256_sponge_u64") {
         uint64_t c = run_cuda_keccak256_sponge(2000000ULL, &dt);
         std::printf("BENCH keccak256_sponge_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
+    }
+    if (filter == "all" || filter == "uint256_wad_muldiv_u64") {
+        uint64_t c = run_cuda_uint256_wad_muldiv(5000000ULL, &dt);
+        std::printf("BENCH uint256_wad_muldiv_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
     }
     if (filter == "all" || filter == "holdout_bitwise") {
         uint64_t c = run_holdout_bitwise(10000000ULL, &dt);

@@ -149,6 +149,23 @@
       "assurance_level": "VerifiedKernelProof",
       "gpu_offload_eligible": true,
       "description": "2M-block EVMYulLean 2.0 PureKeccak256.lean 5-lane sponge permutation (8 rounds of theta/rho/pi/chi/iota); compares Lean 4 boxed 5-tuple step against lean-native UnboxTupleSROA + 4-way SIMD bitsliced AVX2/NEON and CUDA PTX warp-shuffle reduction."
+    },
+    {
+      "id": "uint256_wad_muldiv_u64",
+      "category": "verity_uint256_fixed_point_alu",
+      "input_size": 5000000,
+      "input_unit": "operations",
+      "expected_checksum_u64": 12624251146278196429,
+      "targeted_passes": [
+        "UnboxTupleSROA",
+        "AlgebraicOpt",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "5M-operation Verity 2.0 TickLib.wMulDown + EVMYulLean 2.0 UInt256BitVecBridge 128-bit multi-limb carry and 64x64->128 WAD fixed-point widening multiply (`__uint128_t` / `umulh` / `__umul64hi`)."
     }
   ],
   "holdout_benchmarks": [

@@ -186,6 +186,28 @@ uint64_t bench_keccak256_sponge_u64(uint64_t N) {
     return total;
 }
 
+// 9. uint256_wad_muldiv_u64 (N = 5,000,000)
+// Verity 2.0 TickLib.wMulDown + UInt256BitVecBridge 128-bit carry & 64x64->128 widening multiply
+uint64_t bench_uint256_wad_muldiv_u64(uint64_t N) {
+    uint64_t total = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t x0 = i * 6364136223846793005ULL + 1442695040888963407ULL;
+        uint64_t x1 = i * 2862933555777941757ULL + 3ULL;
+        uint64_t y0 = (i ^ 0x5555555555555555ULL) * 11400714819323198485ULL + 7ULL;
+        uint64_t y1 = i * 3266489917ULL + 11ULL;
+        uint64_t s0 = x0 + y0;
+        uint64_t carry = (s0 < x0) ? 1ULL : 0ULL;
+        uint64_t s1 = x1 + y1 + carry;
+        unsigned __int128 p0 = (unsigned __int128)x0 * (unsigned __int128)y0;
+        unsigned __int128 p1 = (unsigned __int128)s0 * 1000000000000000000ULL;
+        uint64_t lo0 = (uint64_t)p0, hi0 = (uint64_t)(p0 >> 64);
+        uint64_t lo1 = (uint64_t)p1, hi1 = (uint64_t)(p1 >> 64);
+        uint64_t step_val = s0 ^ s1 ^ hi0 ^ hi1 ^ (lo0 >> 32) ^ (lo1 >> 32);
+        total += step_val;
+    }
+    return total;
+}
+
 // Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
 uint64_t bench_holdout_bitwise(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -306,6 +328,15 @@ int main(int argc, char** argv) {
         uint64_t c = bench_keccak256_sponge_u64(N);
         double t1 = now_ms();
         std::printf("BENCH keccak256_sponge_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "uint256_wad_muldiv_u64") {
+        uint64_t N = 5000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_uint256_wad_muldiv_u64(N);
+        double t1 = now_ms();
+        std::printf("BENCH uint256_wad_muldiv_u64 checksum=%llu time_ms=%.4f\n",
                     (unsigned long long)c, t1 - t0);
     }
 

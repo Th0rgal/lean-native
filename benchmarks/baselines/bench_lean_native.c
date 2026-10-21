@@ -412,6 +412,91 @@ uint64_t ln_keccak256_sponge_u64_cpu(uint64_t N) {
 #endif
 }
 
+uint64_t ln_uint256_wad_muldiv_u64_cpu(uint64_t N) {
+    const uint64_t m0 = 6364136223846793005ULL, c0 = 1442695040888963407ULL;
+    const uint64_t m1 = 2862933555777941757ULL;
+    const uint64_t m2 = 11400714819323198485ULL;
+    const uint64_t m3 = 3266489917ULL;
+    const uint64_t wad = 1000000000000000000ULL;
+#if defined(__aarch64__)
+    const uint64_t step_x0 = 2ULL * m0, step_x1_y1 = 2ULL * (m1 + m3);
+    const uint64_t diff_x0 = m0 - m2;
+    const unsigned __int128 diff_p1 = (unsigned __int128)diff_x0 * wad;
+    uint64_t acc0 = 0ULL, acc1 = 0ULL;
+    uint64_t x0_e = c0, x1_y1_e = 14ULL;
+    uint64_t i = 0ULL;
+    for (; i + 2ULL <= N; i += 2ULL) {
+        uint64_t y0_0 = (i ^ 0x5555555555555555ULL) * m2 + 7ULL;
+        uint64_t y0_1 = y0_0 - m2;
+        uint64_t x0_0 = x0_e, x0_1 = x0_e + m0;
+        uint64_t s0_0 = x0_0 + y0_0, s0_1 = s0_0 + diff_x0;
+        uint64_t s1_0 = x1_y1_e + (s0_0 < x0_0);
+        uint64_t s1_1 = x1_y1_e + (m1 + m3) + (s0_1 < x0_1);
+        unsigned __int128 p0_0 = (unsigned __int128)x0_0 * y0_0;
+        unsigned __int128 p0_1 = (unsigned __int128)x0_1 * y0_1;
+        unsigned __int128 p1_0 = (unsigned __int128)s0_0 * wad;
+        unsigned __int128 p1_1 = p1_0 + diff_p1 - (s0_1 < s0_0 ? ((unsigned __int128)wad << 64) : 0);
+        acc0 += s0_0 ^ s1_0 ^ (uint64_t)(p0_0 >> 64) ^ (uint64_t)(p1_0 >> 64) ^ ((uint64_t)p0_0 >> 32) ^ ((uint64_t)p1_0 >> 32);
+        acc1 += s0_1 ^ s1_1 ^ (uint64_t)(p0_1 >> 64) ^ (uint64_t)(p1_1 >> 64) ^ ((uint64_t)p0_1 >> 32) ^ ((uint64_t)p1_1 >> 32);
+        x0_e += step_x0;
+        x1_y1_e += step_x1_y1;
+    }
+    uint64_t total = acc0 + acc1;
+    for (; i < N; ++i) {
+        uint64_t x0 = i * m0 + c0, x1 = i * m1 + 3ULL;
+        uint64_t y0 = (i ^ 0x5555555555555555ULL) * m2 + 7ULL, y1 = i * m3 + 11ULL;
+        uint64_t s0 = x0 + y0, s1 = x1 + y1 + (s0 < x0);
+        unsigned __int128 p0 = (unsigned __int128)x0 * y0, p1 = (unsigned __int128)s0 * wad;
+        total += s0 ^ s1 ^ (uint64_t)(p0 >> 64) ^ (uint64_t)(p1 >> 64) ^ ((uint64_t)p0 >> 32) ^ ((uint64_t)p1 >> 32);
+    }
+    return total;
+#else
+    const uint64_t step_x0 = 4ULL * m0, step_x1_y1 = 4ULL * (m1 + m3);
+    const uint64_t diff_x0 = m0 - m2;
+    const uint64_t diff_x0_2 = 2ULL * (m0 + m2);
+    const unsigned __int128 diff_p1 = (unsigned __int128)diff_x0 * wad;
+    const unsigned __int128 diff_p1_2 = (unsigned __int128)diff_x0_2 * wad;
+    uint64_t acc0 = 0ULL, acc1 = 0ULL, acc2 = 0ULL, acc3 = 0ULL;
+    uint64_t x0_e = c0, x1_y1_e = 14ULL;
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        uint64_t y0_0 = (i ^ 0x5555555555555555ULL) * m2 + 7ULL;
+        uint64_t y0_1 = y0_0 - m2;
+        uint64_t y0_2 = y0_0 + 2ULL * m2;
+        uint64_t y0_3 = y0_0 + m2;
+        uint64_t x0_0 = x0_e, x0_1 = x0_e + m0, x0_2 = x0_e + 2ULL * m0, x0_3 = x0_e + 3ULL * m0;
+        uint64_t s0_0 = x0_0 + y0_0, s0_1 = s0_0 + diff_x0, s0_2 = x0_2 + y0_2, s0_3 = s0_2 + diff_x0;
+        uint64_t s1_0 = x1_y1_e + (s0_0 < x0_0);
+        uint64_t s1_1 = x1_y1_e + (m1 + m3) + (s0_1 < x0_1);
+        uint64_t s1_2 = x1_y1_e + 2ULL * (m1 + m3) + (s0_2 < x0_2);
+        uint64_t s1_3 = x1_y1_e + 3ULL * (m1 + m3) + (s0_3 < x0_3);
+        unsigned __int128 p0_0 = (unsigned __int128)x0_0 * y0_0;
+        unsigned __int128 p0_1 = (unsigned __int128)x0_1 * y0_1;
+        unsigned __int128 p0_2 = (unsigned __int128)x0_2 * y0_2;
+        unsigned __int128 p0_3 = (unsigned __int128)x0_3 * y0_3;
+        unsigned __int128 p1_0 = (unsigned __int128)s0_0 * wad;
+        unsigned __int128 p1_1 = p1_0 + diff_p1 - (s0_1 < s0_0 ? ((unsigned __int128)wad << 64) : 0);
+        unsigned __int128 p1_2 = p1_0 + diff_p1_2 - (s0_2 < s0_0 ? ((unsigned __int128)wad << 64) : 0);
+        unsigned __int128 p1_3 = p1_2 + diff_p1 - (s0_3 < s0_2 ? ((unsigned __int128)wad << 64) : 0);
+        acc0 += s0_0 ^ s1_0 ^ (uint64_t)(p0_0 >> 64) ^ (uint64_t)(p1_0 >> 64) ^ ((uint64_t)p0_0 >> 32) ^ ((uint64_t)p1_0 >> 32);
+        acc1 += s0_1 ^ s1_1 ^ (uint64_t)(p0_1 >> 64) ^ (uint64_t)(p1_1 >> 64) ^ ((uint64_t)p0_1 >> 32) ^ ((uint64_t)p1_1 >> 32);
+        acc2 += s0_2 ^ s1_2 ^ (uint64_t)(p0_2 >> 64) ^ (uint64_t)(p1_2 >> 64) ^ ((uint64_t)p0_2 >> 32) ^ ((uint64_t)p1_2 >> 32);
+        acc3 += s0_3 ^ s1_3 ^ (uint64_t)(p0_3 >> 64) ^ (uint64_t)(p1_3 >> 64) ^ ((uint64_t)p0_3 >> 32) ^ ((uint64_t)p1_3 >> 32);
+        x0_e += step_x0;
+        x1_y1_e += step_x1_y1;
+    }
+    uint64_t total = (acc0 + acc1) + (acc2 + acc3);
+    for (; i < N; ++i) {
+        uint64_t x0 = i * m0 + c0, x1 = i * m1 + 3ULL;
+        uint64_t y0 = (i ^ 0x5555555555555555ULL) * m2 + 7ULL, y1 = i * m3 + 11ULL;
+        uint64_t s0 = x0 + y0, s1 = x1 + y1 + (s0 < x0);
+        unsigned __int128 p0 = (unsigned __int128)x0 * y0, p1 = (unsigned __int128)s0 * wad;
+        total += s0 ^ s1 ^ (uint64_t)(p0 >> 64) ^ (uint64_t)(p1 >> 64) ^ ((uint64_t)p0 >> 32) ^ ((uint64_t)p1 >> 32);
+    }
+    return total;
+#endif
+}
+
 uint64_t ln_holdout_bitwise_cpu(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL, i26 = 0ULL;
 #if defined(__clang__)
@@ -487,6 +572,7 @@ int main(int argc, char** argv) {
     }
     RUN_BENCH("evm_gas_schedule_u64", ln_evm_gas_schedule_u64_cpu(10000000ULL));
     RUN_BENCH("keccak256_sponge_u64", ln_keccak256_sponge_u64_cpu(2000000ULL));
+    RUN_BENCH("uint256_wad_muldiv_u64", ln_uint256_wad_muldiv_u64_cpu(5000000ULL));
     RUN_BENCH("holdout_bitwise", ln_holdout_bitwise_cpu(10000000ULL));
     RUN_BENCH("holdout_loop_bounds", ln_holdout_loop_bounds_cpu(10000000ULL));
     return 0;

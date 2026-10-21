@@ -231,6 +231,47 @@ partial def keccakLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt
 def benchKeccak256SpongeU64 (n : UInt64) : UInt64 :=
   (keccakLoop 0 n (0, 0)).1
 
+-- 9. uint256_wad_muldiv_u64 (N = 5,000,000)
+-- Standard Lean 4 baseline: models Verity 2.0 `TickLib.wMulDown` + `UInt256BitVecBridge.lean`
+-- multi-limb 128-bit carry and 64x64->128 widening multiply via 32-bit schoolbook split in pure UInt64.
+@[inline]
+def mul128HiLo (a b : UInt64) : UInt64 × UInt64 :=
+  let mask32 : UInt64 := 0xFFFFFFFF
+  let a0 := a &&& mask32
+  let a1 := a >>> 32
+  let b0 := b &&& mask32
+  let b1 := b >>> 32
+  let p00 := a0 * b0
+  let p01 := a0 * b1
+  let p10 := a1 * b0
+  let p11 := a1 * b1
+  let mid := (p00 >>> 32) + (p01 &&& mask32) + (p10 &&& mask32)
+  let lo := (p00 &&& mask32) ||| (mid <<< 32)
+  let hi := p11 + (p01 >>> 32) + (p10 >>> 32) + (mid >>> 32)
+  (lo, hi)
+
+@[inline]
+def uint256WadStep (i : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  let x0 := i * 6364136223846793005 + 1442695040888963407
+  let x1 := i * 2862933555777941757 + 3
+  let y0 := (i ^^^ 0x5555555555555555) * 11400714819323198485 + 7
+  let y1 := i * 3266489917 + 11
+  let s0 := x0 + y0
+  let carry : UInt64 := if s0 < x0 then 1 else 0
+  let s1 := x1 + y1 + carry
+  let (lo0, hi0) := mul128HiLo x0 y0
+  let (lo1, hi1) := mul128HiLo s0 1000000000000000000
+  let stepVal := s0 ^^^ s1 ^^^ hi0 ^^^ hi1 ^^^ (lo0 >>> 32) ^^^ (lo1 >>> 32)
+  (acc.1 + stepVal, acc.2 ^^^ s1)
+
+partial def uint256WadLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  if i >= n then acc
+  else uint256WadLoop (i + 1) n (applyStep uint256WadStep i acc)
+
+@[noinline]
+def benchUint256WadMuldivU64 (n : UInt64) : UInt64 :=
+  (uint256WadLoop 0 n (0, 0)).1
+
 -- Holdout 1: holdout_bitwise
 partial def holdoutBitwiseLoop (i : UInt64) (n : UInt64) (acc : UInt64) : UInt64 :=
   if i >= n then acc
@@ -328,6 +369,13 @@ def main (args : List String) : IO Unit := do
     let t1 ← IO.monoNanosNow
     let dt := (t1 - t0).toFloat / 1000000.0
     IO.println s!"BENCH keccak256_sponge_u64 checksum={c} time_ms={dt}"
+
+  if filter == "all" || filter == "uint256_wad_muldiv_u64" then
+    let t0 ← IO.monoNanosNow
+    let c ← forceIO (benchUint256WadMuldivU64 (5000000 + z))
+    let t1 ← IO.monoNanosNow
+    let dt := (t1 - t0).toFloat / 1000000.0
+    IO.println s!"BENCH uint256_wad_muldiv_u64 checksum={c} time_ms={dt}"
 
   if filter == "all" || filter == "holdout_bitwise" then
     let t0 ← IO.monoNanosNow
