@@ -171,6 +171,112 @@ def extractDeclUpperBoundHints (d : LNIRDecl) : List (VarId × UInt64) :=
   let paramIds := d.params.map (·.id)
   extractUpperBoundHints paramIds [] [] d.body
 
+/-- Relational ordering / load-factor constraint hint extracted from a precondition guard. -/
+inductive RelationalHint where
+  | leVar       (lhsVar rhsVar : VarId) (offset : UInt64) -- lhsVar + offset ≤ rhsVar
+  | leConstLow  (var : VarId) (minVal : UInt64)           -- minVal ≤ var
+  | leScaledVar (scale : UInt64) (lhsVar rhsVar : VarId)  -- scale * lhsVar ≤ rhsVar
+  deriving Repr, DecidableEq, Inhabited, BEq
+
+/-- Extract relational ordering (`x ≤ y`, `c ≤ x`, `2 * count ≤ cap`) and conjunction (`&&` / `select`)
+    hints from precondition guards where `elseBranch` is a vacuous pass. -/
+partial def extractRelationalHintsFromCond (paramIds : List VarId)
+    (bindings : List (VarId × LNIRExpr)) (condVar : VarId) : List RelationalHint :=
+  match bindings.lookup condVar with
+  | some (.scalar (.binOp .le (.var x) (.var y))) =>
+    if paramIds.contains x && paramIds.contains y && x != y then
+      [.leVar x y 0]
+    else []
+  | some (.scalar (.binOp .lt (.var x) (.var y))) =>
+    if paramIds.contains x && paramIds.contains y && x != y then
+      [.leVar x y 1]
+    else []
+  | some (.scalar (.binOp .le (.constU64 c) (.var x))) =>
+    if paramIds.contains x then [.leConstLow x c] else []
+  | some (.scalar (.binOp .lt (.constU64 c) (.var x))) =>
+    if paramIds.contains x then [.leConstLow x (c + 1)] else []
+  | some (.scalar (.binOp .le (.binOp .mul (.constU64 s) (.var x)) (.var y))) =>
+    if paramIds.contains x && paramIds.contains y && s > 0 then
+      [.leScaledVar s x y]
+    else []
+  | some (.scalar (.binOp .le (.binOp .mul (.var x) (.constU64 s)) (.var y))) =>
+    if paramIds.contains x && paramIds.contains y && s > 0 then
+      [.leScaledVar s x y]
+    else []
+  | some (.scalar (.binOp .bitAnd (.var c1) (.var c2))) =>
+    extractRelationalHintsFromCond paramIds bindings c1 ++
+    extractRelationalHintsFromCond paramIds bindings c2
+  | some (.scalar (.select (.var c1) (.var c2) (.constBool false)))
+  | some (.scalar (.select (.var c1) (.var c2) (.constU64 0))) =>
+    extractRelationalHintsFromCond paramIds bindings c1 ++
+    extractRelationalHintsFromCond paramIds bindings c2
+  | _ => []
+
+/-- Walk `LNIRCode` and collect all `RelationalHint`s from vacuous-else precondition guards. -/
+def extractRelationalHints (paramIds : List VarId) (bindings : List (VarId × LNIRExpr))
+    (trueVars : List VarId) : LNIRCode → List RelationalHint
+  | .letBind dst _ val k =>
+    let trueVars' :=
+      match val with
+      | .scalar (.constBool true) | .scalar (.constU64 1) => dst :: trueVars
+      | _ => trueVars
+    extractRelationalHints paramIds ((dst, val) :: bindings) trueVars' k
+  | .ite condVar thenBranch elseBranch =>
+    let rest := extractRelationalHints paramIds bindings trueVars thenBranch
+    if isVacuousTrueBranch trueVars elseBranch then
+      extractRelationalHintsFromCond paramIds bindings condVar ++ rest
+    else
+      rest
+  | _ => []
+
+/-- Extract all relational ordering and load-factor hints from an `LNIRDecl`. -/
+def extractDeclRelationalHints (d : LNIRDecl) : List RelationalHint :=
+  let paramIds := d.params.map (·.id)
+  extractRelationalHints paramIds [] [] d.body
+
+/-- Apply relational polytope projection (`c ≤ x`, `x + δ ≤ y`, `s * x ≤ y`) to a candidate `VarEnv`
+    so ordered offset chains (`16 ≤ o0 ≤ o1 ≤ o2 ≤ o3 ≤ totalLen`) and load-factor guards (`2 * count ≤ cap`)
+    sample directly inside the valid polytope without suffering `VacuousPass`. -/
+def applyRelationalHintsToEnv (hints : List RelationalHint) (sampleIdx : Nat) (env : VarEnv) : VarEnv :=
+  let env1 := hints.foldl (fun cur h =>
+    match h with
+    | .leConstLow x minVal =>
+      match cur x with
+      | some (.u64 vx) =>
+        if vx < minVal then
+          let span := (sampleIdx.toUInt64 * 17 + vx) % 64
+          cur.bind x (.u64 (minVal + span))
+        else cur
+      | _ => cur
+    | _ => cur
+  ) env
+  let env2 := (List.range 4).foldl (fun cur _ =>
+    hints.foldl (fun acc h =>
+      match h with
+      | .leVar lhs rhs off =>
+        match acc lhs, acc rhs with
+        | some (.u64 vl), some (.u64 vr) =>
+          let minRhs := vl + off
+          if vr < minRhs then
+            let delta := (vr % 64)
+            acc.bind rhs (.u64 (minRhs + delta))
+          else acc
+        | _, _ => acc
+      | .leScaledVar scale lhs rhs =>
+        match acc lhs, acc rhs with
+        | some (.u64 vl), some (.u64 vr) =>
+          if scale > 0 then
+            let cap := if vr == 0 then 16 else vr
+            let maxLhs := cap / scale
+            let vlBounded := if vl > maxLhs then vl % (maxLhs + 1) else vl
+            (acc.bind rhs (.u64 cap)).bind lhs (.u64 vlBounded)
+          else acc
+        | _, _ => acc
+      | _ => acc
+    ) cur
+  ) env1
+  env2
+
 /-- Propagate equality constraints (`x := rhs`) from precondition guards directly into `d.body`. -/
 def propagatePreconditionEqualities (d : LNIRDecl) : LNIRDecl × List ConstraintSub :=
   let subs := extractDeclConstraints d
@@ -285,10 +391,11 @@ def genFastCheckParamVal (sampleIdx : Nat) (paramIdx : Nat) (ty : LNIRType) (st 
       (.u64 r, st)
 
 /-- Build a candidate `(VarEnv × HeapState)` for declaration `d` at `sampleIdx`,
-    applying equality constraint substitutions `subs` and upper-bound range folding `upperHints`
-    when `useConstraintProp = true`. -/
+    applying equality constraint substitutions `subs`, upper-bound range folding `upperHints`,
+    and relational polytope projection `relHints` when `useConstraintProp = true`. -/
 def buildFastCheckSample (d : LNIRDecl) (subs : List ConstraintSub) (sampleIdx : Nat)
-    (useConstraintProp : Bool) (upperHints : List (VarId × UInt64) := []) : VarEnv × HeapState :=
+    (useConstraintProp : Bool) (upperHints : List (VarId × UInt64) := [])
+    (relHints : List RelationalHint := []) : VarEnv × HeapState :=
   let (env0, st0, _) := d.params.foldl (fun (curEnv, curSt, pIdx) p =>
     let (v, nextSt) := genFastCheckParamVal sampleIdx pIdx p.ty curSt
     let vBounded :=
@@ -303,11 +410,12 @@ def buildFastCheckSample (d : LNIRDecl) (subs : List ConstraintSub) (sampleIdx :
   if !useConstraintProp then
     (env0, st0)
   else
+    let envRel := if relHints.isEmpty then env0 else applyRelationalHintsToEnv relHints sampleIdx env0
     let envProp := subs.foldl (fun curEnv sub =>
       match evalScalarExpr curEnv sub.rhsExpr with
       | .ok v => curEnv.bind sub.lhsVar v
       | .error _ => curEnv
-    ) env0
+    ) envRel
     (envProp, st0)
 
 /-! ## 3. Certified Counterexample Validator (`certifyCounterexample`) & Soundness Theorem -/
@@ -472,10 +580,12 @@ def runFastCheckDecl (d : LNIRDecl) (numSamples : Nat := 4096) (useConstraintPro
     if useConstraintProp then propagatePreconditionEqualities d else (d, [])
   let upperHints :=
     if useConstraintProp then extractDeclUpperBoundHints d else []
+  let relHints :=
+    if useConstraintProp then extractDeclRelationalHints d else []
   let activeDecl := if useConstraintProp then dProp else d
   let fuel : Nat := 128
   let (satCount, cexOpt) := (List.range numSamples).foldl (fun (satAcc, foundOpt) sampleIdx =>
-    let (env, st) := buildFastCheckSample d subs sampleIdx useConstraintProp upperHints
+    let (env, st) := buildFastCheckSample d subs sampleIdx useConstraintProp upperHints relHints
     let precondOk := checkPreconditionSatisfied fuel [] env st d.body
     let satAcc' := if precondOk then satAcc + 1 else satAcc
     match foundOpt with
@@ -502,12 +612,12 @@ def runFastCheckDecl (d : LNIRDecl) (numSamples : Nat := 4096) (useConstraintPro
     { declName := d.name, status := "counterexample_found", passed := false,
       counterexampleFound := true, certifiedCounterexample := true, vacuousPass := isVacuous,
       samplesTested := numSamples, satisfiedPreconditionsCount := satCount,
-      constraintsPropagated := subs.length, witnessSummary := s!"sample#{idx}: {witnessStr}" }
+      constraintsPropagated := subs.length + relHints.length, witnessSummary := s!"sample#{idx}: {witnessStr}" }
   | none =>
     { declName := d.name, status := if isVacuous then "vacuous_pass" else "passed",
       passed := !isVacuous, counterexampleFound := false, certifiedCounterexample := false,
       vacuousPass := isVacuous, samplesTested := numSamples, satisfiedPreconditionsCount := satCount,
-      constraintsPropagated := subs.length, witnessSummary := "" }
+      constraintsPropagated := subs.length + relHints.length, witnessSummary := "" }
 
 /-- Run FastCheck across all declarations in an `LNIRModule`. -/
 def runFastCheckModule (m : LNIRModule) (numSamples : Nat := 4096) (useConstraintProp : Bool := true) :
@@ -973,9 +1083,13 @@ end LeanNative.Backend.FastCheck
 namespace LeanNative.Backend
   export FastCheck (
     ConstraintSub
+    RelationalHint
     extractDeclConstraints
     extractUpperBoundHints
     extractDeclUpperBoundHints
+    extractRelationalHints
+    extractDeclRelationalHints
+    applyRelationalHintsToEnv
     propagatePreconditionEqualities
     boundaryU64Values
     boundaryU256Values

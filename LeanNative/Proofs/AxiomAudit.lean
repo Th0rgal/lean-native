@@ -57,6 +57,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Proofs.eval_unboxTupleSROA_refines
   , ``LeanNative.Proofs.unboxTupleLetChain_refines
   , ``LeanNative.Proofs.unboxTupleLetChain1_refines
+  , ``LeanNative.Proofs.unboxTupleDeadElim_refines
+  , ``LeanNative.Proofs.unboxNestedTupleDeadElim_refines
   , ``LeanNative.Proofs.hoistExclusivity_sound
   , ``LeanNative.Proofs.eval_hoistExclusivity_refines
   , ``LeanNative.Proofs.hoistExclusivityPreheader_refines
@@ -159,6 +161,12 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.dotNat_le_of_pointwise_le
   , ``LeanNative.Spec.farkas_weighted_rows_le
   , ``LeanNative.Spec.checkFarkasNat_sound
+  , ``LeanNative.Spec.MetaGateSpec.rejects_unsafe
+  , ``LeanNative.Spec.sampleMonotoneOffsets4_valid
+  , ``LeanNative.Spec.sampleLoadFactorHalf_valid
+  , ``LeanNative.Spec.subSliceView_valid
+  , ``LeanNative.Spec.gpu_memory_headroom_gate_sound
+  , ``LeanNative.Spec.gpu_oom_falls_back_to_cpu_simd
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

@@ -33,6 +33,11 @@ structure MetaGateSpec (Input : Type) (Safe : Input → Prop) where
   nonVacuous : gate posWitness = true
   tight : gate negWitness = false
 
+theorem MetaGateSpec.rejects_unsafe {Input : Type} {Safe : Input → Prop}
+    (M : MetaGateSpec Input Safe) (x : Input) (h_unsafe : ¬ Safe x) :
+    M.gate x = false :=
+  Bool.eq_false_iff.mpr (fun h_ok => h_unsafe (M.sound x h_ok))
+
 def evalWithUntrustedOptPlugin {Decl Cert : Type}
     (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool) (d : Decl) : Decl :=
   match plugin d with
@@ -44,7 +49,12 @@ theorem untrusted_opt_plugin_tv_gate_sound {Decl Cert : Type}
     (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool)
     (h_gate_sound : ∀ d cand cert, verifyGate d cand cert = true → Refines d cand) (d : Decl) :
     Refines d (evalWithUntrustedOptPlugin plugin verifyGate d) := by
-  unfold evalWithUntrustedOptPlugin; split <;> first | exact h_refl d | (split <;> first | exact h_refl d | exact h_gate_sound d _ _ ‹_›)
+  unfold evalWithUntrustedOptPlugin
+  split
+  · split
+    · exact h_gate_sound d _ _ ‹_›
+    · exact h_refl d
+  · exact h_refl d
 
 theorem untrusted_opt_plugin_timeout_fallback {Decl Cert : Type}
     (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool)
@@ -238,13 +248,16 @@ def checkPRVerificationGate (inp : PRVerificationInput) : Bool :=
   decide (inp.expectedSpecHash = inp.actualSpecHash) && decide (inp.expectedTestSuiteHash = inp.actualTestSuiteHash) &&
   decide (inp.forbiddenAxiomsCount = 0) && inp.tvAllPassed
 
-theorem pr_spec_pinning_blocks_spec_tampering (inp : PRVerificationInput) (h_tamper : inp.expectedSpecHash ≠ inp.actualSpecHash) :
+theorem pr_spec_pinning_blocks_spec_tampering (inp : PRVerificationInput)
+    (h_tamper : inp.expectedSpecHash ≠ inp.actualSpecHash) :
     checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_tamper]
 
-theorem pr_spec_pinning_blocks_test_tampering (inp : PRVerificationInput) (h_tamper : inp.expectedTestSuiteHash ≠ inp.actualTestSuiteHash) :
+theorem pr_spec_pinning_blocks_test_tampering (inp : PRVerificationInput)
+    (h_tamper : inp.expectedTestSuiteHash ≠ inp.actualTestSuiteHash) :
     checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_tamper]
 
-theorem pr_spec_pinning_blocks_forbidden_axioms (inp : PRVerificationInput) (h_ax : inp.forbiddenAxiomsCount ≠ 0) :
+theorem pr_spec_pinning_blocks_forbidden_axioms (inp : PRVerificationInput)
+    (h_ax : inp.forbiddenAxiomsCount ≠ 0) :
     checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_ax]
 
 theorem pr_spec_pinning_gate_sound (inp : PRVerificationInput) :
@@ -270,8 +283,14 @@ def add64CarrySpec (x y : UInt64) : UInt64 :=
   ((x >>> 32) + (y >>> 32) + (((x &&& 0xffffffff) + (y &&& 0xffffffff)) >>> 32)) >>> 32
 
 def mul64HiSpec (x y : UInt64) : UInt64 :=
-  let x_lo := x &&& 0xffffffff; let x_hi := x >>> 32; let y_lo := y &&& 0xffffffff; let y_hi := y >>> 32
-  let p0 := x_lo * y_lo; let p1 := x_lo * y_hi; let p2 := x_hi * y_lo; let p3 := x_hi * y_hi
+  let x_lo := x &&& 0xffffffff
+  let x_hi := x >>> 32
+  let y_lo := y &&& 0xffffffff
+  let y_hi := y >>> 32
+  let p0 := x_lo * y_lo
+  let p1 := x_lo * y_hi
+  let p2 := x_hi * y_lo
+  let p3 := x_hi * y_hi
   p3 + (p1 >>> 32) + (p2 >>> 32) + (((p0 >>> 32) + (p1 &&& 0xffffffff) + (p2 &&& 0xffffffff)) >>> 32)
 
 def evalLimbMul256Lo (a b : UInt256) : UInt256 :=
@@ -294,11 +313,13 @@ def exceptValEq (r1 r2 : Except UBError Val) : Bool :=
   match r1, r2 with | .ok v1, .ok v2 => v1 == v2 | .error e1, .error e2 => e1 == e2 | _, _ => false
 
 def checkAllSemanticMutantsDiscriminated : Bool :=
-  let c1 := exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 0xffffffffffffffff)) && !(exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 1)))
+  let c1 := exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 0xffffffffffffffff)) &&
+            !(exceptValEq (evalUnaryOp .not (.u64 0)) (.ok (.u64 1)))
   let c2 := exceptValEq (evalBinOp .sar (.u64 0x8000000000000000) (.u64 4)) (.ok (.u64 0xf800000000000000)) &&
             !(exceptValEq (evalBinOp .sar (.u64 0x8000000000000000) (.u64 4)) (evalBinOp .shr (.u64 0x8000000000000000) (.u64 4)))
   let c3 := evalLimbMul256Lo UInt256.max UInt256.max == ⟨1, 0, 0, 0⟩ && evalLimbMul256Lo UInt256.max UInt256.max != ⟨1, 0, 0, 4⟩
-  let mulDivDown64 : UInt64 := (5 * 2) / 3; let mulDivUp64 : UInt64 := (5 * 2 + (3 - 1)) / 3
+  let mulDivDown64 : UInt64 := (5 * 2) / 3
+  let mulDivUp64 : UInt64 := (5 * 2 + (3 - 1)) / 3
   let c4 := mulDivDown64 == 3 && mulDivUp64 == 4 && mulDivDown64 != mulDivUp64
   let c5 := add64CarrySpec 0xffffffffffffffff 1 == 1 && add64CarrySpec 0xffffffffffffffff 0 == 0
   c1 && c2 && c3 && c4 && c5
@@ -308,16 +329,23 @@ theorem meta_limb256_mul_lo_homomorphism : evalLimbMul256Lo UInt256.max UInt256.
 
 def checkUnboxTupleDeadElimCanary : Bool :=
   let env := (VarEnv.empty.bind 0 (.u64 42)).bind 1 (.u64 99)
+  let srcCode : LNIRCode :=
+    .letBind 10 (.tuple [.i64, .i64]) (.mkTuple [0, 1])
+      (.letBind 11 .i64 (.projTuple 10 0) (.ret 11))
+  let tgtCode : LNIRCode := .letBind 11 .i64 (.scalar (.var 0)) (.ret 11)
   exceptValEq
-    ((evalCode 0 env HeapState.empty (.letBind 10 (.tuple [.i64, .i64]) (.mkTuple [0, 1]) (.letBind 11 .i64 (.projTuple 10 0) (.ret 11)))).map Prod.fst)
-    ((evalCode 0 env HeapState.empty (.letBind 11 .i64 (.scalar (.var 0)) (.ret 11))).map Prod.fst)
+    ((evalCode 0 env HeapState.empty srcCode).map Prod.fst)
+    ((evalCode 0 env HeapState.empty tgtCode).map Prod.fst)
 theorem meta_unbox_tuple_full_elim_sound : checkUnboxTupleDeadElimCanary = true := rfl
 
 def checkSuperoptShiftMaskAndFmaCanary : Bool :=
-  let x : UInt64 := 0x123456789abcdef7; let k : UInt64 := 4
+  let x : UInt64 := 0x123456789abcdef7
+  let k : UInt64 := 4
   let cShiftMask := ((x >>> k) <<< k) == (x &&& (0xffffffffffffffff <<< k)) && ((x >>> k) <<< k) != x
   let env := ((VarEnv.empty.bind 0 (.u64 7)).bind 1 (.u64 9)).bind 2 (.u64 11)
-  let cFma := exceptValEq (evalScalarExpr env (.binOp .add (.binOp .mul (.var 0) (.var 1)) (.var 2))) (evalScalarExpr env (.fma (.var 0) (.var 1) (.var 2)))
+  let cFma := exceptValEq
+    (evalScalarExpr env (.binOp .add (.binOp .mul (.var 0) (.var 1)) (.var 2)))
+    (evalScalarExpr env (.fma (.var 0) (.var 1) (.var 2)))
   let cRotl := ((x <<< 13) ||| (x >>> 51)) == ((x >>> 51) ||| (x <<< 13))
   cShiftMask && cFma && cRotl
 theorem meta_double_shift_mask_and_fma_sound : checkSuperoptShiftMaskAndFmaCanary = true := rfl
@@ -593,6 +621,83 @@ theorem checkFarkasNat_sound (weights : List Nat) (matrix : List (List Nat)) (rh
     exact Nat.le_trans h_le_x (h_rows i hi)
   have h_farkas := farkas_weighted_rows_le weights matrix rhs x_pad h_rows_xpad
   exact Nat.le_trans h_pw (Nat.le_trans h_farkas h_cert.2)
+
+/-! ## 8. Relational Polytope Sampling, Zero-Copy ByteSlice & Grace-Blackwell Headroom Gate -/
+
+/-- Relational monotone chain predicate (`lo ≤ o0 ≤ o1 ≤ o2 ≤ o3 ≤ totalLen`) for SSZ/RLP offsets. -/
+def checkMonotoneOffsets4 (lo o0 o1 o2 o3 totalLen : Nat) : Bool :=
+  decide (lo ≤ o0) && decide (o0 ≤ o1) && decide (o1 ≤ o2) && decide (o2 ≤ o3) && decide (o3 ≤ totalLen)
+
+/-- Project raw draws `(d0, d1, d2, d3)` into the monotone polytope `lo ≤ o0 ≤ o1 ≤ o2 ≤ o3 ≤ lo + d0 + d1 + d2 + d3`. -/
+def sampleMonotoneOffsets4 (lo d0 d1 d2 d3 : Nat) : Nat × Nat × Nat × Nat :=
+  let o0 := lo + d0
+  let o1 := o0 + d1
+  let o2 := o1 + d2
+  let o3 := o2 + d3
+  (o0, o1, o2, o3)
+
+theorem sampleMonotoneOffsets4_valid (lo d0 d1 d2 d3 extra : Nat) :
+    let (o0, o1, o2, o3) := sampleMonotoneOffsets4 lo d0 d1 d2 d3
+    checkMonotoneOffsets4 lo o0 o1 o2 o3 (o3 + extra) = true := by
+  simp [sampleMonotoneOffsets4, checkMonotoneOffsets4]
+
+/-- Hash-table load-factor invariant `2 * count ≤ cap` (`count ≤ cap / 2`). -/
+def checkLoadFactorHalf (count cap : Nat) : Bool :=
+  decide (2 * count ≤ cap)
+
+theorem sampleLoadFactorHalf_valid (rawCount cap : Nat) (h_pos : 0 < cap / 2 + 1) :
+    checkLoadFactorHalf (rawCount % (cap / 2 + 1)) cap = true := by
+  simp [checkLoadFactorHalf]
+  have h_lt : rawCount % (cap / 2 + 1) < cap / 2 + 1 := Nat.mod_lt rawCount h_pos
+  omega
+
+/-- Zero-copy `ByteSlice` view `(offset, len)` inside a backing buffer of length `backingLen`. -/
+structure ByteSliceView where
+  backingLen : Nat
+  offset     : Nat
+  len        : Nat
+  deriving Repr, DecidableEq, BEq
+
+def isValidByteSlice (s : ByteSliceView) : Bool :=
+  decide (s.offset + s.len ≤ s.backingLen)
+
+def subSliceView (s : ByteSliceView) (subOff subLen : Nat) : ByteSliceView :=
+  { backingLen := s.backingLen, offset := s.offset + subOff, len := subLen }
+
+theorem subSliceView_valid (s : ByteSliceView) (subOff subLen : Nat)
+    (h_parent : isValidByteSlice s = true) (h_sub : subOff + subLen ≤ s.len) :
+    isValidByteSlice (subSliceView s subOff subLen) = true := by
+  simp [isValidByteSlice, subSliceView] at h_parent ⊢
+  omega
+
+/-- Grace-Blackwell `cuMemGetInfo` pre-flight memory headroom gate. -/
+structure GpuMemoryHeadroomInput where
+  freeBytes     : Nat
+  requiredBytes : Nat
+  safetyMargin  : Nat
+  deriving Repr, DecidableEq, BEq
+
+def hasSufficientGpuMemory (inp : GpuMemoryHeadroomInput) : Bool :=
+  decide (inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes)
+
+theorem gpu_memory_headroom_gate_sound (inp : GpuMemoryHeadroomInput) :
+    hasSufficientGpuMemory inp = true ↔ inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes := by
+  simp [hasSufficientGpuMemory]
+
+def gpuMemoryHeadroomMetaSpec : MetaGateSpec GpuMemoryHeadroomInput
+    (fun inp => inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes) where
+  gate := hasSufficientGpuMemory
+  sound := fun inp => (gpu_memory_headroom_gate_sound inp).mp
+  complete := fun inp => (gpu_memory_headroom_gate_sound inp).mpr
+  posWitness := ⟨4096, 1024, 2048⟩
+  negWitness := ⟨2048, 1024, 2048⟩
+  nonVacuous := rfl
+  tight := rfl
+
+theorem gpu_oom_falls_back_to_cpu_simd (inp : GpuMemoryHeadroomInput)
+    (h_low : inp.freeBytes < inp.requiredBytes + inp.safetyMargin) :
+    hasSufficientGpuMemory inp = false :=
+  gpuMemoryHeadroomMetaSpec.rejects_unsafe inp (Nat.not_le.mpr h_low)
 
 end LeanNative.Spec
 

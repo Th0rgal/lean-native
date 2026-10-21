@@ -35,15 +35,15 @@ if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean..."
   turbo-lean --json audit-spec LeanNative/Spec.lean > /tmp/ln_ci_audit_spec.json
   grep -q '"vacuous_specs": 0' /tmp/ln_ci_audit_spec.json
-  grep -q '"tight_specs": 47' /tmp/ln_ci_audit_spec.json
-  echo "  -> turbo-lean audit-spec: 47/47 tight in Spec.lean (0 vacuous specs)!"
+  grep -q '"tight_specs": 53' /tmp/ln_ci_audit_spec.json
+  echo "  -> turbo-lean audit-spec: 53/53 tight in Spec.lean (0 vacuous specs)!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (134 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (142 theorems) & Self-Tests..."
 $CORE_BIN self-test
 $FULL_BIN self-test
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 134" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 142" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."

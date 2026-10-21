@@ -39,6 +39,23 @@ typedef struct lean_native_sarray_u64 {
     uint64_t m_data[];
 } lean_native_sarray_u64;
 
+/**
+ * Zero-copy ByteSlice view over a contiguous `uint8_t` buffer (`ByteArray` / SSZ / RLP payload).
+ */
+typedef struct lean_native_byte_slice {
+    const uint8_t* ptr;
+    size_t         len;
+} lean_native_byte_slice;
+
+static inline lean_native_byte_slice lean_native_make_byte_slice(const uint8_t* base, size_t total_len, size_t offset, size_t slice_len) {
+    lean_native_byte_slice s = { NULL, 0 };
+    if (base && offset <= total_len && slice_len <= total_len - offset) {
+        s.ptr = base + offset;
+        s.len = slice_len;
+    }
+    return s;
+}
+
 /* ============================================================================
  * Reference Counting, Exclusivity, & COW Buffer Management
  * ============================================================================ */
@@ -97,6 +114,13 @@ static inline size_t lean_native_sarray_len(const lean_native_sarray_u64* arr) {
  * Returns 1 if an NVIDIA CUDA GPU is initialized and ready for PTX execution, 0 otherwise.
  */
 int lean_native_gpu_available(void);
+
+/**
+ * Pre-flight CUDA / Grace-Blackwell unified memory headroom guard (`cuMemGetInfo`).
+ * Returns 1 if at least `required_bytes + LEAN_NATIVE_CUDA_MIN_FREE_BYTES` (default 2 GiB)
+ * of free device/unified memory is available, or 0 to trigger graceful CPU SIMD fallback.
+ */
+int lean_native_gpu_has_headroom(size_t required_bytes);
 
 /**
  * Returns a human-readable description of the active GPU device (or "CPU-Only Fallback").

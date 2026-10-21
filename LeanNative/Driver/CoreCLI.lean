@@ -695,14 +695,40 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   let telCount ← emitModuleTelemetryEvents telCfg .x86_64 true baseMod
   let telOk := telCount > 0
 
+  -- Test relational polytope sampling (`16 <= o0 <= o1 <= o2 <= o3`) + nested tuple SROA + GPU headroom gate
+  let relDecl : LNIRDecl := {
+    name := "ssz_monotone_offsets_bug"
+    params := [
+      { id := 0, name := "o0", ty := .i64, borrow := false },
+      { id := 1, name := "o1", ty := .i64, borrow := false }
+    ]
+    retTy := .i1
+    assurance := .verifiedKernelProof
+    isGpuCand := true
+    body :=
+      .letBind 10 .i1 (.scalar (.binOp .le (.constU64 16) (.var 0)))
+        (.letBind 11 .i1 (.scalar (.binOp .le (.var 0) (.var 1)))
+          (.letBind 12 .i1 (.scalar (.binOp .bitAnd (.var 10) (.var 11)))
+            (.letBind 13 .i1 (.scalar (.constBool true))
+              (.ite 12
+                (.letBind 14 .i1 (.scalar (.binOp .lt (.var 1) (.constU64 20))) (.ret 14))
+                (.ret 13)))))
+  }
+  let relRes := runFastCheckDecl relDecl 64 true
+  let relSamplingOk := relRes.counterexampleFound && relRes.certifiedCounterexample && !relRes.vacuousPass
+  let gpuHeadroomOk :=
+    LeanNative.Spec.hasSufficientGpuMemory ⟨4096, 1024, 2048⟩ &&
+    !(LeanNative.Spec.hasSufficientGpuMemory ⟨2048, 1024, 2048⟩) &&
+    LeanNative.Spec.isValidByteSlice (LeanNative.Spec.subSliceView ⟨64, 8, 32⟩ 4 16)
+
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
   IO.println s!"2. LNIR Wire & JSON Round-Trip     : {if roundTripWireOk && roundTripJsonOk then "PASSED" else "FAILED"}"
   IO.println s!"3. Certificate Chain Verification  : {if certReport.verified then "PASSED" else "FAILED"} ({certReport.certs.length} certs)"
   IO.println s!"4. Alive2 Symbolic TV Validation   : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)"
   IO.println s!"5. Enumerative Superoptimizer      : {if superoptOk then "PASSED" else "FAILED"} ({soReportX86.rewritesApplied} rewrites, cost {soReportX86.totalCostBefore}->{soReportX86.totalCostAfter})"
   IO.println s!"6. Segregated Plugins & Law 1/5    : {if pluginsOk && law5Ok then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
-  IO.println s!"7. FastCheck ConstraintProp vs Vac : {if fcPropOk && fcNaiveVacuousOk then "PASSED" else "FAILED"} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses})"
-  IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
+  IO.println s!"7. FastCheck ConstraintProp vs Vac : {if fcPropOk && fcNaiveVacuousOk && relSamplingOk then "PASSED" else "FAILED"} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses}, relPolytope=ok)"
+  IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid && gpuHeadroomOk then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
   IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
   IO.println s!"10. Google Cloud TPU v5e Codegen   : {if tpuCodegenOk then "PASSED" else "FAILED"} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
   IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {if mulDivOk then "PASSED" else "FAILED"} ((2^60 * 2^60) / 2^60 == 2^60)"
@@ -710,7 +736,8 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
 
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
-    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk &&
+    fcPropOk && fcNaiveVacuousOk && relSamplingOk && gpuHeadroomOk &&
+    metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
     IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="

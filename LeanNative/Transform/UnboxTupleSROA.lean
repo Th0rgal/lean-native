@@ -123,7 +123,15 @@ def optimizeCodeTupleSROAWithAliases
         | none => (.projTuple rootTupleVar idx, invalidateScalarAlias dst senv)
       | none => (.projTuple rootTupleVar idx, invalidateScalarAlias dst senv)
     let env' := invalidateTupleAlias dst env
-    .letBind dst ty val' (optimizeCodeTupleSROAWithAliases env' senvNext k)
+    let k' := optimizeCodeTupleSROAWithAliases env' senvNext k
+    match val' with
+    | .scalar (.var rootField) =>
+      if (env.lookup rootField).isSome && !(codeUsesVar dst k') then
+        k'
+      else
+        .letBind dst ty val' k'
+    | _ =>
+      .letBind dst ty val' k'
   | .letBind dst ty (.scalar (.var srcVar)) k =>
     let rootSrc := resolveScalarAlias 8 senv srcVar
     let env' := invalidateTupleAlias dst env

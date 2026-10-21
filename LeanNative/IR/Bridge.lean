@@ -300,9 +300,19 @@ def lowerImpureLetValue (lv : Lean.Compiler.LCNF.LetValue .impure) (retTy : LNIR
     if ctorInfo.name == ``Prod.mk || ctorInfo.name == ``MProd.mk || ctorInfo.name == ``PProd.mk then
       return .mkTuple argVars
     else
-      let objVars := argVars.take ctorInfo.size
-      let scalarVars := argVars.drop ctorInfo.size
-      return .allocCtor ctorInfo.cidx objVars scalarVars
+      let isSingleCtorStruct : Bool :=
+        match env.find? ctorInfo.name with
+        | some (.ctorInfo cval) =>
+          match env.find? cval.induct with
+          | some (.inductInfo ival) => ival.ctors.length == 1 && !ival.isRec
+          | _ => false
+        | _ => false
+      if isSingleCtorStruct && argVars.length ≤ 8 then
+        return .mkTuple argVars
+      else
+        let objVars := argVars.take ctorInfo.size
+        let scalarVars := argVars.drop ctorInfo.size
+        return .allocCtor ctorInfo.cidx objVars scalarVars
   | .oproj idx fvarId _ =>
     let v ← internFVar fvarId
     let vTy ← getVarType v
@@ -871,6 +881,121 @@ def ingestAllLocalDecls (moduleName : String := "LeanNative.Ingested") : Lean.Co
   let finalNames := if filteredImpure.isEmpty && extraNames.isEmpty then impureNames else (filteredImpure ++ extraNames)
   ingestModuleDecls finalNames moduleName
 
+/-- Compute the maximum fresh `VarId` in an `LNIRCode` block. -/
+partial def maxVarIdInCode : LNIRCode → VarId
+  | .letBind dst _ _ k => max dst (maxVarIdInCode k)
+  | .rawStore pv iv vv _ k => max (max pv iv) (max vv (maxVarIdInCode k))
+  | .incRef ov _ k | .decRef ov _ k => max ov (maxVarIdInCode k)
+  | .ite cv t e => max cv (max (maxVarIdInCode t) (maxVarIdInCode e))
+  | .seqFor iv lv hv av ai _ s k =>
+    max (max iv lv) (max (max hv av) (max ai (max (maxVarIdInCode s) (maxVarIdInCode k))))
+  | .parFor ov lv _ _ _ k => max (max ov lv) (maxVarIdInCode k)
+  | .ret v => v
+  | .unreachable => 0
+
+/-- Check whether `code` contains a recursive call to `fnName`. -/
+partial def codeCallsDecl (fnName : String) : LNIRCode → Bool
+  | .letBind _ _ (.call callee _ _ _) k => callee == fnName || codeCallsDecl fnName k
+  | .letBind _ _ _ k => codeCallsDecl fnName k
+  | .rawStore _ _ _ _ k => codeCallsDecl fnName k
+  | .incRef _ _ k | .decRef _ _ k => codeCallsDecl fnName k
+  | .ite _ t e => codeCallsDecl fnName t || codeCallsDecl fnName e
+  | .seqFor _ _ _ _ _ _ s k => codeCallsDecl fnName s || codeCallsDecl fnName k
+  | .parFor _ _ _ _ _ k => codeCallsDecl fnName k
+  | .ret _ | .unreachable => false
+
+/-- Check whether `code` is a simple straight-line/ite non-looping helper body suitable for
+    pre-LNIR $\delta$-normalization/inlining (`normalizeAndInlineLocalDefs`). -/
+partial def isSimpleInlinableBody (selfName : String) : LNIRCode → Bool
+  | .letBind _ _ (.call callee _ _ _) _ => callee != selfName && false
+  | .letBind _ _ _ k => isSimpleInlinableBody selfName k
+  | .ite _ t e => isSimpleInlinableBody selfName t && isSimpleInlinableBody selfName e
+  | .ret _ => true
+  | _ => false
+
+/-- Alpha-rename all `VarId`s in a `ScalarExpr` by adding `offset`, or mapping parameter ids via `paramMap`. -/
+def renameScalarExpr (paramMap : List (VarId × VarId)) (offset : VarId) : ScalarExpr → ScalarExpr
+  | .constU64 v => .constU64 v
+  | .constBool b => .constBool b
+  | .var id =>
+    match paramMap.lookup id with
+    | some argVar => .var argVar
+    | none => .var (id + offset)
+  | .binOp op l r => .binOp op (renameScalarExpr paramMap offset l) (renameScalarExpr paramMap offset r)
+  | .unaryOp op a => .unaryOp op (renameScalarExpr paramMap offset a)
+  | .select c t f =>
+    .select (renameScalarExpr paramMap offset c) (renameScalarExpr paramMap offset t) (renameScalarExpr paramMap offset f)
+  | .fma a b c =>
+    .fma (renameScalarExpr paramMap offset a) (renameScalarExpr paramMap offset b) (renameScalarExpr paramMap offset c)
+
+private def renameVarId (paramMap : List (VarId × VarId)) (offset : VarId) (v : VarId) : VarId :=
+  (paramMap.lookup v).getD (v + offset)
+
+/-- Splice a simple helper `calleeBody` at call site `dst := call callee args`, binding `dst` at every `.ret`. -/
+partial def spliceInlinedBody (paramMap : List (VarId × VarId)) (offset : VarId)
+    (dst : VarId) (dstTy : LNIRType) (cont : LNIRCode) : LNIRCode → LNIRCode
+  | .letBind bDst bTy (.scalar se) k =>
+    .letBind (bDst + offset) bTy (.scalar (renameScalarExpr paramMap offset se))
+      (spliceInlinedBody paramMap offset dst dstTy cont k)
+  | .letBind bDst bTy (.mkTuple fs) k =>
+    .letBind (bDst + offset) bTy (.mkTuple (fs.map (renameVarId paramMap offset)))
+      (spliceInlinedBody paramMap offset dst dstTy cont k)
+  | .letBind bDst bTy (.projTuple tv idx) k =>
+    .letBind (bDst + offset) bTy (.projTuple (renameVarId paramMap offset tv) idx)
+      (spliceInlinedBody paramMap offset dst dstTy cont k)
+  | .ite cv t e =>
+    .ite (renameVarId paramMap offset cv)
+      (spliceInlinedBody paramMap offset dst dstTy cont t)
+      (spliceInlinedBody paramMap offset dst dstTy cont e)
+  | .ret rv =>
+    .letBind dst dstTy (.scalar (.var (renameVarId paramMap offset rv))) cont
+  | _ => cont
+
+/-- Inline non-recursive local helper calls (`Inv`, `ValidSszContainerHeader`, `declaredGasLimit`) inside `code`. -/
+partial def inlineLocalHelperCalls (helpers : List LNIRDecl) (nextOffset : VarId) : LNIRCode → LNIRCode
+  | .letBind dst ty (.call callee args retTy isExt) k =>
+    let k' := inlineLocalHelperCalls helpers (nextOffset + 128) k
+    if isExt then
+      .letBind dst ty (.call callee args retTy isExt) k'
+    else
+      match helpers.find? (fun h => h.name == callee && h.params.length == args.length) with
+      | some hDecl =>
+        let paramMap := (hDecl.params.map (·.id)).zip args
+        spliceInlinedBody paramMap nextOffset dst ty k' hDecl.body
+      | none =>
+        .letBind dst ty (.call callee args retTy isExt) k'
+  | .letBind dst ty val k =>
+    .letBind dst ty val (inlineLocalHelperCalls helpers nextOffset k)
+  | .rawStore pv iv vv ty k =>
+    .rawStore pv iv vv ty (inlineLocalHelperCalls helpers nextOffset k)
+  | .incRef ov c k =>
+    .incRef ov c (inlineLocalHelperCalls helpers nextOffset k)
+  | .decRef ov c k =>
+    .decRef ov c (inlineLocalHelperCalls helpers nextOffset k)
+  | .ite cv t e =>
+    .ite cv (inlineLocalHelperCalls helpers nextOffset t) (inlineLocalHelperCalls helpers (nextOffset + 256) e)
+  | .seqFor iv lv hv av ai aty step k =>
+    .seqFor iv lv hv av ai aty
+      (inlineLocalHelperCalls helpers nextOffset step)
+      (inlineLocalHelperCalls helpers (nextOffset + 256) k)
+  | .parFor ov lv ins ety kern k =>
+    .parFor ov lv ins ety kern (inlineLocalHelperCalls helpers nextOffset k)
+  | .ret v => .ret v
+  | .unreachable => .unreachable
+
+/-- Normalize an `LNIRModule` by $\delta$-inlining non-recursive local helper declarations
+    (`Inv`, `ValidSszContainerHeader`, `declaredGasLimit`) so `FastCheck` and `UnboxTupleSROA`
+    inspect the full arithmetic/relational structure without opaque local calls. -/
+def normalizeAndInlineLocalDefs (m : LNIRModule) : LNIRModule :=
+  let helpers := m.decls.filter (fun d => isSimpleInlinableBody d.name d.body)
+  if helpers.isEmpty then m
+  else
+    let decls' := m.decls.map (fun d =>
+      let baseOff := maxVarIdInCode d.body + 1000
+      { d with body := inlineLocalHelperCalls helpers baseOff d.body }
+    )
+    { m with decls := decls' }
+
 /-- Resolve the Lean 4.31 sysroot path reliably even when `lean` is not on `PATH`. -/
 def resolveLeanSysroot : IO System.FilePath := do
   if let some envRoot ← IO.getEnv "LEAN_SYSROOT" then
@@ -897,7 +1022,7 @@ def ingestLeanSourceFile (filePath : String) (moduleName : String := "LeanNative
   }
   let coreState : Lean.Core.State := { env := env }
   let (mod, _) ← (ingestAllLocalDecls moduleName).toIO coreCtx coreState
-  return mod
+  return normalizeAndInlineLocalDefs mod
 
 /-- Elaborate `filePath` with `Lean.Elab.runFrontend`, extracting both:
     1. The full Lean 4.31 C module code (`Lean.Compiler.LCNF.emitC modName`) containing all

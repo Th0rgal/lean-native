@@ -386,6 +386,37 @@ theorem unboxTupleDeadElim_refines
       simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self] at hsrc ⊢
       exact hsrc
 
+/-- Nested 2-Level Tuple SROA Dead-Allocation Elimination (`unboxNestedTupleDeadElim_refines`):
+    eliminating both an inner tuple `tInner := mkTuple [v1, v2]` and an outer tuple
+    `tOuter := mkTuple [v0, tInner]` along with the chained projections `pInner := projTuple tOuter 1`
+    and `dst := projTuple pInner 0` refines directly to reading scalar register `v1`. -/
+theorem unboxNestedTupleDeadElim_refines
+    (tInner tOuter pInner dst v0 v1 v2 : VarId) (innerTy outerTy dstTy : LNIRType)
+    (hne0 : (tInner == v0) = false) :
+    CodeRefines
+      (.letBind tInner innerTy (.mkTuple [v1, v2])
+        (.letBind tOuter outerTy (.mkTuple [v0, tInner])
+          (.letBind pInner innerTy (.projTuple tOuter 1)
+            (.letBind dst dstTy (.projTuple pInner 0) (.ret dst)))))
+      (.letBind dst dstTy (.scalar (.var v1)) (.ret dst)) := by
+  intro fuel env st v st' hsrc
+  simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
+  cases hv1 : env v1 with
+  | none => simp only [hv1] at hsrc; contradiction
+  | some val1 =>
+    cases hv2 : env v2 with
+    | none => simp only [hv1, hv2] at hsrc; contradiction
+    | some val2 =>
+      have hv0_bind : (env.bind tInner (.tuple [val1, val2])) v0 = env v0 := by
+        have hsym : (v0 == tInner) = false := by rw [ Bool.beq_comm ]; exact hne0
+        exact VarEnv.bind_ne env tInner v0 _ hsym
+      simp only [hv1, hv2, hv0_bind, VarEnv.bind_self] at hsrc ⊢
+      cases hv0 : env v0 with
+      | none => simp only [hv0] at hsrc; contradiction
+      | some val0 =>
+        simp only [hv0, hv1, evalScalarExpr] at hsrc ⊢
+        exact hsrc
+
 theorem varEnv_bind_idem (env : VarEnv) (x : VarId) (v : Val) :
     (env.bind x v).bind x v = env.bind x v := by
   funext y
@@ -438,6 +469,7 @@ namespace LoopOptProofs
   abbrev unboxTupleLetChain_refines := @LeanNative.Proofs.unboxTupleLetChain_refines
   abbrev unboxTupleLetChain1_refines := @LeanNative.Proofs.unboxTupleLetChain1_refines
   abbrev unboxTupleDeadElim_refines := @LeanNative.Proofs.unboxTupleDeadElim_refines
+  abbrev unboxNestedTupleDeadElim_refines := @LeanNative.Proofs.unboxNestedTupleDeadElim_refines
   abbrev hoistExclusivity_sound := @LeanNative.Proofs.hoistExclusivity_sound
   abbrev eval_hoistExclusivity_refines := @LeanNative.Proofs.eval_hoistExclusivity_refines
   abbrev hoistExclusivityPreheader_refines := @LeanNative.Proofs.hoistExclusivityPreheader_refines

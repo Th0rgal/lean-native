@@ -242,6 +242,11 @@ LEAN_NATIVE_WEAK int lean_native_gpu_available(void) {
     return 0;
 }
 
+LEAN_NATIVE_WEAK int lean_native_gpu_has_headroom(size_t required_bytes) {
+    (void)required_bytes;
+    return 0;
+}
+
 LEAN_NATIVE_WEAK const char* lean_native_gpu_device_name(void) {
     return "CPU-Only Fallback (LLVM SIMD)";
 }

@@ -13,6 +13,7 @@
 #define MATMUL_TILE_DIM 16
 #define ZERO_COPY_MIN_ELEMS 65536ULL
 #define ZERO_COPY_MAX_ELEMS 1048576ULL
+#define DEFAULT_CUDA_MIN_FREE_BYTES (2ULL * 1024ULL * 1024ULL * 1024ULL)
 
 typedef struct LeanNativeCudaState {
     int          initialized;
@@ -172,17 +173,42 @@ static int lean_native_ensure_cuda_initialized(void) {
     return 1;
 }
 
+static int lean_native_check_cuda_memory_headroom(size_t required_bytes) {
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    if (cuMemGetInfo(&free_bytes, &total_bytes) != CUDA_SUCCESS) {
+        if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess) {
+            return 0;
+        }
+    }
+    size_t min_free = DEFAULT_CUDA_MIN_FREE_BYTES;
+    const char* env_min = getenv("LEAN_NATIVE_CUDA_MIN_FREE_BYTES");
+    if (env_min && env_min[0] != '\0') {
+        unsigned long long parsed = strtoull(env_min, NULL, 10);
+        if (parsed > 0ULL) {
+            min_free = (size_t)parsed;
+        }
+    }
+    if (free_bytes < required_bytes || (free_bytes - required_bytes) < min_free) {
+        return 0;
+    }
+    return 1;
+}
+
 static int lean_native_ensure_workspace(size_t n_elems) {
     size_t req_elems = n_elems > 0 ? n_elems : 1;
     if (req_elems <= g_cuda_state.buf_capacity_elems &&
         g_cuda_state.d_buf0 && g_cuda_state.d_buf1 && g_cuda_state.d_buf2) {
         return 0;
     }
+    size_t bytes = req_elems * sizeof(uint64_t);
+    if (!lean_native_check_cuda_memory_headroom(bytes * 3u)) {
+        return -1;
+    }
     if (g_cuda_state.d_buf0) { cudaFree(g_cuda_state.d_buf0); g_cuda_state.d_buf0 = NULL; }
     if (g_cuda_state.d_buf1) { cudaFree(g_cuda_state.d_buf1); g_cuda_state.d_buf1 = NULL; }
     if (g_cuda_state.d_buf2) { cudaFree(g_cuda_state.d_buf2); g_cuda_state.d_buf2 = NULL; }
 
-    size_t bytes = req_elems * sizeof(uint64_t);
     if (cudaMalloc((void**)&g_cuda_state.d_buf0, bytes) != cudaSuccess ||
         cudaMalloc((void**)&g_cuda_state.d_buf1, bytes) != cudaSuccess ||
         cudaMalloc((void**)&g_cuda_state.d_buf2, bytes) != cudaSuccess) {
@@ -206,11 +232,14 @@ static int lean_native_ensure_zero_copy_workspace(size_t n_elems) {
         g_cuda_state.h_mapped0 && g_cuda_state.h_mapped1 && g_cuda_state.h_mapped2) {
         return 0;
     }
+    size_t bytes = n_elems * sizeof(uint64_t);
+    if (!lean_native_check_cuda_memory_headroom(bytes * 3u)) {
+        return -1;
+    }
     if (g_cuda_state.h_mapped0) { cudaFreeHost(g_cuda_state.h_mapped0); g_cuda_state.h_mapped0 = NULL; }
     if (g_cuda_state.h_mapped1) { cudaFreeHost(g_cuda_state.h_mapped1); g_cuda_state.h_mapped1 = NULL; }
     if (g_cuda_state.h_mapped2) { cudaFreeHost(g_cuda_state.h_mapped2); g_cuda_state.h_mapped2 = NULL; }
 
-    size_t bytes = n_elems * sizeof(uint64_t);
     unsigned int flags = cudaHostAllocMapped;
     if (cudaHostAlloc((void**)&g_cuda_state.h_mapped0, bytes, flags) != cudaSuccess ||
         cudaHostAlloc((void**)&g_cuda_state.h_mapped1, bytes, flags) != cudaSuccess ||
@@ -234,6 +263,13 @@ static int lean_native_ensure_zero_copy_workspace(size_t n_elems) {
 
 extern "C" int lean_native_gpu_available(void) {
     return lean_native_ensure_cuda_initialized();
+}
+
+extern "C" int lean_native_gpu_has_headroom(size_t required_bytes) {
+    if (!lean_native_ensure_cuda_initialized()) {
+        return 0;
+    }
+    return lean_native_check_cuda_memory_headroom(required_bytes);
 }
 
 extern "C" const char* lean_native_gpu_device_name(void) {
