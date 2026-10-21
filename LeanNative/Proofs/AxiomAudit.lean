@@ -153,6 +153,12 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.spt_rom_fetch_deterministic
   , ``LeanNative.Spec.mulDivDown_le_mulDivUp
   , ``LeanNative.Spec.mulDivDown_zero_denom
+  , ``LeanNative.Spec.dotNat_nil_left
+  , ``LeanNative.Spec.dotNat_nil_right
+  , ``LeanNative.Spec.dotNat_cons
+  , ``LeanNative.Spec.dotNat_le_of_pointwise_le
+  , ``LeanNative.Spec.farkas_weighted_rows_le
+  , ``LeanNative.Spec.checkFarkasNat_sound
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

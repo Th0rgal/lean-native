@@ -952,6 +952,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   IO.FS.writeFile cPath cCode
 
   let incDir := (sysroot / "include").toString
+  let clangIncDir := (sysroot / "include" / "clang").toString
   let libDir := (sysroot / "lib" / "lean").toString
 
   let relRuntime : System.FilePath := "runtime/lean_native_runtime.c"
@@ -965,7 +966,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   -- Step 1: clang -S -emit-llvm -O3 -I<sysroot>/include
   let clangEmitOut ← IO.Process.output {
     cmd  := clangCmd
-    args := #["-S", "-emit-llvm", optLevel, s!"-I{incDir}", cPath, "-o", rawLlPath]
+    args := #["-S", "-emit-llvm", optLevel, s!"-I{incDir}", s!"-I{clangIncDir}", cPath, "-o", rawLlPath]
   }
   if clangEmitOut.exitCode != 0 then
     throw <| IO.userError s!"clang -emit-llvm failed:\n{clangEmitOut.stderr}"
@@ -1010,6 +1011,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
       optLevel,
       "-Wno-override-module",
       s!"-I{incDir}",
+      s!"-I{clangIncDir}",
       s!"-I{runtimeDir}",
       optLlPath,
       lnirOptLlPath,

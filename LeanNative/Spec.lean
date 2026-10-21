@@ -372,4 +372,227 @@ theorem mulDivDown_le_mulDivUp (a b d : Nat) : mulDivDownNat a b d ≤ mulDivUpN
 
 theorem mulDivDown_zero_denom (a b : Nat) : mulDivDownNat a b 0 = 0 ∧ mulDivUpNat a b 0 = 0 := ⟨rfl, rfl⟩
 
+/-! ## 7. Non-Negative Linear Combination / Farkas Certificates (`Nat`) -/
+
+/-- Dot product of two lists of natural numbers (`∑_j u_j * v_j`). -/
+def dotNat : List Nat → List Nat → Nat
+  | [], _ => 0
+  | _, [] => 0
+  | a :: as, b :: bs => a * b + dotNat as bs
+
+/-- Weighted column sum (`∑_i weights_i * matrix_{i, colIdx}`). -/
+def weightedColSum : List Nat → List (List Nat) → Nat → Nat
+  | [], _, _ => 0
+  | _, [], _ => 0
+  | w :: ws, row :: rows, colIdx =>
+    w * row.getD colIdx 0 + weightedColSum ws rows colIdx
+
+/-- Helper checking column dominance `obj_j ≤ weightedColSum weights matrix j` for `j < n`. -/
+def checkFarkasCols (weights : List Nat) (matrix : List (List Nat)) (obj : List Nat) : Nat → Bool
+  | 0 => true
+  | j + 1 =>
+    checkFarkasCols weights matrix obj j &&
+    decide (obj.getD j 0 ≤ weightedColSum weights matrix j)
+
+/-- Boolean certificate checker for non-negative Farkas linear combinations over `Nat`:
+    verifies (a) for every column `j < obj.length`, `obj.getD j 0 ≤ weightedColSum weights matrix j`,
+    and (b) `dotNat weights rhs ≤ bound`. -/
+def checkFarkasNat (weights : List Nat) (matrix : List (List Nat)) (rhs : List Nat) (obj : List Nat) (bound : Nat) : Bool :=
+  checkFarkasCols weights matrix obj obj.length &&
+  decide (dotNat weights rhs ≤ bound)
+
+theorem dotNat_nil_left (v : List Nat) : dotNat [] v = 0 := rfl
+
+theorem dotNat_nil_right (u : List Nat) : dotNat u [] = 0 := by
+  cases u <;> rfl
+
+theorem dotNat_cons (a b : Nat) (as bs : List Nat) :
+    dotNat (a :: as) (b :: bs) = a * b + dotNat as bs := rfl
+
+theorem dotNat_le_of_pointwise_le (u v x : List Nat)
+    (h : ∀ j, j < u.length → u.getD j 0 ≤ v.getD j 0) :
+    dotNat u x ≤ dotNat v x := by
+  induction u generalizing v x with
+  | nil =>
+    rw [dotNat_nil_left]
+    exact Nat.zero_le _
+  | cons a as ih =>
+    cases x with
+    | nil =>
+      rw [dotNat_nil_right, dotNat_nil_right]
+      exact Nat.le_refl 0
+    | cons x0 xs =>
+      have h0 : a ≤ v.getD 0 0 := h 0 (Nat.zero_lt_succ _)
+      cases v with
+      | nil =>
+        have ha : a = 0 := Nat.eq_zero_of_le_zero h0
+        have ih_nil : dotNat as xs ≤ 0 := by
+          simpa [dotNat_nil_left] using ih [] xs (fun j hj => h (j + 1) (Nat.succ_lt_succ hj))
+        simp [dotNat_cons, dotNat_nil_left, ha, Nat.eq_zero_of_le_zero ih_nil]
+      | cons b bs =>
+        rw [dotNat_cons, dotNat_cons]
+        have h_head : a * x0 ≤ b * x0 := Nat.mul_le_mul_right x0 h0
+        have h_tail : dotNat as xs ≤ dotNat bs xs :=
+          ih bs xs (fun j hj => h (j + 1) (Nat.succ_lt_succ hj))
+        exact Nat.add_le_add h_head h_tail
+
+def weightedColVec (weights : List Nat) (matrix : List (List Nat)) : Nat → Nat → List Nat
+  | 0, _ => []
+  | len + 1, colIdx => weightedColSum weights matrix colIdx :: weightedColVec weights matrix len (colIdx + 1)
+
+private theorem weightedColVec_zero_weights (matrix : List (List Nat)) (len colIdx : Nat) (x : List Nat) :
+    dotNat (weightedColVec [] matrix len colIdx) x = 0 := by
+  induction len generalizing colIdx x with
+  | zero => rfl
+  | succ len ih =>
+    cases x with
+    | nil => exact dotNat_nil_right _
+    | cons x0 xs =>
+      simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
+
+private theorem weightedColVec_zero_matrix (weights : List Nat) (len colIdx : Nat) (x : List Nat) :
+    dotNat (weightedColVec weights [] len colIdx) x = 0 := by
+  induction len generalizing colIdx x with
+  | zero => rfl
+  | succ len ih =>
+    cases x with
+    | nil => exact dotNat_nil_right _
+    | cons x0 xs =>
+      cases weights <;> simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
+
+private theorem weightedColVec_dot_split (w : Nat) (ws : List Nat) (row : List Nat) (rows : List (List Nat))
+    (colIdx : Nat) (x : List Nat) :
+    dotNat (weightedColVec (w :: ws) (row :: rows) x.length colIdx) x =
+      w * dotNat (row.drop colIdx) x + dotNat (weightedColVec ws rows x.length colIdx) x := by
+  induction x generalizing colIdx with
+  | nil => simp [weightedColVec, dotNat_nil_right]
+  | cons x0 xs ih =>
+    simp only [List.length_cons, weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1)]
+    have h_drop : dotNat (row.drop colIdx) (x0 :: xs) = row.getD colIdx 0 * x0 + dotNat (row.drop (colIdx + 1)) xs := by
+      clear ih
+      induction colIdx generalizing row with
+      | zero =>
+        cases row <;> simp [List.getD, dotNat_nil_left, dotNat_cons]
+      | succ k ih_k =>
+        cases row with
+        | nil => simp [List.getD, dotNat_nil_left]
+        | cons r0 rs =>
+          simpa [List.getD, Nat.add_assoc] using ih_k rs
+    rw [h_drop, Nat.add_mul, Nat.mul_add, Nat.mul_assoc]
+    omega
+
+theorem farkas_weighted_rows_le (weights : List Nat) (matrix : List (List Nat)) (rhs x : List Nat)
+    (h_rows : ∀ i, i < weights.length → dotNat (matrix.getD i []) x ≤ rhs.getD i 0) :
+    dotNat (weightedColVec weights matrix x.length 0) x ≤ dotNat weights rhs := by
+  induction weights generalizing matrix rhs with
+  | nil =>
+    rw [weightedColVec_zero_weights, dotNat_nil_left]
+    exact Nat.le_refl 0
+  | cons w ws ih =>
+    have h0 : dotNat (matrix.getD 0 []) x ≤ rhs.getD 0 0 := h_rows 0 (Nat.zero_lt_succ _)
+    cases matrix with
+    | nil =>
+      rw [weightedColVec_zero_matrix]
+      exact Nat.zero_le _
+    | cons row rows =>
+      rw [weightedColVec_dot_split]
+      have h_row0 : w * dotNat row x ≤ w * rhs.getD 0 0 := Nat.mul_le_mul_left w h0
+      have h_tail : dotNat (weightedColVec ws rows x.length 0) x ≤ dotNat ws (rhs.drop 1) :=
+        ih rows (rhs.drop 1) (fun i hi => by
+          have := h_rows (i + 1) (Nat.succ_lt_succ hi)
+          cases rhs <;> simpa [List.getD] using this)
+      cases rhs with
+      | nil =>
+        have h_rhs_nil : dotNat ws [] = 0 := dotNat_nil_right ws
+        rw [dotNat_nil_right]
+        have h_r0 : w * dotNat row x = 0 := Nat.eq_zero_of_le_zero h_row0
+        have h_rt : dotNat (weightedColVec ws rows x.length 0) x = 0 := by
+          rw [List.drop, h_rhs_nil] at h_tail
+          exact Nat.eq_zero_of_le_zero h_tail
+        simp [List.drop, h_r0, h_rt]
+      | cons b bs =>
+        rw [dotNat_cons]
+        exact Nat.add_le_add h_row0 h_tail
+
+private theorem weightedColVec_getD (weights : List Nat) (matrix : List (List Nat)) (len colIdx j : Nat)
+    (hj : j < len) :
+    (weightedColVec weights matrix len colIdx).getD j 0 = weightedColSum weights matrix (colIdx + j) := by
+  induction len generalizing colIdx j with
+  | zero => contradiction
+  | succ len ih =>
+    cases j with
+    | zero => simp [weightedColVec, List.getD]
+    | succ j_prev =>
+      have hj_prev : j_prev < len := Nat.lt_of_succ_lt_succ hj
+      simpa [weightedColVec, List.getD, Nat.add_right_comm, Nat.add_assoc] using ih (colIdx + 1) j_prev hj_prev
+
+private theorem checkFarkasCols_sound (weights : List Nat) (matrix : List (List Nat)) (obj : List Nat) (n j : Nat)
+    (h_ok : checkFarkasCols weights matrix obj n = true) (hj : j < n) :
+    obj.getD j 0 ≤ weightedColSum weights matrix j := by
+  induction n with
+  | zero => contradiction
+  | succ n ih =>
+    simp [checkFarkasCols, Bool.and_eq_true, decide_eq_true_eq] at h_ok
+    rcases Nat.lt_succ_iff_lt_or_eq.mp hj with h_lt | rfl
+    · exact ih h_ok.1 h_lt
+    · exact h_ok.2
+
+theorem checkFarkasNat_sound (weights : List Nat) (matrix : List (List Nat)) (rhs obj x : List Nat) (bound : Nat)
+    (h_cert : checkFarkasNat weights matrix rhs obj bound = true)
+    (h_rows : ∀ i, i < weights.length → dotNat (matrix.getD i []) x ≤ rhs.getD i 0) :
+    dotNat obj x ≤ bound := by
+  simp [checkFarkasNat, Bool.and_eq_true, decide_eq_true_eq] at h_cert
+  let x_pad := x.take obj.length ++ List.replicate (obj.length - x.length) 0
+  have h_xpad_len : x_pad.length = obj.length := by
+    simp [x_pad, List.length_append, List.length_take, List.length_replicate]
+    omega
+  have h_rep_zero : ∀ (u : List Nat) (k : Nat), dotNat u (List.replicate k 0) = 0 := by
+    intro u k
+    induction u generalizing k with
+    | nil => rfl
+    | cons u0 us ih_u =>
+      cases k with
+      | zero => exact dotNat_nil_right _
+      | succ k_prev => simp [List.replicate, dotNat_cons, ih_u k_prev]
+  have h_obj_xpad : dotNat obj x = dotNat obj x_pad := by
+    clear h_cert h_rows h_xpad_len
+    induction obj generalizing x with
+    | nil => rfl
+    | cons c cs ih =>
+      cases x with
+      | nil =>
+        simp [x_pad, dotNat_nil_right, h_rep_zero]
+      | cons x0 xs =>
+        simp [x_pad, List.length_cons, Nat.succ_sub_succ_eq_sub, dotNat_cons, ih xs]
+  rw [h_obj_xpad]
+  have h_pw : dotNat obj x_pad ≤ dotNat (weightedColVec weights matrix x_pad.length 0) x_pad := by
+    apply dotNat_le_of_pointwise_le
+    intro j hj
+    rw [h_xpad_len, weightedColVec_getD weights matrix obj.length 0 j hj, Nat.zero_add]
+    exact checkFarkasCols_sound weights matrix obj obj.length j h_cert.1 hj
+  have h_rows_xpad : ∀ i, i < weights.length → dotNat (matrix.getD i []) x_pad ≤ rhs.getD i 0 := by
+    intro i hi
+    have h_le_x : dotNat (matrix.getD i []) x_pad ≤ dotNat (matrix.getD i []) x := by
+      clear h_cert h_rows h_xpad_len h_obj_xpad h_pw hi
+      generalize matrix.getD i [] = row
+      have h_take_rep : ∀ (r v : List Nat) (n k : Nat), dotNat r (v.take n ++ List.replicate k 0) ≤ dotNat r v := by
+        intro r v n k
+        induction r generalizing v n with
+        | nil => exact Nat.le_refl 0
+        | cons r0 rs ih_r =>
+          cases n with
+          | zero =>
+            simp [List.take, h_rep_zero]
+          | succ n_prev =>
+            cases v with
+            | nil => simp [List.take, h_rep_zero, dotNat_nil_right]
+            | cons v0 vs =>
+              simp only [List.take, List.cons_append, dotNat_cons]
+              exact Nat.add_le_add_left (ih_r vs n_prev) (r0 * v0)
+      exact h_take_rep row x obj.length (obj.length - x.length)
+    exact Nat.le_trans h_le_x (h_rows i hi)
+  have h_farkas := farkas_weighted_rows_le weights matrix rhs x_pad h_rows_xpad
+  exact Nat.le_trans h_pw (Nat.le_trans h_farkas h_cert.2)
+
 end LeanNative.Spec
+

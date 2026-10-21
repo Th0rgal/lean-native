@@ -983,7 +983,7 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   IO.println "  validate-tv        Run Alive2-style symbolic translation validation (--input <file>, --json, -o <path>)"
   IO.println "  emit-lnir          Emit LNIR module in wire/JSON format (--wire, --json, --fastcheck, -o <path>)"
   if hasFrontend then
-    IO.println "  audit-axioms       Run in-kernel transitive axiom audit over all 128 soundness theorems (--json)"
+    IO.println "  audit-axioms       Run in-kernel transitive axiom audit over all 134 soundness theorems (--json)"
     IO.println "  turbo-status       Probe Turbo Lean integration, verify BLAKE3 vectors, and emit/verify receipt"
   IO.println "  self-test          Run end-to-end Core, Spec (Laws 1-5), Plugins, Codec, FastCheck, Superopt, SymbolicTV, LLVM/PTX/Metal self-tests"
   IO.println "  worker             Run persistent sub-millisecond JSON-RPC worker loop over stdin/stdout"
