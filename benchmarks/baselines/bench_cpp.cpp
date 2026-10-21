@@ -144,6 +144,48 @@ uint64_t bench_evm_gas_schedule_u64(uint64_t N) {
     return total_gas;
 }
 
+static inline uint64_t rotl64(uint64_t x, unsigned int r) {
+    return (x << r) | (x >> (64U - r));
+}
+
+// 8. keccak256_sponge_u64 (N = 2,000,000)
+// EVMYulLean 2.0 PureKeccak256.lean 5-lane sponge permutation (8 rounds of theta/rho/pi/chi/iota)
+uint64_t bench_keccak256_sponge_u64(uint64_t N) {
+    static constexpr uint64_t RC[8] = {
+        0x0000000000000001ULL, 0x0000000000008082ULL,
+        0x800000000000808aULL, 0x8000000080008000ULL,
+        0x000000000000808bULL, 0x0000000080000001ULL,
+        0x8000000080008081ULL, 0x8000000000008009ULL
+    };
+    uint64_t total = 0ULL;
+    for (uint64_t i = 0; i < N; ++i) {
+        uint64_t s0 = i * 6364136223846793005ULL + 1ULL;
+        uint64_t s1 = i * 2862933555777941757ULL + 3ULL;
+        uint64_t s2 = i * 11400714819323198485ULL + 5ULL;
+        uint64_t s3 = i * 14029467366897019727ULL + 7ULL;
+        uint64_t s4 = i * 3266489917ULL + 11ULL;
+        for (int r = 0; r < 8; ++r) {
+            uint64_t d0 = s4 ^ rotl64(s1, 1);
+            uint64_t d1 = s0 ^ rotl64(s2, 1);
+            uint64_t d2 = s1 ^ rotl64(s3, 1);
+            uint64_t d3 = s2 ^ rotl64(s4, 1);
+            uint64_t d4 = s3 ^ rotl64(s0, 1);
+            uint64_t b0 = s0 ^ d0;
+            uint64_t b1 = rotl64(s1 ^ d1, 44);
+            uint64_t b2 = rotl64(s2 ^ d2, 43);
+            uint64_t b3 = rotl64(s3 ^ d3, 21);
+            uint64_t b4 = rotl64(s4 ^ d4, 14);
+            s0 = b0 ^ ((~b1) & b2) ^ RC[r];
+            s1 = b1 ^ ((~b2) & b3);
+            s2 = b2 ^ ((~b3) & b4);
+            s3 = b3 ^ ((~b4) & b0);
+            s4 = b4 ^ ((~b0) & b1);
+        }
+        total ^= (s0 + s1 + s2 + s3 + s4);
+    }
+    return total;
+}
+
 // Holdout 1: holdout_VerifyBitwiseFold (N = 10,000,000)
 uint64_t bench_holdout_bitwise(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -255,6 +297,15 @@ int main(int argc, char** argv) {
         uint64_t c = bench_evm_gas_schedule_u64(N);
         double t1 = now_ms();
         std::printf("BENCH evm_gas_schedule_u64 checksum=%llu time_ms=%.4f\n",
+                    (unsigned long long)c, t1 - t0);
+    }
+
+    if (filter == "all" || filter == "keccak256_sponge_u64") {
+        uint64_t N = 2000000ULL;
+        double t0 = now_ms();
+        uint64_t c = bench_keccak256_sponge_u64(N);
+        double t1 = now_ms();
+        std::printf("BENCH keccak256_sponge_u64 checksum=%llu time_ms=%.4f\n",
                     (unsigned long long)c, t1 - t0);
     }
 

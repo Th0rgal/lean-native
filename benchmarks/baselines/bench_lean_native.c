@@ -282,6 +282,136 @@ uint64_t ln_evm_gas_schedule_u64_cpu(uint64_t N) {
 #endif
 }
 
+#define VROTL64(x, r) (((x) << (r)) | ((x) >> (64ULL - (r))))
+
+uint64_t ln_keccak256_sponge_u64_cpu(uint64_t N) {
+    static const uint64_t RC[8] = {
+        0x0000000000000001ULL, 0x0000000000008082ULL,
+        0x800000000000808aULL, 0x8000000080008000ULL,
+        0x000000000000808bULL, 0x0000000080000001ULL,
+        0x8000000080008081ULL, 0x8000000000008009ULL
+    };
+    const uint64_t m0 = 6364136223846793005ULL;
+    const uint64_t m1 = 2862933555777941757ULL;
+    const uint64_t m2 = 11400714819323198485ULL;
+    const uint64_t m3 = 14029467366897019727ULL;
+    const uint64_t m4 = 3266489917ULL;
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA3)
+    uint64x2_t accA = vdupq_n_u64(0), accB = vdupq_n_u64(0);
+    uint64_t a0_init[2] = {1ULL, 1ULL + m0}, b0_init[2] = {1ULL + 2ULL * m0, 1ULL + 3ULL * m0};
+    uint64_t a1_init[2] = {3ULL, 3ULL + m1}, b1_init[2] = {3ULL + 2ULL * m1, 3ULL + 3ULL * m1};
+    uint64_t a2_init[2] = {5ULL, 5ULL + m2}, b2_init[2] = {5ULL + 2ULL * m2, 5ULL + 3ULL * m2};
+    uint64_t a3_init[2] = {7ULL, 7ULL + m3}, b3_init[2] = {7ULL + 2ULL * m3, 7ULL + 3ULL * m3};
+    uint64_t a4_init[2] = {11ULL, 11ULL + m4}, b4_init[2] = {11ULL + 2ULL * m4, 11ULL + 3ULL * m4};
+    uint64x2_t s0A = vld1q_u64(a0_init), s0B = vld1q_u64(b0_init);
+    uint64x2_t s1A = vld1q_u64(a1_init), s1B = vld1q_u64(b1_init);
+    uint64x2_t s2A = vld1q_u64(a2_init), s2B = vld1q_u64(b2_init);
+    uint64x2_t s3A = vld1q_u64(a3_init), s3B = vld1q_u64(b3_init);
+    uint64x2_t s4A = vld1q_u64(a4_init), s4B = vld1q_u64(b4_init);
+    const uint64x2_t st0 = vdupq_n_u64(4ULL * m0), st1 = vdupq_n_u64(4ULL * m1);
+    const uint64x2_t st2 = vdupq_n_u64(4ULL * m2), st3 = vdupq_n_u64(4ULL * m3), st4 = vdupq_n_u64(4ULL * m4);
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        uint64x2_t x0 = s0A, x1 = s1A, x2 = s2A, x3 = s3A, x4 = s4A;
+        uint64x2_t y0 = s0B, y1 = s1B, y2 = s2B, y3 = s3B, y4 = s4B;
+        #pragma clang loop unroll(full)
+        for (int r = 0; r < 8; ++r) {
+            uint64x2_t rc = vdupq_n_u64(RC[r]);
+            uint64x2_t dx0 = vrax1q_u64(x4, x1), dy0 = vrax1q_u64(y4, y1);
+            uint64x2_t dx1 = vrax1q_u64(x0, x2), dy1 = vrax1q_u64(y0, y2);
+            uint64x2_t dx2 = vrax1q_u64(x1, x3), dy2 = vrax1q_u64(y1, y3);
+            uint64x2_t dx3 = vrax1q_u64(x2, x4), dy3 = vrax1q_u64(y2, y4);
+            uint64x2_t dx4 = vrax1q_u64(x3, x0), dy4 = vrax1q_u64(y3, y0);
+            uint64x2_t bx0 = veorq_u64(x0, dx0), by0 = veorq_u64(y0, dy0);
+            uint64x2_t bx1 = vxarq_u64(x1, dx1, 20), by1 = vxarq_u64(y1, dy1, 20);
+            uint64x2_t bx2 = vxarq_u64(x2, dx2, 21), by2 = vxarq_u64(y2, dy2, 21);
+            uint64x2_t bx3 = vxarq_u64(x3, dx3, 43), by3 = vxarq_u64(y3, dy3, 43);
+            uint64x2_t bx4 = vxarq_u64(x4, dx4, 50), by4 = vxarq_u64(y4, dy4, 50);
+            x0 = veorq_u64(vbcaxq_u64(bx0, bx2, bx1), rc);
+            y0 = veorq_u64(vbcaxq_u64(by0, by2, by1), rc);
+            x1 = vbcaxq_u64(bx1, bx3, bx2);
+            y1 = vbcaxq_u64(by1, by3, by2);
+            x2 = vbcaxq_u64(bx2, bx4, bx3);
+            y2 = vbcaxq_u64(by2, by4, by3);
+            x3 = vbcaxq_u64(bx3, bx0, bx4);
+            y3 = vbcaxq_u64(by3, by0, by4);
+            x4 = vbcaxq_u64(bx4, bx1, bx0);
+            y4 = vbcaxq_u64(by4, by1, by0);
+        }
+        accA = veorq_u64(accA, vaddq_u64(vaddq_u64(vaddq_u64(x0, x1), vaddq_u64(x2, x3)), x4));
+        accB = veorq_u64(accB, vaddq_u64(vaddq_u64(vaddq_u64(y0, y1), vaddq_u64(y2, y3)), y4));
+        s0A = vaddq_u64(s0A, st0); s0B = vaddq_u64(s0B, st0);
+        s1A = vaddq_u64(s1A, st1); s1B = vaddq_u64(s1B, st1);
+        s2A = vaddq_u64(s2A, st2); s2B = vaddq_u64(s2B, st2);
+        s3A = vaddq_u64(s3A, st3); s3B = vaddq_u64(s3B, st3);
+        s4A = vaddq_u64(s4A, st4); s4B = vaddq_u64(s4B, st4);
+    }
+    uint64x2_t acc = veorq_u64(accA, accB);
+    uint64_t total = vgetq_lane_u64(acc, 0) ^ vgetq_lane_u64(acc, 1);
+    for (; i < N; ++i) {
+        uint64_t s0 = i * m0 + 1ULL, s1 = i * m1 + 3ULL, s2 = i * m2 + 5ULL, s3 = i * m3 + 7ULL, s4 = i * m4 + 11ULL;
+        for (int r = 0; r < 8; ++r) {
+            uint64_t d0 = s4 ^ VROTL64(s1, 1), d1 = s0 ^ VROTL64(s2, 1), d2 = s1 ^ VROTL64(s3, 1), d3 = s2 ^ VROTL64(s4, 1), d4 = s3 ^ VROTL64(s0, 1);
+            uint64_t b0 = s0 ^ d0, b1 = VROTL64(s1 ^ d1, 44), b2 = VROTL64(s2 ^ d2, 43), b3 = VROTL64(s3 ^ d3, 21), b4 = VROTL64(s4 ^ d4, 14);
+            s0 = b0 ^ ((~b1) & b2) ^ RC[r]; s1 = b1 ^ ((~b2) & b3); s2 = b2 ^ ((~b3) & b4); s3 = b3 ^ ((~b4) & b0); s4 = b4 ^ ((~b0) & b1);
+        }
+        total ^= (s0 + s1 + s2 + s3 + s4);
+    }
+    return total;
+#else
+    v4u64 v_acc = {0ULL, 0ULL, 0ULL, 0ULL};
+    v4u64 s0_base = {1ULL, 1ULL + m0, 1ULL + 2ULL * m0, 1ULL + 3ULL * m0};
+    v4u64 s1_base = {3ULL, 3ULL + m1, 3ULL + 2ULL * m1, 3ULL + 3ULL * m1};
+    v4u64 s2_base = {5ULL, 5ULL + m2, 5ULL + 2ULL * m2, 5ULL + 3ULL * m2};
+    v4u64 s3_base = {7ULL, 7ULL + m3, 7ULL + 2ULL * m3, 7ULL + 3ULL * m3};
+    v4u64 s4_base = {11ULL, 11ULL + m4, 11ULL + 2ULL * m4, 11ULL + 3ULL * m4};
+    const v4u64 st0 = {4ULL * m0, 4ULL * m0, 4ULL * m0, 4ULL * m0};
+    const v4u64 st1 = {4ULL * m1, 4ULL * m1, 4ULL * m1, 4ULL * m1};
+    const v4u64 st2 = {4ULL * m2, 4ULL * m2, 4ULL * m2, 4ULL * m2};
+    const v4u64 st3 = {4ULL * m3, 4ULL * m3, 4ULL * m3, 4ULL * m3};
+    const v4u64 st4 = {4ULL * m4, 4ULL * m4, 4ULL * m4, 4ULL * m4};
+    uint64_t i = 0ULL;
+    for (; i + 4ULL <= N; i += 4ULL) {
+        v4u64 s0 = s0_base, s1 = s1_base, s2 = s2_base, s3 = s3_base, s4 = s4_base;
+        #pragma clang loop unroll(full)
+        for (int r = 0; r < 8; ++r) {
+            v4u64 d0 = s4 ^ VROTL64(s1, 1);
+            v4u64 d1 = s0 ^ VROTL64(s2, 1);
+            v4u64 d2 = s1 ^ VROTL64(s3, 1);
+            v4u64 d3 = s2 ^ VROTL64(s4, 1);
+            v4u64 d4 = s3 ^ VROTL64(s0, 1);
+            v4u64 b0 = s0 ^ d0;
+            v4u64 b1 = VROTL64(s1 ^ d1, 44);
+            v4u64 b2 = VROTL64(s2 ^ d2, 43);
+            v4u64 b3 = VROTL64(s3 ^ d3, 21);
+            v4u64 b4 = VROTL64(s4 ^ d4, 14);
+            s0 = b0 ^ ((~b1) & b2) ^ RC[r];
+            s1 = b1 ^ ((~b2) & b3);
+            s2 = b2 ^ ((~b3) & b4);
+            s3 = b3 ^ ((~b4) & b0);
+            s4 = b4 ^ ((~b0) & b1);
+        }
+        v_acc ^= ((s0 + s1) + (s2 + s3) + s4);
+        s0_base += st0; s1_base += st1; s2_base += st2; s3_base += st3; s4_base += st4;
+    }
+    uint64_t total = (v_acc[0] ^ v_acc[1]) ^ (v_acc[2] ^ v_acc[3]);
+    for (; i < N; ++i) {
+        uint64_t s0 = i * m0 + 1ULL, s1 = i * m1 + 3ULL, s2 = i * m2 + 5ULL, s3 = i * m3 + 7ULL, s4 = i * m4 + 11ULL;
+        for (int r = 0; r < 8; ++r) {
+            uint64_t d0 = s4 ^ VROTL64(s1, 1), d1 = s0 ^ VROTL64(s2, 1), d2 = s1 ^ VROTL64(s3, 1), d3 = s2 ^ VROTL64(s4, 1), d4 = s3 ^ VROTL64(s0, 1);
+            uint64_t b0 = s0 ^ d0, b1 = VROTL64(s1 ^ d1, 44), b2 = VROTL64(s2 ^ d2, 43), b3 = VROTL64(s3 ^ d3, 21), b4 = VROTL64(s4 ^ d4, 14);
+            s0 = b0 ^ ((~b1) & b2) ^ RC[r];
+            s1 = b1 ^ ((~b2) & b3);
+            s2 = b2 ^ ((~b3) & b4);
+            s3 = b3 ^ ((~b4) & b0);
+            s4 = b4 ^ ((~b0) & b1);
+        }
+        total ^= (s0 + s1 + s2 + s3 + s4);
+    }
+    return total;
+#endif
+}
+
 uint64_t ln_holdout_bitwise_cpu(uint64_t N) {
     uint64_t acc = 0x123456789ABCDEF0ULL, i26 = 0ULL;
 #if defined(__clang__)
@@ -356,6 +486,7 @@ int main(int argc, char** argv) {
         free(A); free(B); free(C);
     }
     RUN_BENCH("evm_gas_schedule_u64", ln_evm_gas_schedule_u64_cpu(10000000ULL));
+    RUN_BENCH("keccak256_sponge_u64", ln_keccak256_sponge_u64_cpu(2000000ULL));
     RUN_BENCH("holdout_bitwise", ln_holdout_bitwise_cpu(10000000ULL));
     RUN_BENCH("holdout_loop_bounds", ln_holdout_loop_bounds_cpu(10000000ULL));
     return 0;

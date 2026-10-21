@@ -175,6 +175,62 @@ partial def evmGasLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt
 def benchEvmGasScheduleU64 (n : UInt64) : UInt64 :=
   (evmGasLoop 0 n (0, 0)).1
 
+-- 8. keccak256_sponge_u64 (N = 2,000,000)
+-- Standard Lean 4 baseline: models EVMYulLean 2.0 `PureKeccak256.lean` 5-lane sponge permutation
+-- across 8 rounds (theta/rho/pi/chi/iota) with boxed 5-tuple state before `UnboxTupleSROA` + SIMD.
+@[inline]
+def rotl64 (x : UInt64) (r : UInt64) : UInt64 :=
+  (x <<< r) ||| (x >>> (64 - r))
+
+@[inline]
+def keccakRound (rc : UInt64) (st : UInt64 × UInt64 × UInt64 × UInt64 × UInt64) :
+    UInt64 × UInt64 × UInt64 × UInt64 × UInt64 :=
+  let (s0, s1, s2, s3, s4) := st
+  let d0 := s4 ^^^ rotl64 s1 1
+  let d1 := s0 ^^^ rotl64 s2 1
+  let d2 := s1 ^^^ rotl64 s3 1
+  let d3 := s2 ^^^ rotl64 s4 1
+  let d4 := s3 ^^^ rotl64 s0 1
+  let b0 := s0 ^^^ d0
+  let b1 := rotl64 (s1 ^^^ d1) 44
+  let b2 := rotl64 (s2 ^^^ d2) 43
+  let b3 := rotl64 (s3 ^^^ d3) 21
+  let b4 := rotl64 (s4 ^^^ d4) 14
+  let n0 := b0 ^^^ ((~~~b1) &&& b2) ^^^ rc
+  let n1 := b1 ^^^ ((~~~b2) &&& b3)
+  let n2 := b2 ^^^ ((~~~b3) &&& b4)
+  let n3 := b3 ^^^ ((~~~b4) &&& b0)
+  let n4 := b4 ^^^ ((~~~b0) &&& b1)
+  (n0, n1, n2, n3, n4)
+
+@[inline]
+def keccakStep (i : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  let s0 := i * 6364136223846793005 + 1
+  let s1 := i * 2862933555777941757 + 3
+  let s2 := i * 11400714819323198485 + 5
+  let s3 := i * 14029467366897019727 + 7
+  let s4 := i * 3266489917 + 11
+  let st := (s0, s1, s2, s3, s4)
+  let st := keccakRound 0x0000000000000001 st
+  let st := keccakRound 0x0000000000008082 st
+  let st := keccakRound 0x800000000000808a st
+  let st := keccakRound 0x8000000080008000 st
+  let st := keccakRound 0x000000000000808b st
+  let st := keccakRound 0x0000000080000001 st
+  let st := keccakRound 0x8000000080008081 st
+  let st := keccakRound 0x8000000000008009 st
+  let (r0, r1, r2, r3, r4) := st
+  let sum := r0 + r1 + r2 + r3 + r4
+  (acc.1 ^^^ sum, acc.2 + r0)
+
+partial def keccakLoop (i : UInt64) (n : UInt64) (acc : UInt64 × UInt64) : UInt64 × UInt64 :=
+  if i >= n then acc
+  else keccakLoop (i + 1) n (applyStep keccakStep i acc)
+
+@[noinline]
+def benchKeccak256SpongeU64 (n : UInt64) : UInt64 :=
+  (keccakLoop 0 n (0, 0)).1
+
 -- Holdout 1: holdout_bitwise
 partial def holdoutBitwiseLoop (i : UInt64) (n : UInt64) (acc : UInt64) : UInt64 :=
   if i >= n then acc
@@ -265,6 +321,13 @@ def main (args : List String) : IO Unit := do
     let t1 ← IO.monoNanosNow
     let dt := (t1 - t0).toFloat / 1000000.0
     IO.println s!"BENCH evm_gas_schedule_u64 checksum={c} time_ms={dt}"
+
+  if filter == "all" || filter == "keccak256_sponge_u64" then
+    let t0 ← IO.monoNanosNow
+    let c ← forceIO (benchKeccak256SpongeU64 (2000000 + z))
+    let t1 ← IO.monoNanosNow
+    let dt := (t1 - t0).toFloat / 1000000.0
+    IO.println s!"BENCH keccak256_sponge_u64 checksum={c} time_ms={dt}"
 
   if filter == "all" || filter == "holdout_bitwise" then
     let t0 ← IO.monoNanosNow

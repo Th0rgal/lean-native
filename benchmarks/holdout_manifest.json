@@ -132,6 +132,23 @@
       "assurance_level": "VerifiedKernelProof",
       "gpu_offload_eligible": true,
       "description": "10M-transaction EVMYulLean 2.0 dynamic quadratic memory expansion + Keccak256 gas schedule (Gas.lean); tests branchless smax/umin, shift strength reduction (w^2 / 512 -> w^2 >> 9), 4-way SIMD vectorization, and GPU warp-shuffle reduction."
+    },
+    {
+      "id": "keccak256_sponge_u64",
+      "category": "evm_yul_lean_sponge_hash",
+      "input_size": 2000000,
+      "input_unit": "blocks",
+      "expected_checksum_u64": 13792606934134369666,
+      "targeted_passes": [
+        "UnboxTupleSROA",
+        "AlgebraicOpt",
+        "LoopVectorizeOpt",
+        "MLIRGPU",
+        "Hybrid"
+      ],
+      "assurance_level": "VerifiedKernelProof",
+      "gpu_offload_eligible": true,
+      "description": "2M-block EVMYulLean 2.0 PureKeccak256.lean 5-lane sponge permutation (8 rounds of theta/rho/pi/chi/iota); compares Lean 4 boxed 5-tuple step against lean-native UnboxTupleSROA + 4-way SIMD bitsliced AVX2/NEON and CUDA PTX warp-shuffle reduction."
     }
   ],
   "holdout_benchmarks": [

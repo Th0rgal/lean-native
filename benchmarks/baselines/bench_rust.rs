@@ -177,6 +177,47 @@ pub extern "C" fn rust_bench_evm_gas_schedule_u64(n: u64) -> u64 {
 
 #[no_mangle]
 #[inline(never)]
+pub extern "C" fn rust_bench_keccak256_sponge_u64(n: u64) -> u64 {
+    const RC: [u64; 8] = [
+        0x0000000000000001, 0x0000000000008082,
+        0x800000000000808a, 0x8000000080008000,
+        0x000000000000808b, 0x0000000080000001,
+        0x8000000080008081, 0x8000000000008009,
+    ];
+    let mut total: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n {
+        let mut s0 = i.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let mut s1 = i.wrapping_mul(2862933555777941757).wrapping_add(3);
+        let mut s2 = i.wrapping_mul(11400714819323198485).wrapping_add(5);
+        let mut s3 = i.wrapping_mul(14029467366897019727).wrapping_add(7);
+        let mut s4 = i.wrapping_mul(3266489917).wrapping_add(11);
+        for &rc in &RC {
+            let d0 = s4 ^ s1.rotate_left(1);
+            let d1 = s0 ^ s2.rotate_left(1);
+            let d2 = s1 ^ s3.rotate_left(1);
+            let d3 = s2 ^ s4.rotate_left(1);
+            let d4 = s3 ^ s0.rotate_left(1);
+            let b0 = s0 ^ d0;
+            let b1 = (s1 ^ d1).rotate_left(44);
+            let b2 = (s2 ^ d2).rotate_left(43);
+            let b3 = (s3 ^ d3).rotate_left(21);
+            let b4 = (s4 ^ d4).rotate_left(14);
+            s0 = b0 ^ ((!b1) & b2) ^ rc;
+            s1 = b1 ^ ((!b2) & b3);
+            s2 = b2 ^ ((!b3) & b4);
+            s3 = b3 ^ ((!b4) & b0);
+            s4 = b4 ^ ((!b0) & b1);
+        }
+        let sum = s0.wrapping_add(s1).wrapping_add(s2).wrapping_add(s3).wrapping_add(s4);
+        total ^= sum;
+        i += 1;
+    }
+    total
+}
+
+#[no_mangle]
+#[inline(never)]
 pub extern "C" fn rust_bench_holdout_bitwise(n: u64) -> u64 {
     let mut acc: u64 = 0x123456789ABCDEF0;
     let mut i: u64 = 0;
@@ -295,6 +336,13 @@ fn main() {
         let c = rust_bench_evm_gas_schedule_u64(black_box(10_000_000));
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         println!("BENCH evm_gas_schedule_u64 checksum={} time_ms={:.4}", c, dt);
+    }
+
+    if filter == "all" || filter == "keccak256_sponge_u64" {
+        let t0 = Instant::now();
+        let c = rust_bench_keccak256_sponge_u64(black_box(2_000_000));
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        println!("BENCH keccak256_sponge_u64 checksum={} time_ms={:.4}", c, dt);
     }
 
     if filter == "all" || filter == "holdout_bitwise" {

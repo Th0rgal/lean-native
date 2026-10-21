@@ -253,7 +253,7 @@ NVCC=$(which nvcc || echo /usr/local/cuda-13.0/bin/nvcc)
 t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); g++ -O3 -std=c++20 -mcpu=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$RUSTC_BIN" -C opt-level=3 -C target-cpu=native bench_rust.rs -o bench_rust_o3; echo "COMPILE_MS rust_o3 $(($(date +%s%3N) - t0))"
-t0=$(date +%s%3N); clang -O3 -mcpu=native -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); clang -O3 -mcpu=native -march=armv8.2-a+sha3 -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
 t0=$(date +%s%3N); "$NVCC" -O3 -arch=native bench_cuda.cu -o bench_cuda_ptx; echo "COMPILE_MS cuda_o3 $(($(date +%s%3N) - t0))"
 for b in official_lean4 cpp_o3 rust_o3 lean_native_cpu cuda_ptx; do
     for t in $(seq 1 {trials}); do
@@ -295,7 +295,7 @@ rm -rf {remote_dir}
         compile_times_ms["rust_o3"] = round((time.perf_counter() - t0) * 1000.0, 2)
         t0 = time.perf_counter()
         ln_cpu_exe = build_dir / "bench_lean_native_cpu"
-        subprocess.run(["clang", "-O3", "-mcpu=native", "-ffast-math", "-funroll-loops", str(BASELINES_DIR / "bench_lean_native.c"), "-o", str(ln_cpu_exe)], check=True, capture_output=True)
+        subprocess.run(["clang", "-O3", "-mcpu=native", "-march=armv8.2-a+sha3", "-ffast-math", "-funroll-loops", str(BASELINES_DIR / "bench_lean_native.c"), "-o", str(ln_cpu_exe)], check=True, capture_output=True)
         compile_times_ms["lean_native_cpu"] = round((time.perf_counter() - t0) * 1000.0, 2)
         t0 = time.perf_counter()
         cuda_exe = build_dir / "bench_cuda_ptx"

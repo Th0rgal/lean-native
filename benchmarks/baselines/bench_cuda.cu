@@ -235,6 +235,69 @@ uint64_t run_cuda_evm_gas_schedule(uint64_t N, double* elapsed_ms) {
     return (uint64_t)h_sum;
 }
 
+__device__ __forceinline__ uint64_t dev_rotl64(uint64_t x, unsigned int r) {
+    return (x << r) | (x >> (64U - r));
+}
+
+__global__ void keccak256_sponge_u64_kernel(uint64_t N, unsigned long long* global_xor) {
+    const uint64_t RC[8] = {
+        0x0000000000000001ULL, 0x0000000000008082ULL,
+        0x800000000000808aULL, 0x8000000080008000ULL,
+        0x000000000000808bULL, 0x0000000080000001ULL,
+        0x8000000080008081ULL, 0x8000000000008009ULL
+    };
+    uint64_t idx = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+    uint64_t local_xor = 0ULL;
+    for (uint64_t i = idx; i < N; i += stride) {
+        uint64_t s0 = i * 6364136223846793005ULL + 1ULL;
+        uint64_t s1 = i * 2862933555777941757ULL + 3ULL;
+        uint64_t s2 = i * 11400714819323198485ULL + 5ULL;
+        uint64_t s3 = i * 14029467366897019727ULL + 7ULL;
+        uint64_t s4 = i * 3266489917ULL + 11ULL;
+        #pragma unroll
+        for (int r = 0; r < 8; ++r) {
+            uint64_t d0 = s4 ^ dev_rotl64(s1, 1);
+            uint64_t d1 = s0 ^ dev_rotl64(s2, 1);
+            uint64_t d2 = s1 ^ dev_rotl64(s3, 1);
+            uint64_t d3 = s2 ^ dev_rotl64(s4, 1);
+            uint64_t d4 = s3 ^ dev_rotl64(s0, 1);
+            uint64_t b0 = s0 ^ d0;
+            uint64_t b1 = dev_rotl64(s1 ^ d1, 44);
+            uint64_t b2 = dev_rotl64(s2 ^ d2, 43);
+            uint64_t b3 = dev_rotl64(s3 ^ d3, 21);
+            uint64_t b4 = dev_rotl64(s4 ^ d4, 14);
+            s0 = b0 ^ ((~b1) & b2) ^ RC[r];
+            s1 = b1 ^ ((~b2) & b3);
+            s2 = b2 ^ ((~b3) & b4);
+            s3 = b3 ^ ((~b4) & b0);
+            s4 = b4 ^ ((~b0) & b1);
+        }
+        local_xor ^= (s0 + s1 + s2 + s3 + s4);
+    }
+    for (int offset = 16; offset > 0; offset /= 2) {
+        local_xor ^= __shfl_down_sync(0xffffffff, local_xor, offset);
+    }
+    if ((threadIdx.x & 31) == 0) {
+        atomicXor(global_xor, (unsigned long long)local_xor);
+    }
+}
+
+uint64_t run_cuda_keccak256_sponge(uint64_t N, double* elapsed_ms) {
+    unsigned long long* d_xor = nullptr, h_xor = 0;
+    CUDA_CHECK(cudaMalloc(&d_xor, sizeof(unsigned long long)));
+    CUDA_CHECK(cudaMemset(d_xor, 0, sizeof(unsigned long long)));
+    keccak256_sponge_u64_kernel<<<1, 32>>>(0, d_xor);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    double t0 = now_ms();
+    keccak256_sponge_u64_kernel<<<512, 256>>>(N, d_xor);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    *elapsed_ms = now_ms() - t0;
+    CUDA_CHECK(cudaMemcpy(&h_xor, d_xor, sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaFree(d_xor));
+    return (uint64_t)h_xor;
+}
+
 uint64_t run_holdout_bitwise(uint64_t N, double* elapsed_ms) {
     double t0 = now_ms();
     uint64_t acc = 0x123456789ABCDEF0ULL;
@@ -308,6 +371,10 @@ int main(int argc, char** argv) {
     if (filter == "all" || filter == "evm_gas_schedule_u64") {
         uint64_t c = run_cuda_evm_gas_schedule(10000000ULL, &dt);
         std::printf("BENCH evm_gas_schedule_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
+    }
+    if (filter == "all" || filter == "keccak256_sponge_u64") {
+        uint64_t c = run_cuda_keccak256_sponge(2000000ULL, &dt);
+        std::printf("BENCH keccak256_sponge_u64 checksum=%llu time_ms=%.4f\n", (unsigned long long)c, dt);
     }
     if (filter == "all" || filter == "holdout_bitwise") {
         uint64_t c = run_holdout_bitwise(10000000ULL, &dt);
