@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="/var/lib/sandboxed-node/caches/elan/bin:$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
+export PATH="$ROOT_DIR/../turbo-lean/target/release:/var/lib/sandboxed-node/caches/elan/bin:$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
 
 BASE_REF="${1:-HEAD}"
 EXTRA_PR_FLAGS="${LEAN_NATIVE_PR_FLAGS:-}"
