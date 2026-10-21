@@ -1,0 +1,38 @@
+{
+  "schema_version": "lean-native-hardware-profile-v1",
+  "profile_id": "colab_tpu_v6e_epyc_9b14",
+  "target": "x86_64",
+  "llvm_target_cpu": "x86-64-v3",
+  "sm_arch": "tpu_v6e",
+  "hardware_metadata": {
+    "host_os": "linux",
+    "host_arch": "x86_64",
+    "cpu_model": "AMD EPYC 9B14",
+    "gpu_model": "Google Cloud TPU v6e (Trillium v6 lite / MLIR-XLA)"
+  },
+  "add_sub_cost": 1,
+  "bitwise_cost": 1,
+  "shift_cost": 1,
+  "cmp_cost": 1,
+  "mul_cost": 2,
+  "div_mod_cost": 8,
+  "fma_cost": 1,
+  "select_cost": 1,
+  "clz256_cost": 2,
+  "add_sub_checked256_cost": 3,
+  "mul_checked256_cost": 4,
+  "min_gpu_elements": 65536,
+  "gpu_block_threads": 256,
+  "matmul_tile_dim": 16,
+  "calibration_receipt": {
+    "measured_ns": {
+      "add_ns": 0.9248,
+      "mul_ns": 1.2331,
+      "div_ns": 5.2616,
+      "fma_ns": 0.6164,
+      "select_ns": 0.9272
+    },
+    "payload_digest_blake2b256": "4354b85e1a518260eec1b46e5441cb6615432e103421a35b81641cc19b8b2e1f",
+    "calibrated_at_utc": "2026-10-21T07:54:33Z"
+  }
+}

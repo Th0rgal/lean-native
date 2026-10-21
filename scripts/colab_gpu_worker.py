@@ -1438,8 +1438,8 @@ def main() -> int:
     parser.add_argument("--serve", action="store_true", help="Run HTTP GPU/TPU worker server (inside Google Colab or federated node)")
     parser.add_argument("--cloudflared", action="store_true", help="Automatically download and start a Cloudflare Quick Tunnel for --serve")
     parser.add_argument("--port", type=int, default=8765, help="Port for --serve (default: 8765)")
-    parser.add_argument("--token", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_TOKEN", ""), help="Bearer token")
-    parser.add_argument("--api-url", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_API_URL", ""), help="Remote Colab URL")
+    parser.add_argument("--token", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_TOKEN", "fCiXWLdlEhfaImpQUDBA5OOXEYngnGwn"), help="Bearer token")
+    parser.add_argument("--api-url", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_API_URL", "https://sell-exist-blues-banners.trycloudflare.com"), help="Remote Colab URL")
     parser.add_argument(
         "--peers",
         type=str,
@@ -1727,7 +1727,14 @@ def main() -> int:
         if res.get("ok") and res.get("profile"):
             prof = res["profile"]
             hw_meta = prof.get("hardware_metadata", {})
-            if "EPYC 7B13" in hw_meta.get("cpu_model", "") and hw_meta.get("gpu_model") == "none":
+            if "EPYC 9B14" in hw_meta.get("cpu_model", "") or hw_meta.get("gpu_model") == "v6e-1":
+                hw_meta["gpu_model"] = "Google Cloud TPU v6e (Trillium v6 lite / MLIR-XLA)"
+                prof["hardware_metadata"] = hw_meta
+                prof["sm_arch"] = "tpu_v6e"
+                from tune_hardware_profile import compute_payload_digest
+
+                prof["calibration_receipt"]["payload_digest_blake2b256"] = compute_payload_digest(prof)
+            elif "EPYC 7B13" in hw_meta.get("cpu_model", "") and hw_meta.get("gpu_model") == "none":
                 hw_meta["gpu_model"] = "Google Cloud TPU v5e (ct5lp-hightpu / MLIR-XLA)"
                 prof["hardware_metadata"] = hw_meta
                 prof["sm_arch"] = "tpu_v5e"
