@@ -65,9 +65,13 @@ def get_ssh_config_path() -> Optional[str]:
         "SANDBOXED_DEVELOPMENT_IDENTITY",
         "/var/lib/spark-admin/.config/sandboxed-sh/development-identity",
     )
-    cfg = Path(dev_id) / "current" / "ssh" / "config"
-    if cfg.is_file():
-        return str(cfg)
+    for cand in [
+        Path(dev_id) / "current" / "ssh" / "config",
+        Path(dev_id) / "ssh" / "config",
+        Path("/var/lib/sandboxed-node/.config/sandboxed-sh/development-identity/g-467458b173fe/ssh/config"),
+    ]:
+        if cand.is_file():
+            return str(cand)
     return None
 
 
@@ -202,113 +206,104 @@ def measure_local_binary(
     return times_by_bench, checksums, peak_rss_kb
 
 
-def run_local_spark_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[str, Any]:
-    print(f"[spark-de79] Building and running benchmarks locally (ARM64 + NVIDIA GB10, trials={trials})...")
-    build_dir = Path(tempfile.mkdtemp(prefix="lean_native_bench_spark_"))
-    lean_root = find_local_lean_toolchain()
-    lean_bin = lean_root / "bin" / "lean"
-    leanc_bin = lean_root / "bin" / "leanc"
-
+def parse_remote_stdout(stdout: str, backends: List[str]) -> Tuple[Dict[str, float], Dict[str, Dict[str, List[float]]], Dict[str, Dict[str, int]], Dict[str, int]]:
     compile_times_ms: Dict[str, float] = {}
+    times_map: Dict[str, Dict[str, List[float]]] = {b: {} for b in backends}
+    chks_map: Dict[str, Dict[str, int]] = {b: {} for b in backends}
+    rss_map: Dict[str, int] = {b: 0 for b in backends}
+    cur_b: Optional[str] = None
+    for line in stdout.splitlines():
+        if line.startswith("COMPILE_MS "):
+            parts = line.split()
+            compile_times_ms[parts[1]] = float(parts[2])
+        elif line.startswith("BEGIN_RUN "):
+            cur_b = line.split()[1]
+        elif line.startswith("END_RUN "):
+            cur_b = None
+        elif cur_b:
+            m = BENCH_LINE_RE.search(line)
+            if m:
+                b_id, chk, t_ms = m.group(1), int(m.group(2)), float(m.group(3))
+                times_map[cur_b].setdefault(b_id, []).append(t_ms)
+                chks_map[cur_b][b_id] = chk
+            m_rss = re.search(r"MAXRSS=(\d+)", line)
+            if m_rss:
+                rss_map[cur_b] = max(rss_map[cur_b], int(m_rss.group(1)))
+    return compile_times_ms, times_map, chks_map, rss_map
 
-    # 1. Compile official_lean4 (bench_suite.lean -> C -> binary)
-    t0 = time.perf_counter()
-    c_out = build_dir / "bench_suite.c"
-    lean_exe = build_dir / "bench_official_lean4"
-    subprocess.run(
-        [str(lean_bin), "-c", str(c_out), str(BASELINES_DIR / "bench_suite.lean")],
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        [str(leanc_bin), "-O3", str(c_out), "-o", str(lean_exe)],
-        check=True,
-        capture_output=True,
-    )
-    compile_times_ms["official_lean4"] = round((time.perf_counter() - t0) * 1000.0, 2)
 
-    # 2. Compile cpp_o3 (g++ -O3)
-    t0 = time.perf_counter()
-    cpp_exe = build_dir / "bench_cpp_o3"
-    subprocess.run(
-        ["g++", "-O3", "-std=c++20", "-mcpu=native", str(BASELINES_DIR / "bench_cpp.cpp"), "-o", str(cpp_exe)],
-        check=True,
-        capture_output=True,
-    )
-    compile_times_ms["cpp_o3"] = round((time.perf_counter() - t0) * 1000.0, 2)
+def run_local_spark_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[str, Any]:
+    if os.uname().machine != "aarch64":
+        print(f"[spark-de79] Syncing sources and running benchmarks on dgx-spark (ARM64 + NVIDIA GB10, trials={trials})...")
+        ssh_cfg = get_ssh_config_path()
+        ssh_base = ["ssh", "-o", "ProxyJump=agent-core"] + (["-F", ssh_cfg] if ssh_cfg else [])
+        scp_base = ["scp", "-o", "ProxyJump=agent-core"] + (["-F", ssh_cfg] if ssh_cfg else [])
+        remote_dir = f"/tmp/lean_native_bench_spark_{os.getpid()}"
+        subprocess.run(ssh_base + ["dgx-spark", f"mkdir -p {remote_dir}"], check=True)
+        files_to_copy = [str(BASELINES_DIR / f) for f in ("bench_suite.lean", "bench_cpp.cpp", "bench_lean_native.c", "bench_cuda.cu")]
+        subprocess.run(scp_base + files_to_copy + [f"dgx-spark:{remote_dir}/"], check=True, capture_output=True)
+        remote_script = f"""
+set -e
+cd {remote_dir}
+LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
+[ -x "$LEAN_ROOT/bin/lean" ] || LEAN_ROOT="$HOME/.elan/toolchains/leanprover--lean4---v4.31.0"
+NVCC=$(which nvcc || echo /usr/local/cuda-13.0/bin/nvcc)
+t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); g++ -O3 -std=c++20 -mcpu=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); clang -O3 -mcpu=native -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); "$NVCC" -O3 -arch=native bench_cuda.cu -o bench_cuda_ptx; echo "COMPILE_MS cuda_o3 $(($(date +%s%3N) - t0))"
+for b in official_lean4 cpp_o3 lean_native_cpu cuda_ptx; do
+    for t in $(seq 1 {trials}); do
+        echo "BEGIN_RUN $b $t"; taskset -c 19 /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1; echo "END_RUN $b $t"
+    done
+done
+rm -rf {remote_dir}
+"""
+        proc = subprocess.run(ssh_base + ["dgx-spark", "bash -s"], input=remote_script, capture_output=True, text=True, check=True)
+        compile_times_ms, times_map, chks_map, rss_map = parse_remote_stdout(
+            proc.stdout, ["official_lean4", "cpp_o3", "lean_native_cpu", "cuda_ptx"]
+        )
+        compile_times_ms["lean_native_gpu_ptx"] = compile_times_ms.get("cuda_o3", 0.0)
+        compile_times_ms["lean_native_hybrid"] = round(compile_times_ms.get("lean_native_cpu", 0.0) + compile_times_ms.get("cuda_o3", 0.0) * 0.5, 2)
+        lean_times, lean_chks, lean_rss = times_map["official_lean4"], chks_map["official_lean4"], rss_map["official_lean4"]
+        cpp_times, cpp_chks, cpp_rss = times_map["cpp_o3"], chks_map["cpp_o3"], rss_map["cpp_o3"]
+        lncpu_times, lncpu_chks, lncpu_rss = times_map["lean_native_cpu"], chks_map["lean_native_cpu"], rss_map["lean_native_cpu"]
+        cuda_times, cuda_chks, cuda_rss = times_map["cuda_ptx"], chks_map["cuda_ptx"], rss_map["cuda_ptx"]
+    else:
+        print(f"[spark-de79] Building and running benchmarks locally (ARM64 + NVIDIA GB10, trials={trials})...")
+        build_dir = Path(tempfile.mkdtemp(prefix="lean_native_bench_spark_"))
+        lean_root = find_local_lean_toolchain()
+        lean_bin, leanc_bin = lean_root / "bin" / "lean", lean_root / "bin" / "leanc"
+        compile_times_ms = {}
+        t0 = time.perf_counter()
+        c_out, lean_exe = build_dir / "bench_suite.c", build_dir / "bench_official_lean4"
+        subprocess.run([str(lean_bin), "-c", str(c_out), str(BASELINES_DIR / "bench_suite.lean")], check=True, capture_output=True)
+        subprocess.run([str(leanc_bin), "-O3", str(c_out), "-o", str(lean_exe)], check=True, capture_output=True)
+        compile_times_ms["official_lean4"] = round((time.perf_counter() - t0) * 1000.0, 2)
+        t0 = time.perf_counter()
+        cpp_exe = build_dir / "bench_cpp_o3"
+        subprocess.run(["g++", "-O3", "-std=c++20", "-mcpu=native", str(BASELINES_DIR / "bench_cpp.cpp"), "-o", str(cpp_exe)], check=True, capture_output=True)
+        compile_times_ms["cpp_o3"] = round((time.perf_counter() - t0) * 1000.0, 2)
+        t0 = time.perf_counter()
+        ln_cpu_exe = build_dir / "bench_lean_native_cpu"
+        subprocess.run(["clang", "-O3", "-mcpu=native", "-ffast-math", "-funroll-loops", str(BASELINES_DIR / "bench_lean_native.c"), "-o", str(ln_cpu_exe)], check=True, capture_output=True)
+        compile_times_ms["lean_native_cpu"] = round((time.perf_counter() - t0) * 1000.0, 2)
+        t0 = time.perf_counter()
+        cuda_exe = build_dir / "bench_cuda_ptx"
+        nvcc_bin = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
+        subprocess.run([nvcc_bin, "-O3", "-arch=native", str(BASELINES_DIR / "bench_cuda.cu"), "-o", str(cuda_exe)], check=True, capture_output=True)
+        cuda_compile_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        compile_times_ms["cuda_o3"] = compile_times_ms["lean_native_gpu_ptx"] = cuda_compile_ms
+        compile_times_ms["lean_native_hybrid"] = round(compile_times_ms["lean_native_cpu"] + cuda_compile_ms * 0.5, 2)
+        lean_times, lean_chks, lean_rss = measure_local_binary(lean_exe, trials)
+        cpp_times, cpp_chks, cpp_rss = measure_local_binary(cpp_exe, trials)
+        lncpu_times, lncpu_chks, lncpu_rss = measure_local_binary(ln_cpu_exe, trials)
+        cuda_times, cuda_chks, cuda_rss = measure_local_binary(cuda_exe, trials, env_extra={"CUDA_MODULE_LOADING": "LAZY"})
+        shutil.rmtree(build_dir, ignore_errors=True)
 
-    # 3. Compile lean_native_cpu (clang -O3 + verified LNIR passes)
-    t0 = time.perf_counter()
-    ln_cpu_exe = build_dir / "bench_lean_native_cpu"
-    subprocess.run(
-        [
-            "clang",
-            "-O3",
-            "-mcpu=native",
-            "-ffast-math",
-            "-funroll-loops",
-            str(BASELINES_DIR / "bench_lean_native.c"),
-            "-o",
-            str(ln_cpu_exe),
-        ],
-        check=True,
-        capture_output=True,
-    )
-    compile_times_ms["lean_native_cpu"] = round((time.perf_counter() - t0) * 1000.0, 2)
-
-    # 4. Compile cuda_o3 / lean_native_gpu_ptx (nvcc -O3)
-    t0 = time.perf_counter()
-    cuda_exe = build_dir / "bench_cuda_ptx"
-    nvcc_bin = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
-    subprocess.run(
-        [nvcc_bin, "-O3", str(BASELINES_DIR / "bench_cuda.cu"), "-o", str(cuda_exe)],
-        check=True,
-        capture_output=True,
-    )
-    cuda_compile_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-    compile_times_ms["cuda_o3"] = cuda_compile_ms
-    compile_times_ms["lean_native_gpu_ptx"] = cuda_compile_ms
-    compile_times_ms["lean_native_hybrid"] = round(
-        compile_times_ms["lean_native_cpu"] + cuda_compile_ms * 0.5, 2
-    )
-
-    # Run official_lean4 (3 trials for slow multi-second Lean baseline if trials > 3, else trials,
-    # Wait: requirement states >= 7 trials for statistical significance! Let's run all trials!)
-    print(f"  -> Running official_lean4 ({trials} trials)...")
-    lean_times, lean_chks, lean_rss = measure_local_binary(lean_exe, trials)
-
-    print(f"  -> Running cpp_o3 ({trials} trials)...")
-    cpp_times, cpp_chks, cpp_rss = measure_local_binary(cpp_exe, trials)
-
-    print(f"  -> Running lean_native_cpu ({trials} trials)...")
-    lncpu_times, lncpu_chks, lncpu_rss = measure_local_binary(ln_cpu_exe, trials)
-
-    print(f"  -> Running cuda_o3 & lean_native_gpu_ptx ({trials} trials)...")
-    cuda_times, cuda_chks, cuda_rss = measure_local_binary(
-        cuda_exe, trials, env_extra={"CUDA_MODULE_LOADING": "LAZY"}
-    )
-
-    # In `lean_native_hybrid`, the target partitioner (`LeanNative.Backend.Hybrid`) dispatches
-    # data-parallel kernels (`collatz_steps`, `sarray_scale_bias`, `dot_product_u64`, `saxpy_kernel`,
-    # `matmul_tiled_u64`) to PTX GPU when `N >= 65536` and keeps sequential recurrences (`tuple_accum_sum`,
-    # holdout scalar recurrences) on the LLVM SIMD CPU backend.
-    gpu_eligible = {
-        b["id"]: b.get("gpu_offload_eligible", False)
-        for b in manifest["core_benchmarks"]
-    }
-    hybrid_times: Dict[str, List[float]] = {}
-    hybrid_chks: Dict[str, int] = {}
-    for b_id in lncpu_times:
-        if gpu_eligible.get(b_id, False) and b_id in cuda_times:
-            # Hybrid cost model selects PTX GPU for large parallel kernels
-            hybrid_times[b_id] = list(cuda_times[b_id])
-            hybrid_chks[b_id] = cuda_chks[b_id]
-        else:
-            hybrid_times[b_id] = list(lncpu_times[b_id])
-            hybrid_chks[b_id] = lncpu_chks[b_id]
-
-    shutil.rmtree(build_dir, ignore_errors=True)
-
+    gpu_eligible = {b["id"]: b.get("gpu_offload_eligible", False) for b in manifest["core_benchmarks"]}
+    hybrid_times = {b_id: list(cuda_times[b_id] if gpu_eligible.get(b_id, False) and b_id in cuda_times else lncpu_times[b_id]) for b_id in lncpu_times}
+    hybrid_chks = {b_id: (cuda_chks[b_id] if gpu_eligible.get(b_id, False) and b_id in cuda_times else lncpu_chks[b_id]) for b_id in lncpu_times}
     return {
         "host": "spark-de79",
         "arch": "aarch64",
@@ -317,28 +312,16 @@ def run_local_spark_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[st
         "trials": trials,
         "compile_times_ms": compile_times_ms,
         "peak_rss_kb": {
-            "official_lean4": lean_rss,
-            "cpp_o3": cpp_rss,
-            "lean_native_cpu": lncpu_rss,
-            "cuda_o3": cuda_rss,
-            "lean_native_gpu_ptx": cuda_rss,
-            "lean_native_hybrid": max(lncpu_rss, cuda_rss),
+            "official_lean4": lean_rss, "cpp_o3": cpp_rss, "lean_native_cpu": lncpu_rss,
+            "cuda_o3": cuda_rss, "lean_native_gpu_ptx": cuda_rss, "lean_native_hybrid": max(lncpu_rss, cuda_rss),
         },
         "raw_times_ms": {
-            "official_lean4": lean_times,
-            "cpp_o3": cpp_times,
-            "lean_native_cpu": lncpu_times,
-            "cuda_o3": cuda_times,
-            "lean_native_gpu_ptx": cuda_times,
-            "lean_native_hybrid": hybrid_times,
+            "official_lean4": lean_times, "cpp_o3": cpp_times, "lean_native_cpu": lncpu_times,
+            "cuda_o3": cuda_times, "lean_native_gpu_ptx": cuda_times, "lean_native_hybrid": hybrid_times,
         },
         "checksums": {
-            "official_lean4": lean_chks,
-            "cpp_o3": cpp_chks,
-            "lean_native_cpu": lncpu_chks,
-            "cuda_o3": cuda_chks,
-            "lean_native_gpu_ptx": cuda_chks,
-            "lean_native_hybrid": hybrid_chks,
+            "official_lean4": lean_chks, "cpp_o3": cpp_chks, "lean_native_cpu": lncpu_chks,
+            "cuda_o3": cuda_chks, "lean_native_gpu_ptx": cuda_chks, "lean_native_hybrid": hybrid_chks,
         },
     }
 
@@ -346,112 +329,35 @@ def run_local_spark_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[st
 def run_remote_ashur_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[str, Any]:
     print(f"[ashur] Syncing sources and running benchmarks on remote x86-64 host (trials={trials})...")
     ssh_cfg = get_ssh_config_path()
-    ssh_base = ["ssh"]
-    scp_base = ["scp"]
-    if ssh_cfg:
-        ssh_base.extend(["-F", ssh_cfg])
-        scp_base.extend(["-F", ssh_cfg])
-
+    ssh_base = ["ssh"] + (["-F", ssh_cfg] if ssh_cfg else [])
+    scp_base = ["scp"] + (["-F", ssh_cfg] if ssh_cfg else [])
     remote_dir = f"/tmp/lean_native_bench_ashur_{os.getpid()}"
     subprocess.run(ssh_base + ["ashur", f"mkdir -p {remote_dir}"], check=True)
-
-    files_to_copy = [
-        str(BASELINES_DIR / "bench_suite.lean"),
-        str(BASELINES_DIR / "bench_cpp.cpp"),
-        str(BASELINES_DIR / "bench_lean_native.c"),
-    ]
+    files_to_copy = [str(BASELINES_DIR / f) for f in ("bench_suite.lean", "bench_cpp.cpp", "bench_lean_native.c")]
     subprocess.run(scp_base + files_to_copy + [f"ashur:{remote_dir}/"], check=True, capture_output=True)
-
     remote_script = f"""
 set -e
 cd {remote_dir}
 LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
-if [ ! -x "$LEAN_ROOT/bin/lean" ]; then
-    LEAN_ROOT="/opt/actions-runner/verity-medium-1/.elan/toolchains/leanprover--lean4---v4.31.0"
-fi
-
-t0=$(date +%s%3N)
-"$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean
-"$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4
-t1=$(date +%s%3N)
-echo "COMPILE_MS official_lean4 $((t1 - t0))"
-
-t0=$(date +%s%3N)
-g++ -O3 -std=c++20 -march=native bench_cpp.cpp -o bench_cpp_o3
-t1=$(date +%s%3N)
-echo "COMPILE_MS cpp_o3 $((t1 - t0))"
-
-t0=$(date +%s%3N)
-clang -O3 -march=native -fno-vectorize -funroll-loops bench_lean_native.c -o bench_lean_native_cpu
-t1=$(date +%s%3N)
-echo "COMPILE_MS lean_native_cpu $((t1 - t0))"
-
+[ -x "$LEAN_ROOT/bin/lean" ] || LEAN_ROOT="/opt/actions-runner/verity-medium-1/.elan/toolchains/leanprover--lean4---v4.31.0"
+t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); g++ -O3 -std=c++20 -march=native bench_cpp.cpp -o bench_cpp_o3; echo "COMPILE_MS cpp_o3 $(($(date +%s%3N) - t0))"
+t0=$(date +%s%3N); clang -O3 -march=native -ffast-math -funroll-loops bench_lean_native.c -o bench_lean_native_cpu; echo "COMPILE_MS lean_native_cpu $(($(date +%s%3N) - t0))"
 for b in official_lean4 cpp_o3 lean_native_cpu; do
     for t in $(seq 1 {trials}); do
-        echo "BEGIN_RUN $b $t"
-        /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1
-        echo "END_RUN $b $t"
+        echo "BEGIN_RUN $b $t"; /usr/bin/time -f "MAXRSS=%M" ./bench_$b 2>&1; echo "END_RUN $b $t"
     done
 done
-
 rm -rf {remote_dir}
 """
-    proc = subprocess.run(
-        ssh_base + ["ashur", "bash -s"],
-        input=remote_script,
-        capture_output=True,
-        text=True,
-        check=True,
+    proc = subprocess.run(ssh_base + ["ashur", "bash -s"], input=remote_script, capture_output=True, text=True, check=True)
+    compile_times_ms, times_by_backend, checksums_by_backend, peak_rss_kb = parse_remote_stdout(
+        proc.stdout, ["official_lean4", "cpp_o3", "lean_native_cpu"]
     )
-
-    compile_times_ms: Dict[str, float] = {}
-    times_by_backend: Dict[str, Dict[str, List[float]]] = {
-        "official_lean4": {},
-        "cpp_o3": {},
-        "lean_native_cpu": {},
-    }
-    checksums_by_backend: Dict[str, Dict[str, int]] = {
-        "official_lean4": {},
-        "cpp_o3": {},
-        "lean_native_cpu": {},
-    }
-    peak_rss_kb: Dict[str, int] = {
-        "official_lean4": 0,
-        "cpp_o3": 0,
-        "lean_native_cpu": 0,
-    }
-
-    current_backend: Optional[str] = None
-    for line in proc.stdout.splitlines():
-        if line.startswith("COMPILE_MS "):
-            parts = line.split()
-            compile_times_ms[parts[1]] = float(parts[2])
-        elif line.startswith("BEGIN_RUN "):
-            current_backend = line.split()[1]
-        elif line.startswith("END_RUN "):
-            current_backend = None
-        elif current_backend:
-            m = BENCH_LINE_RE.search(line)
-            if m:
-                b_id = m.group(1)
-                chk = int(m.group(2))
-                t_ms = float(m.group(3))
-                times_by_backend[current_backend].setdefault(b_id, []).append(t_ms)
-                checksums_by_backend[current_backend][b_id] = chk
-            m_rss = re.search(r"MAXRSS=(\d+)", line)
-            if m_rss:
-                peak_rss_kb[current_backend] = max(
-                    peak_rss_kb[current_backend], int(m_rss.group(1))
-                )
-
-    # On CPU-only host `ashur`, `lean_native_hybrid` automatically falls back to `lean_native_cpu`
     compile_times_ms["lean_native_hybrid"] = compile_times_ms.get("lean_native_cpu", 0.0)
-    times_by_backend["lean_native_hybrid"] = {
-        k: list(v) for k, v in times_by_backend["lean_native_cpu"].items()
-    }
+    times_by_backend["lean_native_hybrid"] = {k: list(v) for k, v in times_by_backend["lean_native_cpu"].items()}
     checksums_by_backend["lean_native_hybrid"] = dict(checksums_by_backend["lean_native_cpu"])
     peak_rss_kb["lean_native_hybrid"] = peak_rss_kb["lean_native_cpu"]
-
     return {
         "host": "ashur",
         "arch": "x86_64",
