@@ -134,4 +134,112 @@ def hashStringFNV64 (s : String) : String :=
 def LNIRDecl.structuralHash (d : LNIRDecl) : String :=
   hashStringFNV64 (reprStr d)
 
+/-! ## Canonical de Bruijn Renaming & `modded-nanogpt` Token Stream Features -/
+
+private def lookupDeBruijn (ctx : List VarId) (v : VarId) : VarId :=
+  let rec findIdx ( idx : Nat ) : List VarId → VarId
+    | [] => v
+    | h :: t => if h == v then idx else findIdx (idx + 1) t
+  findIdx 0 ctx
+
+def ScalarExpr.canonicalDeBruijn (ctx : List VarId) : ScalarExpr → ScalarExpr
+  | .constU64 v => .constU64 v
+  | .constBool b => .constBool b
+  | .var id => .var (lookupDeBruijn ctx id)
+  | .binOp op l r => .binOp op (l.canonicalDeBruijn ctx) (r.canonicalDeBruijn ctx)
+  | .unaryOp op a => .unaryOp op (a.canonicalDeBruijn ctx)
+  | .select c t e => .select (c.canonicalDeBruijn ctx) (t.canonicalDeBruijn ctx) (e.canonicalDeBruijn ctx)
+  | .fma a b c => .fma (a.canonicalDeBruijn ctx) (b.canonicalDeBruijn ctx) (c.canonicalDeBruijn ctx)
+
+def LNIRExpr.canonicalDeBruijn (ctx : List VarId) : LNIRExpr → LNIRExpr
+  | .scalar e => .scalar (e.canonicalDeBruijn ctx)
+  | .constU256 v => .constU256 v
+  | .mulDivDown a b d => .mulDivDown (lookupDeBruijn ctx a) (lookupDeBruijn ctx b) (lookupDeBruijn ctx d)
+  | .mulDivUp a b d => .mulDivUp (lookupDeBruijn ctx a) (lookupDeBruijn ctx b) (lookupDeBruijn ctx d)
+  | .storageLoad m s => .storageLoad (lookupDeBruijn ctx m) (lookupDeBruijn ctx s)
+  | .storageStore m s v => .storageStore (lookupDeBruijn ctx m) (lookupDeBruijn ctx s) (lookupDeBruijn ctx v)
+  | .mkTuple fs => .mkTuple (fs.map (lookupDeBruijn ctx))
+  | .projTuple tv idx => .projTuple (lookupDeBruijn ctx tv) idx
+  | .allocCtor tag ofs sfs => .allocCtor tag (ofs.map (lookupDeBruijn ctx)) (sfs.map (lookupDeBruijn ctx))
+  | .ctorGetObj cv idx => .ctorGetObj (lookupDeBruijn ctx cv) idx
+  | .ctorGetScalar cv idx ty => .ctorGetScalar (lookupDeBruijn ctx cv) idx ty
+  | .isExclusive ov => .isExclusive (lookupDeBruijn ctx ov)
+  | .sarrayLen av => .sarrayLen (lookupDeBruijn ctx av)
+  | .sarrayDataPtr av ety => .sarrayDataPtr (lookupDeBruijn ctx av) ety
+  | .sarrayEnsureExclusive av ety => .sarrayEnsureExclusive (lookupDeBruijn ctx av) ety
+  | .sarrayGet av iv ety => .sarrayGet (lookupDeBruijn ctx av) (lookupDeBruijn ctx iv) ety
+  | .sarraySet av iv vv ety => .sarraySet (lookupDeBruijn ctx av) (lookupDeBruijn ctx iv) (lookupDeBruijn ctx vv) ety
+  | .rawLoad pv iv ety => .rawLoad (lookupDeBruijn ctx pv) (lookupDeBruijn ctx iv) ety
+  | .boxScalar vv ty => .boxScalar (lookupDeBruijn ctx vv) ty
+  | .unboxScalar bv ty => .unboxScalar (lookupDeBruijn ctx bv) ty
+  | .call fn args rty ext => .call fn (args.map (lookupDeBruijn ctx)) rty ext
+
+def LNIRCode.canonicalDeBruijn (ctx : List VarId) : LNIRCode → LNIRCode
+  | .letBind dst ty val k =>
+    let val' := val.canonicalDeBruijn ctx
+    let ctx' := dst :: ctx
+    .letBind 0 ty val' (k.canonicalDeBruijn ctx')
+  | .rawStore pv iv vv ety k =>
+    .rawStore (lookupDeBruijn ctx pv) (lookupDeBruijn ctx iv) (lookupDeBruijn ctx vv) ety (k.canonicalDeBruijn ctx)
+  | .incRef ov c k => .incRef (lookupDeBruijn ctx ov) c (k.canonicalDeBruijn ctx)
+  | .decRef ov c k => .decRef (lookupDeBruijn ctx ov) c (k.canonicalDeBruijn ctx)
+  | .ite cv t e => .ite (lookupDeBruijn ctx cv) (t.canonicalDeBruijn ctx) (e.canonicalDeBruijn ctx)
+  | .seqFor iv lv hv av ai aty step k =>
+    let lv' := lookupDeBruijn ctx lv
+    let hv' := lookupDeBruijn ctx hv
+    let ai' := lookupDeBruijn ctx ai
+    let stepCtx := av :: iv :: ctx
+    let kCtx := av :: ctx
+    .seqFor 1 lv' hv' 0 ai' aty (step.canonicalDeBruijn stepCtx) (k.canonicalDeBruijn kCtx)
+  | .parFor ov lv ins ety kern k =>
+    let lv' := lookupDeBruijn ctx lv
+    let ins' := ins.map (lookupDeBruijn ctx)
+    let kern' := match kern with
+      | .customScalar idxVar inVars body =>
+        .customScalar 0 (List.range inVars.length) (body.canonicalDeBruijn (idxVar :: inVars.reverse ++ ctx))
+      | other => other
+    .parFor 0 lv' ins' ety kern' (k.canonicalDeBruijn (ov :: ctx))
+  | .ret v => .ret (lookupDeBruijn ctx v)
+  | .unreachable => .unreachable
+
+/-- Alpha-canonicalized de Bruijn representation of an `LNIRDecl` for `modded-nanogpt` training. -/
+def LNIRDecl.canonicalDeBruijn (d : LNIRDecl) : LNIRDecl :=
+  let initCtx := (d.params.map (·.id)).reverse
+  let params' := (List.range d.params.length).zip d.params |>.map fun (idx, p) =>
+    { p with id := idx, name := s!"p{idx}" }
+  { d with params := params', body := d.body.canonicalDeBruijn initCtx }
+
+/-- Structural features `(nInstr, nBlocks, nLoops, maxLoopDepth, u64Count, u256Count, boolCount)`
+    extracted from an `LNIRDecl` for telemetry and cost/value head conditioning. -/
+def LNIRDecl.telemetryFeaturesJson (d : LNIRDecl) : String :=
+  let rec go (depth : Nat) : LNIRCode → Nat × Nat × Nat × Nat × Nat × Nat × Nat
+    | .letBind _ ty _ k =>
+      let (ni, nb, nl, md, u64c, u256c, bc) := go depth k
+      let u64d := if ty == .i64 || ty == .usize then 1 else 0
+      let u256d := if ty == .u256 || ty == .i256 then 1 else 0
+      let bd := if ty == .i1 then 1 else 0
+      (ni + 1, nb, nl, md, u64c + u64d, u256c + u256d, bc + bd)
+    | .rawStore _ _ _ _ k | .incRef _ _ k | .decRef _ _ k =>
+      let (ni, nb, nl, md, u64c, u256c, bc) := go depth k
+      (ni + 1, nb, nl, md, u64c, u256c, bc)
+    | .ite _ t e =>
+      let (ni1, nb1, nl1, md1, u64_1, u256_1, b1) := go depth t
+      let (ni2, nb2, nl2, md2, u64_2, u256_2, b2) := go depth e
+      (ni1 + ni2 + 1, nb1 + nb2 + 2, nl1 + nl2, Nat.max md1 md2, u64_1 + u64_2, u256_1 + u256_2, b1 + b2 + 1)
+    | .seqFor _ _ _ _ _ aty step k =>
+      let (ni1, nb1, nl1, md1, u64_1, u256_1, b1) := go (depth + 1) step
+      let (ni2, nb2, nl2, md2, u64_2, u256_2, b2) := go depth k
+      let u64d := if aty == .i64 || aty == .usize then 1 else 0
+      let u256d := if aty == .u256 || aty == .i256 then 1 else 0
+      (ni1 + ni2 + 1, nb1 + nb2 + 1, nl1 + nl2 + 1, Nat.max (Nat.max (depth + 1) md1) md2,
+       u64_1 + u64_2 + u64d, u256_1 + u256_2 + u256d, b1 + b2)
+    | .parFor _ _ _ ety _ k =>
+      let (ni, nb, nl, md, u64c, u256c, bc) := go (depth + 1) k
+      let u64d := if ety == .i64 || ety == .usize then 1 else 0
+      let u256d := if ety == .u256 || ety == .i256 then 1 else 0
+      (ni + 1, nb + 1, nl + 1, Nat.max (depth + 1) md, u64c + u64d, u256c + u256d, bc)
+    | .ret _ | .unreachable => (1, 1, 0, depth, 0, 0, 0)
+  let (nInstr, nBlocks, nLoops, maxDepth, u64c, u256c, bc) := go 0 d.body
+  s!"\{\"n_instr\":{nInstr},\"n_blocks\":{nBlocks},\"n_loops\":{nLoops},\"max_loop_depth\":{maxDepth},\"width_histogram\":\{\"u64\":{u64c},\"u256\":{u256c},\"bool\":{bc}}}"
+
 end LeanNative.IR

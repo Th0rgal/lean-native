@@ -181,7 +181,9 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
 
 def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let opts := parseCoreCLIOptions args
+  let telCfg ← TelemetryConfig.probe args
   let baseMod ← loadInputModule elaborateHook? args opts.emitCABI
+  let _ ← emitModuleTelemetryEvents telCfg .x86_64 false baseMod
   let (optMod, _) := if opts.isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   if opts.emitCABI then
     let cText := LeanNative.Backend.emitFastCheckCABI optMod
@@ -208,7 +210,9 @@ def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
   let isBaseline := hasFlag args "--baseline"
   let outPath := findFlagValue args "-o" ""
+  let telCfg ← TelemetryConfig.probe args
   let baseMod ← loadInputModule elaborateHook? args
+  let _ ← emitModuleTelemetryEvents telCfg .x86_64 false baseMod
   let (modToEmit, _) := if isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   let irText := if isBaseline then emitLLVMBaseline modToEmit arch else emitLLVMOptimized modToEmit arch
   if outPath.isEmpty then
@@ -443,7 +447,9 @@ def runSuperopt (elaborateHook? : Option (String → IO LNIRModule)) (args : Lis
   let profilePath := findFlagValue args "--profile" ""
   let outPath := findFlagValue args "-o" ""
   let jsonFlag := hasFlag args "--json"
+  let telCfg ← TelemetryConfig.probe args
   let baseMod ← loadInputModule elaborateHook? args
+  let _ ← emitModuleTelemetryEvents telCfg target false baseMod
   let (_, report) ←
     if !profilePath.isEmpty then
       let profRaw ← IO.FS.readFile profilePath
@@ -463,7 +469,9 @@ def runPlugins (elaborateHook? : Option (String → IO LNIRModule)) (args : List
   let testAdversarial := hasFlag args "--test-adversarial" || !(hasFlag args "--no-adversarial-test")
   let outPath := findFlagValue args "-o" ""
   let jsonFlag := hasFlag args "--json"
+  let telCfg ← TelemetryConfig.probe args
   let baseMod ← loadInputModule elaborateHook? args
+  let _ ← emitModuleTelemetryEvents telCfg target testAdversarial baseMod
   let (_, report) := runSegregatedPluginPipeline target testAdversarial baseMod
   let jsonText := report.toJson
   if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
@@ -471,6 +479,17 @@ def runPlugins (elaborateHook? : Option (String → IO LNIRModule)) (args : List
   let allTvOk := report.declAudits.all (fun a => a.tvVerified)
   let ok := allTvOk && (!testAdversarial || report.adversarialRejected)
   return if ok then 0 else 1
+
+def runTelemetry (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
+  let targetStr := findFlagValue args "--target" (findFlagValue args "--arch" "x86_64")
+  let target := parseSuperoptTarget targetStr
+  let telCfg ← TelemetryConfig.probe args
+  let baseMod ← loadInputModule elaborateHook? args
+  let count ← emitModuleTelemetryEvents telCfg target true baseMod
+  let evPath := s!"{telCfg.spoolDir}/events.jsonl"
+  let blobsDir := s!"{telCfg.spoolDir}/blobs"
+  IO.println s!"\{\"schema\":\"lean-native.telemetry.v1\",\"enabled\":{if telCfg.enabled then "true" else "false"},\"mode\":\"{telCfg.mode}\",\"spool_dir\":\"{telCfg.spoolDir}\",\"events_file\":\"{evPath}\",\"blobs_dir\":\"{blobsDir}\",\"remote_url\":\"{telCfg.remoteUrl}\",\"events_emitted\":{count}}"
+  return 0
 
 def runTurboPlugin : IO UInt32 := do
   let stdin ← IO.getStdin
@@ -672,6 +691,9 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     mulDivUpNat twoPow60 twoPow60 twoPow60 == twoPow60 &&
     mulDivDownNat twoPow60 twoPow60 3 < mulDivUpNat twoPow60 twoPow60 3 &&
     mulDivDownNat twoPow60 twoPow60 0 == 0 && mulDivUpNat twoPow60 twoPow60 0 == 0
+  let telCfg ← TelemetryConfig.probe ["--telemetry"]
+  let telCount ← emitModuleTelemetryEvents telCfg .x86_64 true baseMod
+  let telOk := telCount > 0
 
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
   IO.println s!"2. LNIR Wire & JSON Round-Trip     : {if roundTripWireOk && roundTripJsonOk then "PASSED" else "FAILED"}"
@@ -684,10 +706,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
   IO.println s!"10. Google Cloud TPU v5e Codegen   : {if tpuCodegenOk then "PASSED" else "FAILED"} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
   IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {if mulDivOk then "PASSED" else "FAILED"} ((2^60 * 2^60) / 2^60 == 2^60)"
+  IO.println s!"12. CAS Telemetry Spooler (v1)     : {if telOk then "PASSED" else "FAILED"} ({telCount} accepted+rejected events, de Bruijn CAS blobs)"
 
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
-    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk &&
+    fcPropOk && fcNaiveVacuousOk && metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
     IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="
@@ -1005,6 +1028,7 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | "--self-test" :: _          => some <$> runCoreSelfTest tag
   | "superopt" :: rest          => some <$> runSuperopt elaborateHook? rest
   | "plugins" :: rest           => some <$> runPlugins elaborateHook? rest
+  | "telemetry" :: rest         => some <$> runTelemetry elaborateHook? rest
   | "pr-verify" :: rest         => some <$> runPRVerify tag rest
   | "turbo-plugin" :: _         => some <$> runTurboPlugin
   | "verify-certs" :: rest      => some <$> runVerifyCerts tag elaborateHook? rest

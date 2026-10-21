@@ -36,6 +36,7 @@ import LeanNative.Transform.HoistExclusivity
 import LeanNative.Transform.LoopVectorizeOpt
 import LeanNative.Transform.Superopt
 import LeanNative.Backend.FastCheck
+import LeanNative.TurboLean.Adapter
 
 namespace LeanNative.Transform
 
@@ -44,6 +45,7 @@ open LeanNative.Spec
 open LeanNative.Semantics
 open LeanNative.Proofs
 open LeanNative.Backend
+open LeanNative.TurboLean
 
 /-! ## 1. Hardware Cycle Cost & Plugin Certificate Types -/
 
@@ -441,6 +443,124 @@ def runSegregatedPluginPipeline
     declAudits := audits
   }
   (outMod, report)
+
+/-- Emit content-addressed `lean-native.telemetry.v1` JSONL events for every declaration and
+    pass/plugin candidate (both accepted and rejected!) in `m`, preparing the training corpus
+    for the `modded-nanogpt` compiler policy & value heads. -/
+def emitModuleTelemetryEvents
+    (cfg : TelemetryConfig)
+    (target : SuperoptTarget)
+    (includeAdversarial : Bool := true)
+    (m : LNIRModule) : IO Nat := do
+  if !cfg.enabled then
+    return 0
+  let builtinFns : List (String × (LNIRDecl → Option (LNIRDecl × OptPluginCertificate))) :=
+    [ ("builtin:algebraic-peephole", builtinAlgebraicPlugin target)
+    , ("builtin:unbox-tuple-sroa", builtinUnboxTuplePlugin target)
+    , ("builtin:hoist-exclusivity", builtinHoistExclusivityPlugin target)
+    , ("builtin:loop-vectorize", builtinLoopVectorizePlugin target)
+    , ("builtin:branchless-select", builtinBranchlessSelectPlugin target)
+    , ("builtin:enumerative-superopt", builtinSuperoptPlugin target)
+    ] ++ (if includeAdversarial then [("adversarial:unsound-alu-corruptor", adversarialBuggyPlugin target)] else [])
+  let tsNs ← IO.monoNanosNow
+  let mut emitted : Nat := 0
+  for d in m.decls do
+    let mut curDecl := d
+    let mut passHistory : List String := []
+    let mut stepIdx : Nat := 0
+    for (pName, pFn) in builtinFns do
+      match pFn curDecl with
+      | none => pure ()
+      | some (candDecl, cert) =>
+        let tvRes := validateTranslationDecl curDecl candDecl 64
+        let costBefore := declScalarCost target curDecl
+        let costAfter := declScalarCost target candDecl
+        let accepted := verifyOptPluginGate target false curDecl candDecl cert
+        let beforeWire := ({ moduleName := m.moduleName, decls := [curDecl] } : LNIRModule).toWire
+        let afterWire := ({ moduleName := m.moduleName, decls := [candDecl] } : LNIRModule).toWire
+        let debruijnBefore := ({ moduleName := m.moduleName, decls := [curDecl.canonicalDeBruijn] } : LNIRModule).toWire
+        let debruijnAfter := ({ moduleName := m.moduleName, decls := [candDecl.canonicalDeBruijn] } : LNIRModule).toWire
+        let beforeBlob ← storeTelemetryBlob cfg beforeWire
+        let afterBlob ← storeTelemetryBlob cfg afterWire
+        let debruijnBeforeBlob ← storeTelemetryBlob cfg debruijnBefore
+        let debruijnAfterBlob ← storeTelemetryBlob cfg debruijnAfter
+        let histJson := String.intercalate "," (passHistory.map (fun h => s!"\"{escapeJsonPlugin h}\""))
+        let tvStatus := if tvRes.passed then "passed" else "failed"
+        let isKernel := cert.theoremOrRule.startsWith "LeanNative.Proofs." && !cert.theoremOrRule.endsWith "SymbolicTV"
+        let kernelStatus := if !tvRes.passed then "rejected" else if isKernel then "accepted" else "bounded_only"
+        let evidenceKind := if isKernel then "reflective" else "bounded_only"
+        let rejStage :=
+          if accepted then "null"
+          else if !tvRes.passed then "\"symbolic_tv\""
+          else "\"cost_regression\""
+        let evId := blake3Hex s!"{m.moduleName}:{d.name}:{pName}:{stepIdx}:{beforeBlob}:{afterBlob}"
+        let line :=
+          "{" ++
+          "\"schema\":\"lean-native.telemetry.v1\"," ++
+          s!"\"event_id\":\"{evId.take 32}\"," ++
+          s!"\"timestamp_ns\":{tsNs}," ++
+          "\"context\":{" ++
+            "\"lean_native_version\":\"0.5.0\"," ++
+            s!"\"module_name\":\"{escapeJsonPlugin m.moduleName}\"," ++
+            s!"\"target\":\"{target.toString}\"" ++
+          "}," ++
+          "\"decl\":{" ++
+            s!"\"name\":\"{escapeJsonPlugin d.name}\"," ++
+            s!"\"structural_hash\":\"{curDecl.structuralHash}\"," ++
+            s!"\"lnir_raw_blob\":\"{beforeBlob}\"," ++
+            s!"\"lnir_canonical_debruijn_blob\":\"{debruijnBeforeBlob}\"," ++
+            s!"\"features\":{curDecl.telemetryFeaturesJson}" ++
+          "}," ++
+          "\"decision\":{" ++
+            s!"\"step_idx\":{stepIdx}," ++
+            s!"\"pass_or_rule\":\"{escapeJsonPlugin pName}\"," ++
+            s!"\"theorem_or_rule\":\"{escapeJsonPlugin cert.theoremOrRule}\"," ++
+            s!"\"pass_history\":[{histJson}]," ++
+            s!"\"before_ir_blob\":\"{beforeBlob}\"," ++
+            s!"\"after_ir_blob\":\"{afterBlob}\"," ++
+            s!"\"after_debruijn_blob\":\"{debruijnAfterBlob}\"," ++
+            s!"\"proposer\":\{\"kind\":\"{escapeJsonPlugin cert.kind}\",\"notes\":\"{escapeJsonPlugin cert.notes}\"}" ++
+          "}," ++
+          "\"validation\":{" ++
+            "\"symbolic_tv\":{" ++
+              s!"\"status\":\"{tvStatus}\"," ++
+              "\"unroll_bound\":4," ++
+              s!"\"samples\":{tvRes.concreteSamplesTot}," ++
+              s!"\"samples_ok\":{tvRes.concreteSamplesOk}," ++
+              s!"\"ub_refines\":{if tvRes.ubRefines then "true" else "false"}," ++
+              s!"\"domain_equiv\":{if tvRes.domainEquiv then "true" else "false"}," ++
+              s!"\"poison_refines\":{if tvRes.poisonRefines then "true" else "false"}," ++
+              s!"\"sym_ret_equiv\":{if tvRes.symRetEquiv then "true" else "false"}," ++
+              s!"\"mem_writes_equiv\":{if tvRes.memWritesEquiv then "true" else "false"}" ++
+            "}," ++
+            "\"kernel_check\":{" ++
+              s!"\"status\":\"{kernelStatus}\"," ++
+              s!"\"evidence_kind\":\"{evidenceKind}\"," ++
+              s!"\"theorem_ref\":\"{escapeJsonPlugin cert.theoremOrRule}\"," ++
+              "\"sorry_count\":0" ++
+            "}" ++
+          "}," ++
+          "\"cost_model\":{" ++
+            s!"\"cost_before\":{costBefore}," ++
+            s!"\"cost_after\":{costAfter}" ++
+          "}," ++
+          "\"rl_outcome\":{" ++
+            s!"\"accepted_into_pipeline\":{if accepted then "true" else "false"}," ++
+            s!"\"rejection_stage\":{rejStage}," ++
+            "\"reward_components\":{" ++
+              s!"\"cost_delta\":{(Int.ofNat costBefore) - (Int.ofNat costAfter)}," ++
+              s!"\"kernel_verified\":{if isKernel && tvRes.passed then "1.0" else "0.0"}," ++
+              s!"\"tv_passed\":{if tvRes.passed then "1.0" else "-1.0"}" ++
+            "}" ++
+          "}" ++
+          "}"
+        appendTelemetryEventJsonl cfg line
+        emitted := emitted + 1
+        stepIdx := stepIdx + 1
+        if accepted then
+          curDecl := candDecl
+          passHistory := passHistory ++ [pName]
+  return emitted
 
 /-! ## 4. Turbo-Lean External Accelerator Protocol (`lean-native-core turbo-plugin`) -/
 

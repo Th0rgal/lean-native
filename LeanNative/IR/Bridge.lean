@@ -952,7 +952,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   IO.FS.writeFile cPath cCode
 
   let incDir := (sysroot / "include").toString
-  let clangIncDir := (sysroot / "include" / "clang").toString
+  let _clangIncDir := (sysroot / "include" / "clang").toString
   let libDir := (sysroot / "lib" / "lean").toString
 
   let relRuntime : System.FilePath := "runtime/lean_native_runtime.c"

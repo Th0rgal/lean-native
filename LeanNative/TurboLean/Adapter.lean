@@ -1255,5 +1255,87 @@ def runTurboLeanAgentStep
       pure ()
   return (true, s!"\{\"status\":\"standalone_agent_step_ok\",\"file\":\"{filePath}\"}")
 
+/-! ## 6. Unified Content-Addressed Telemetry Spooler (`lean-native.telemetry.v1`) -/
+
+structure TelemetryConfig where
+  enabled   : Bool := true
+  mode      : String := "full" -- "off" | "metrics" | "full"
+  spoolDir  : String := ".lean-native/telemetry"
+  remoteUrl : String := "https://telemetry.thomas.md/v1/ingest"
+  deriving Repr, DecidableEq, Inhabited, BEq
+
+namespace TelemetryConfig
+
+def probe (cliArgs : List String := []) : IO TelemetryConfig := do
+  let envMode ← IO.getEnv "LEAN_NATIVE_TELEMETRY"
+  let globalEnv ← IO.getEnv "SANDBOXED_TELEMETRY"
+  let remoteEnv ← IO.getEnv "SANDBOXED_TELEMETRY_URL"
+  let dirEnv ← IO.getEnv "LEAN_NATIVE_TELEMETRY_DIR"
+  let rawMode :=
+    if cliArgs.contains "--no-telemetry" then "off"
+    else if cliArgs.contains "--telemetry=off" || cliArgs.contains "--telemetry=0" then "off"
+    else if cliArgs.contains "--telemetry=metrics" then "metrics"
+    else if cliArgs.contains "--telemetry=full" || cliArgs.contains "--telemetry" then "full"
+    else
+      match envMode <|> globalEnv with
+      | some v =>
+        let s := (trimStr v).toLower
+        if s == "0" || s == "off" || s == "false" || s == "no" then "off"
+        else if s == "metrics" then "metrics"
+        else "full"
+      | none => "full"
+  let spoolDir := (dirEnv.map trimStr).filter (!·.isEmpty) |>.getD ".lean-native/telemetry"
+  let remoteUrl := (remoteEnv.map trimStr).filter (!·.isEmpty) |>.getD "https://telemetry.thomas.md/v1/ingest"
+  return {
+    enabled := rawMode != "off"
+    mode := rawMode
+    spoolDir := spoolDir
+    remoteUrl := remoteUrl
+  }
+
+end TelemetryConfig
+
+/-- Store a content-addressed payload in `<spoolDir>/blobs/<blake3>` if not already present,
+    and return `"blake3:<digest>"`. -/
+def storeTelemetryBlob (cfg : TelemetryConfig) (payload : String) : IO String := do
+  let digest := blake3Hex payload
+  let refStr := s!"blake3:{digest}"
+  if !cfg.enabled || cfg.mode == "metrics" then
+    return refStr
+  try
+    let blobsDir : System.FilePath := s!"{cfg.spoolDir}/blobs"
+    IO.FS.createDirAll blobsDir
+    let blobPath : System.FilePath := blobsDir / digest
+    if !(← blobPath.pathExists) then
+      IO.FS.writeFile blobPath payload
+  catch _ =>
+    pure ()
+  return refStr
+
+/-- Append a single JSONL event line to `<spoolDir>/events.jsonl` and best-effort shared
+    `~/.cache/research-governor/lean_native_events.jsonl`. -/
+def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) : IO Unit := do
+  if !cfg.enabled then
+    return ()
+  try
+    let dirPath : System.FilePath := cfg.spoolDir
+    IO.FS.createDirAll dirPath
+    let evPath : System.FilePath := dirPath / "events.jsonl"
+    let h ← IO.FS.Handle.mk evPath .append
+    h.putStrLn jsonLine
+    h.flush
+  catch _ =>
+    pure ()
+  try
+    if let some home ← IO.getEnv "HOME" then
+      let govDir : System.FilePath := s!"{home}/.cache/research-governor"
+      IO.FS.createDirAll govDir
+      let govPath : System.FilePath := govDir / "lean_native_events.jsonl"
+      let h2 ← IO.FS.Handle.mk govPath .append
+      h2.putStrLn jsonLine
+      h2.flush
+  catch _ =>
+    pure ()
+
 end LeanNative.TurboLean
 
