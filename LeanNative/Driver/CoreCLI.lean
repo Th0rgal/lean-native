@@ -481,8 +481,8 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   let stablehloTxt := emitStableHLOModule optMod
   let pallasTxt := emitTPUPallasModule optMod
   let tpuCodegenOk := (stablehloTxt.splitOn "stablehlo.").length > 1 &&
-    (stablehloTxt.splitOn "tpu_v5e").length > 1 &&
-    (pallasTxt.splitOn "tpu_v5e").length > 1 &&
+    ((stablehloTxt.splitOn "tpu_v6e").length > 1 || (stablehloTxt.splitOn "tpu_v5e").length > 1) &&
+    ((pallasTxt.splitOn "tpu_v6e").length > 1 || (pallasTxt.splitOn "tpu_v5e").length > 1) &&
     (pallasTxt.splitOn "pallas").length > 1
   let blake3Ok := blake3SelfTest
   let twoPow60 : Nat := 1 <<< 60
@@ -520,7 +520,7 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"7. FastCheck ConstraintProp vs Vac : {status (fcPropOk && fcNaiveVacuousOk && relSamplingOk)} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses}, relPolytope=ok)"
   IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {status (metalValid && fcMetalValid && gpuHeadroomOk)} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
   IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {status blake3Ok}"
-  IO.println s!"10. Google Cloud TPU v5e Codegen   : {status tpuCodegenOk} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
+  IO.println s!"10. Google Cloud TPU v6e Codegen   : {status tpuCodegenOk} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
   IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {status mulDivOk} ((2^60 * 2^60) / 2^60 == 2^60)"
   IO.println s!"12. CAS Telemetry Spooler (v1)     : {status telOk} ({telCount} accepted+rejected events, de Bruijn CAS blobs)"
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&

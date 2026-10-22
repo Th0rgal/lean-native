@@ -433,6 +433,79 @@ int lean_native_hybrid_trm_matryoshka_int8(
     size_t steps
 );
 
+/* ============================================================================
+ * Universal Multi-Target Speculate-Forest ABI v2 (`CPU SIMD` / `Spark GPU` / `TPU XLA`)
+ * ============================================================================ */
+
+#define LEAN_NATIVE_FOREST_ABI_VERSION 2u
+#define LEAN_NATIVE_TIER_S0_CPU_L1     0u
+#define LEAN_NATIVE_TIER_S1_CPU_L2     1u
+#define LEAN_NATIVE_TIER_S2_NEON_FP16  2u
+#define LEAN_NATIVE_TIER_S3_SPARK_CUDA 3u
+#define LEAN_NATIVE_TIER_S4_TPU_V6E    4u
+
+/**
+ * Evaluates the 16-opcode 256-bit (`U256`) RPN bytecode (`rpn_opcodes[16]`) deterministically
+ * over `n_samples` SplitMix64 states seeded by `(base_seed, goal_idx)`.
+ * If a counterexample is found, writes the minimum `sample_idx` to `*out_min_sample_idx`
+ * and returns 1 (or 0 if all samples satisfy the property).
+ */
+int lean_native_rpn_u256_fastcheck_goal(
+    uint64_t base_seed,
+    uint64_t goal_idx,
+    size_t n_samples,
+    const int32_t* rpn_opcodes,
+    uint64_t arg0,
+    uint64_t arg1,
+    uint64_t* out_min_sample_idx
+);
+
+/**
+ * Cross-slice Matryoshka cascade (`S_0 16x32` -> `S_1 32x64` -> `S_3 64x128` -> `S_4 128x256`)
+ * with additive sum-of-squares (`combineSliceSumSq`) & pre-activation dot decomposition
+ * (`combineSlicePrefixDot`) and tier-deviation margin abstention (`eps_tier_permille`).
+ */
+void lean_native_trm_matryoshka_cascade_int8(
+    int32_t* out_cost_q16,
+    int32_t* out_survival_permille,
+    uint8_t* out_router_action,
+    uint8_t* out_effective_tier,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    int32_t prune_floor_permille,
+    int32_t escalate_band_permille,
+    int32_t eps_tier_permille
+);
+
+/**
+ * Hardware-agnostic forest speculation C-ABI v2 (`CPU SIMD` / `Spark GB10 CUDA` / `Cloud TPU v6e`).
+ * Evaluates `n_goals` in parallel across the 16-opcode `U256` RPN counterexample sweep and
+ * the Matryoshka `S_0 -> S_1 -> S_3 -> S_4` survival/router cascade, returning deterministic
+ * index-based witnesses (`out_min_sample_idx[g]`) and locally recertified router actions.
+ */
+int lean_native_speculate_forest(
+    size_t n_goals,
+    size_t n_samples,
+    uint64_t base_seed,
+    const int32_t* rpn_opcodes,
+    const uint64_t* rpn_arg0,
+    const uint64_t* rpn_arg1,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    int32_t prune_floor_permille,
+    int32_t escalate_band_permille,
+    int32_t eps_tier_permille,
+    uint8_t* out_cex_found,
+    uint64_t* out_min_sample_idx,
+    int32_t* out_survival_permille,
+    uint8_t* out_router_action,
+    uint8_t* out_effective_tier
+);
+
 #ifdef __cplusplus
 }
 #endif

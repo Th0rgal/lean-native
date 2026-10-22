@@ -758,3 +758,185 @@ LEAN_NATIVE_WEAK int lean_native_hybrid_trm_matryoshka_int8(
     return 0;
 }
 
+static inline uint64_t lean_native_splitmix64_step(uint64_t z) {
+    z += 0x9E3779B97F4A7C15ULL;
+    z = (z ^ (z >> 30u)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27u)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31u);
+}
+
+int lean_native_rpn_u256_fastcheck_goal(
+    uint64_t base_seed,
+    uint64_t goal_idx,
+    size_t n_samples,
+    const int32_t* rpn_opcodes,
+    uint64_t arg0,
+    uint64_t arg1,
+    uint64_t* out_min_sample_idx
+) {
+    if (out_min_sample_idx) {
+        *out_min_sample_idx = UINT64_MAX;
+    }
+    if (!rpn_opcodes || n_samples == 0) {
+        return 0;
+    }
+    uint64_t g_seed = base_seed ^ (goal_idx * 0x9E3779B97F4A7C15ULL);
+    for (size_t s = 0; s < n_samples; ++s) {
+        uint64_t x1 = lean_native_splitmix64_step(g_seed + (uint64_t)s * 0x9E3779B97F4A7C15ULL);
+        uint64_t x0 = x1 + arg0;
+        uint64_t acc = x0;
+        int violated = 0;
+        for (size_t pc = 0; pc < 16u; ++pc) {
+            int32_t op = rpn_opcodes[pc];
+            if (op == 0) {
+                break;
+            } else if (op == 1) { /* ADD */
+                acc = acc + x1 + arg0;
+            } else if (op == 2) { /* SUB */
+                acc = (acc >= x1) ? (acc - x1) : 0ULL;
+            } else if (op == 3) { /* MUL */
+                acc = acc * (x1 | 1ULL);
+            } else if (op == 7) { /* LT_BOUND_BUGGY */
+                if (x1 >= arg1 && x0 >= arg1) {
+                    violated = 1;
+                }
+            } else if (op == 8) { /* ADD256_CC */
+                uint64_t sum_lo = x0 + x1;
+                uint64_t carry = (sum_lo < x0) ? 1ULL : 0ULL;
+                acc = sum_lo ^ carry;
+            } else if (op == 15) { /* KECCAK_ROUND_PROXY */
+                uint64_t rot = (acc << 1u) | (acc >> 63u);
+                acc ^= rot ^ 0xA5A5A5A55A5A5A5AULL;
+            }
+        }
+        if (violated) {
+            if (out_min_sample_idx) {
+                *out_min_sample_idx = (uint64_t)s;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void lean_native_trm_matryoshka_cascade_int8(
+    int32_t* out_cost_q16,
+    int32_t* out_survival_permille,
+    uint8_t* out_router_action,
+    uint8_t* out_effective_tier,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    int32_t prune_floor_permille,
+    int32_t escalate_band_permille,
+    int32_t eps_tier_permille
+) {
+    if (!out_cost_q16 || !out_survival_permille || !out_router_action || !out_effective_tier ||
+        !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8) {
+        return;
+    }
+    /* Stage 0: S_0 (16x32, H=1, L=1) in L1D cache (< 24 KiB) */
+    int32_t cost_s0[4] = {0, 0, 0, 0};
+    lean_native_trm_matryoshka_cpu_int8(cost_s0, x0_q8, w1_q8, w2_q8, w_cost_q8, 16u, 32u, 1u);
+    int32_t surv_s0 = 500 + (cost_s0[3] >> 4);
+    if (surv_s0 < 0) surv_s0 = 0;
+    if (surv_s0 > 1000) surv_s0 = 1000;
+
+    /* Early-exit pass or prune outside the [prune_floor - eps, escalate_band + eps] uncertainty band */
+    if (surv_s0 + eps_tier_permille < prune_floor_permille) {
+        for (size_t c = 0; c < 4; ++c) out_cost_q16[c] = cost_s0[c];
+        *out_survival_permille = surv_s0;
+        *out_router_action = 1u; /* prune_stop */
+        *out_effective_tier = LEAN_NATIVE_TIER_S0_CPU_L1;
+        return;
+    }
+    if (surv_s0 >= escalate_band_permille + eps_tier_permille) {
+        for (size_t c = 0; c < 4; ++c) out_cost_q16[c] = cost_s0[c];
+        *out_survival_permille = surv_s0;
+        *out_router_action = 0u; /* pass */
+        *out_effective_tier = LEAN_NATIVE_TIER_S0_CPU_L1;
+        return;
+    }
+
+    /* Stage 1 escalation: S_1 (32x64, H=2, L=2) in L2 cache (< 96 KiB) */
+    int32_t cost_s1[4] = {0, 0, 0, 0};
+    lean_native_trm_matryoshka_cpu_int8(cost_s1, x0_q8, w1_q8, w2_q8, w_cost_q8, 32u, 64u, 4u);
+    int32_t surv_s1 = 500 + (cost_s1[3] >> 4);
+    if (surv_s1 < 0) surv_s1 = 0;
+    if (surv_s1 > 1000) surv_s1 = 1000;
+
+    for (size_t c = 0; c < 4; ++c) out_cost_q16[c] = cost_s1[c];
+    *out_survival_permille = surv_s1;
+    *out_effective_tier = LEAN_NATIVE_TIER_S1_CPU_L2;
+    if (surv_s1 + eps_tier_permille < prune_floor_permille) {
+        *out_router_action = 1u; /* prune_stop */
+    } else if (surv_s1 < escalate_band_permille + eps_tier_permille ||
+               surv_s1 < prune_floor_permille + eps_tier_permille) {
+        *out_router_action = 2u; /* abstain_escalate */
+    } else {
+        *out_router_action = 0u; /* pass */
+    }
+}
+
+LEAN_NATIVE_WEAK int lean_native_speculate_forest(
+    size_t n_goals,
+    size_t n_samples,
+    uint64_t base_seed,
+    const int32_t* rpn_opcodes,
+    const uint64_t* rpn_arg0,
+    const uint64_t* rpn_arg1,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    int32_t prune_floor_permille,
+    int32_t escalate_band_permille,
+    int32_t eps_tier_permille,
+    uint8_t* out_cex_found,
+    uint64_t* out_min_sample_idx,
+    int32_t* out_survival_permille,
+    uint8_t* out_router_action,
+    uint8_t* out_effective_tier
+) {
+    if (!rpn_opcodes || !rpn_arg0 || !rpn_arg1 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 ||
+        !out_cex_found || !out_min_sample_idx || !out_survival_permille || !out_router_action || !out_effective_tier) {
+        return -1;
+    }
+    for (size_t g = 0; g < n_goals; ++g) {
+        uint64_t min_idx = UINT64_MAX;
+        int cex = lean_native_rpn_u256_fastcheck_goal(
+            base_seed,
+            (uint64_t)g,
+            n_samples,
+            rpn_opcodes + g * 16u,
+            rpn_arg0[g],
+            rpn_arg1[g],
+            &min_idx
+        );
+        out_cex_found[g] = (uint8_t)(cex ? 1u : 0u);
+        out_min_sample_idx[g] = min_idx;
+        if (cex) {
+            out_survival_permille[g] = 0;
+            out_router_action[g] = 1u; /* prune_stop */
+            out_effective_tier[g] = LEAN_NATIVE_TIER_S0_CPU_L1;
+        } else {
+            int32_t cost_q16[4] = {0, 0, 0, 0};
+            lean_native_trm_matryoshka_cascade_int8(
+                cost_q16,
+                &out_survival_permille[g],
+                &out_router_action[g],
+                &out_effective_tier[g],
+                x0_q8 + g * 128u,
+                w1_q8,
+                w2_q8,
+                w_cost_q8,
+                prune_floor_permille,
+                escalate_band_permille,
+                eps_tier_permille
+            );
+        }
+    }
+    return 0;
+}
+

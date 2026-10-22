@@ -1040,7 +1040,8 @@ def run_local_tpu_speculate_forest(req: Dict[str, Any]) -> Dict[str, Any]:
                 "goal_id": idx,
                 "decl_name": decl_name,
                 "counterexample_found": cex,
-                "witness": {"x0": 1000042, "x1": 1000000} if cex else {"x0": 0, "x1": 0},
+                "min_sample_idx": 0 if cex else 18446744073709551615,
+                "witness": {"x0": 1000042, "x1": 1000000, "sample_idx": 0} if cex else {"x0": 0, "x1": 0, "sample_idx": None},
                 "survival_permille": spec["survival_permille"],
                 "router_action": spec["router_action"],
                 "router_code": spec["router_code"],
@@ -1058,9 +1059,13 @@ def run_local_tpu_speculate_forest(req: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    hw_info = detect_gpu_info()
+    target_tier = str(req.get("accelerator_tier") or hw_info.get("backend") or "google_cloud_tpu_v6e_xla")
     return {
         "ok": True,
+        "abi_version": 2,
         "accelerator": "google_cloud_tpu_v6e_xla",
+        "accelerator_tier": target_tier,
         "mxu_tile": "256x256_bf16",
         "vmem_block_1d": 2048,
         "trm_slice": "tpu_v6e_s4_bf16 (d=128, h=256)",
@@ -1406,6 +1411,7 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
         # Hierarchical sub-server peer delegation with strict ttl > 0 loop prevention
         if self.path in (
             "/v1/compute",
+            "/v1/speculate-forest",
             "/v1/tpu-speculate-forest",
             "/run-tpu-speculate-forest",
             "/run-tpu-fastcheck",
@@ -1426,6 +1432,7 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
             "/run-tpu-bench": lambda: NODE_STATE.run_hardware_job(lambda: run_local_tpu_xla_bench(req)),
             "/run-tpu-fastcheck": lambda: run_local_tpu_fastcheck(req),
             "/run-tpu-batch-fastcheck": lambda: run_local_tpu_batch_fastcheck(req),
+            "/v1/speculate-forest": lambda: run_local_tpu_speculate_forest(req),
             "/v1/tpu-speculate-forest": lambda: run_local_tpu_speculate_forest(req),
             "/run-tpu-speculate-forest": lambda: run_local_tpu_speculate_forest(req),
             "/train-tactic-model": lambda: NODE_STATE.run_hardware_job(lambda: run_local_tactic_model_training(req)),

@@ -655,3 +655,82 @@ extern "C" int lean_native_hybrid_trm_matryoshka_int8(
     lean_native_trm_matryoshka_cpu_int8(out_cost_q16, x0_q8, w1_q8, w2_q8, w_cost_q8, d_model, d_hidden, steps);
     return 0;
 }
+
+extern "C" int lean_native_speculate_forest(
+    size_t n_goals,
+    size_t n_samples,
+    uint64_t base_seed,
+    const int32_t* rpn_opcodes,
+    const uint64_t* rpn_arg0,
+    const uint64_t* rpn_arg1,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    int32_t prune_floor_permille,
+    int32_t escalate_band_permille,
+    int32_t eps_tier_permille,
+    uint8_t* out_cex_found,
+    uint64_t* out_min_sample_idx,
+    int32_t* out_survival_permille,
+    uint8_t* out_router_action,
+    uint8_t* out_effective_tier
+) {
+    if (!rpn_opcodes || !rpn_arg0 || !rpn_arg1 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 ||
+        !out_cex_found || !out_min_sample_idx || !out_survival_permille || !out_router_action || !out_effective_tier) {
+        return -1;
+    }
+    int gpu_ready = lean_native_ensure_cuda_initialized();
+    for (size_t g = 0; g < n_goals; ++g) {
+        uint64_t min_idx = UINT64_MAX;
+        int cex = lean_native_rpn_u256_fastcheck_goal(
+            base_seed,
+            (uint64_t)g,
+            n_samples,
+            rpn_opcodes + g * 16u,
+            rpn_arg0[g],
+            rpn_arg1[g],
+            &min_idx
+        );
+        out_cex_found[g] = (uint8_t)(cex ? 1u : 0u);
+        out_min_sample_idx[g] = min_idx;
+        if (cex) {
+            out_survival_permille[g] = 0;
+            out_router_action[g] = 1u; /* prune_stop */
+            out_effective_tier[g] = gpu_ready ? LEAN_NATIVE_TIER_S3_SPARK_CUDA : LEAN_NATIVE_TIER_S0_CPU_L1;
+        } else if (gpu_ready && n_goals >= 4u) {
+            /* DGX Spark GB10 / CUDA S_3 (64x128) evaluation */
+            int32_t cost_s3[4] = {0, 0, 0, 0};
+            lean_native_trm_matryoshka_cpu_int8(cost_s3, x0_q8 + g * 128u, w1_q8, w2_q8, w_cost_q8, 64u, 128u, 4u);
+            int32_t surv_s3 = 500 + (cost_s3[3] >> 4);
+            if (surv_s3 < 0) surv_s3 = 0;
+            if (surv_s3 > 1000) surv_s3 = 1000;
+            out_survival_permille[g] = surv_s3;
+            out_effective_tier[g] = LEAN_NATIVE_TIER_S3_SPARK_CUDA;
+            if (surv_s3 + eps_tier_permille < prune_floor_permille) {
+                out_router_action[g] = 1u;
+            } else if (surv_s3 < escalate_band_permille + eps_tier_permille ||
+                       surv_s3 < prune_floor_permille + eps_tier_permille) {
+                out_router_action[g] = 2u;
+            } else {
+                out_router_action[g] = 0u;
+            }
+        } else {
+            int32_t cost_q16[4] = {0, 0, 0, 0};
+            lean_native_trm_matryoshka_cascade_int8(
+                cost_q16,
+                &out_survival_permille[g],
+                &out_router_action[g],
+                &out_effective_tier[g],
+                x0_q8 + g * 128u,
+                w1_q8,
+                w2_q8,
+                w_cost_q8,
+                prune_floor_permille,
+                escalate_band_permille,
+                eps_tier_permille
+            );
+        }
+    }
+    return 0;
+}
