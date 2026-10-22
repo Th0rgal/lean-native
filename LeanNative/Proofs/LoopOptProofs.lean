@@ -133,16 +133,16 @@ theorem writeElemExclusive_preserves (st st' : HeapState) (bufId idx : Nat) (val
   | some buf =>
     rw [hfind] at hw; simp only at hw
     by_cases hex : (!buf.exclusive) = true
-    · rw [if_pos hex] at hw; contradiction
-    · rw [if_neg hex] at hw
+    · rw [ite_eq_left hex] at hw; contradiction
+    · rw [ite_eq_right hex] at hw
       by_cases hlt : idx < buf.data.size
-      · rw [dif_pos hlt] at hw; injection hw with hst'; subst hst'
+      · rw [dite_eq_left hlt] at hw; injection hw with hst'; subst hst'
         refine ⟨map_write_preserves_BuffersExclusiveFor st.buffers bufId idx val hexcl, ?_⟩
         unfold HeapState.findBuffer at hfind ⊢
         have hid : ∀ b : ArrayBuffer, (if b.id == bufId then { b with data := b.data.set! idx val } else b).id = b.id :=
           fun b => by by_cases hb : (b.id == bufId) = true <;> simp [hb]
         rw [find?_map_preserve_id st.buffers bufId _ hid, hfind]; exact ⟨_, rfl⟩
-      · rw [dif_neg hlt] at hw; contradiction
+      · rw [dite_eq_right hlt] at hw; contradiction
 
 /-- Unoptimized sequence of array writes: checks `ensureExclusive` on every single write step. -/
 def applyWritesUnopt (st : HeapState) (bufId : Nat) : List (Nat × UInt64) → Except UBError HeapState

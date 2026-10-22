@@ -699,5 +699,29 @@ theorem gpu_oom_falls_back_to_cpu_simd (inp : GpuMemoryHeadroomInput)
     hasSufficientGpuMemory inp = false :=
   gpuMemoryHeadroomMetaSpec.rejects_unsafe inp (Nat.not_le.mpr h_low)
 
+/-- Stateful Matryoshka (`lean_native_trm_ctx`) incremental prefix accumulator across slice widths
+    `S_0 (d=16, h=32) -> S_1 (d=32, h=64) -> S_3 (d=64, h=128) -> S_4 (d=128, h=256)`. -/
+structure MatryoshkaPrefixAccum where
+  dPrev   : Nat
+  dCur    : Nat
+  sqPrev  : Nat
+  sqDelta : Nat
+  dotPrev : Int
+  dotDelta : Int
+  deriving Repr, DecidableEq, BEq
+
+@[inline] def evalMatryoshkaPrefixFull (ctx : MatryoshkaPrefixAccum) : Nat × Int :=
+  (ctx.sqPrev + ctx.sqDelta, ctx.dotPrev + ctx.dotDelta)
+
+@[inline] def evalMatryoshkaPrefixIncremental (ctx : MatryoshkaPrefixAccum) : Nat × Int :=
+  let sqTotal := ctx.sqPrev + ctx.sqDelta
+  let dotTotal := ctx.dotPrev + ctx.dotDelta
+  (sqTotal, dotTotal)
+
+theorem matryoshka_incremental_prefix_eq_full_eval (ctx : MatryoshkaPrefixAccum) :
+    evalMatryoshkaPrefixIncremental ctx = evalMatryoshkaPrefixFull ctx ∧
+    ctx.sqPrev ≤ (evalMatryoshkaPrefixIncremental ctx).1 := by
+  simp [evalMatryoshkaPrefixIncremental, evalMatryoshkaPrefixFull]
+
 end LeanNative.Spec
 

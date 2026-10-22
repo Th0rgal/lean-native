@@ -331,12 +331,12 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
       | bool b => cases b with | true => exact iht fuel env st | false => exact ihe fuel env st
       | u64 n =>
         simp only; by_cases hn : (n != 0) = true
-        · rw [if_pos hn, if_pos hn]; exact iht fuel env st
-        · rw [if_neg hn, if_neg hn]; exact ihe fuel env st
+        · rw [ite_eq_left hn, ite_eq_left hn]; exact iht fuel env st
+        · rw [ite_eq_right hn, ite_eq_right hn]; exact ihe fuel env st
       | u256 w =>
         simp only; by_cases hw : (w != UInt256.zero) = true
-        · rw [if_pos hw, if_pos hw]; exact iht fuel env st
-        · rw [if_neg hw, if_neg hw]; exact ihe fuel env st
+        · rw [ite_eq_left hw, ite_eq_left hw]; exact iht fuel env st
+        · rw [ite_eq_right hw, ite_eq_right hw]; exact ihe fuel env st
       | _ => rfl
   | seqFor idxVar loVar hiVar accVar accInit accTy stepBody k ihs ihk =>
     intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]

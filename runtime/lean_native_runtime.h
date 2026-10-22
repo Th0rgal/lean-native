@@ -481,6 +481,34 @@ int lean_native_verify_indexed_witness_recert(
  * with additive sum-of-squares (`combineSliceSumSq`) & pre-activation dot decomposition
  * (`combineSlicePrefixDot`) and tier-deviation margin abstention (`eps_tier_permille`).
  */
+typedef struct lean_native_trm_ctx {
+    size_t   d_populated;
+    size_t   h_populated;
+    uint32_t sum_sq_prefix;
+    int32_t  z[128];
+    int32_t  y[128];
+    int32_t  h_in[128];
+    int32_t  h_norm[128];
+    uint8_t  h_norm_u8[128];
+    int8_t   h_norm_sign[128];
+    int32_t  w1_dot_prefix[256];
+    uint8_t  act_u8[256];
+} lean_native_trm_ctx;
+
+void lean_native_trm_ctx_init(lean_native_trm_ctx* ctx, const int8_t* x0_q8);
+
+void lean_native_trm_ctx_step_incremental_int8(
+    lean_native_trm_ctx* ctx,
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+);
+
 void lean_native_trm_matryoshka_cascade_int8(
     int32_t* out_cost_q16,
     int32_t* out_survival_permille,

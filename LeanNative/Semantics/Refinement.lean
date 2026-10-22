@@ -159,16 +159,16 @@ theorem ite_congr {condVar : VarId} {t1 t2 e1 e2 : LNIRCode}
     | u64 n =>
       simp only at hsrc ⊢
       by_cases hn : (n != 0) = true
-      · rw [if_pos hn] at hsrc ⊢
+      · rw [ite_eq_left hn] at hsrc ⊢
         exact ht fuel env st v st' hsrc
-      · rw [if_neg hn] at hsrc ⊢
+      · rw [ite_eq_right hn] at hsrc ⊢
         exact he fuel env st v st' hsrc
     | u256 w =>
       simp only at hsrc ⊢
       by_cases hw : (w != UInt256.zero) = true
-      · rw [if_pos hw] at hsrc ⊢
+      · rw [ite_eq_left hw] at hsrc ⊢
         exact ht fuel env st v st' hsrc
-      · rw [if_neg hw] at hsrc ⊢
+      · rw [ite_eq_right hw] at hsrc ⊢
         exact he fuel env st v st' hsrc
     | _ => contradiction
 
