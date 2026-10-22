@@ -633,6 +633,19 @@ def emitStableHLOModule (m : LNIRModule) : String :=
       "    %xored = stablehlo.xor %masked, %carry_mask : tensor<262144x4xui64>",
       "    return %xored : tensor<262144x4xui64>",
       "  }"
+    ],
+    String.intercalate "\n" [
+      "  func.func @lean_native_tpu_v6e_matryoshka_trm_clipped_relu2(%z: tensor<64x64xbf16>, %w1: tensor<64x128xbf16>, %w2: tensor<128x64xbf16>) -> tensor<64x64xbf16> attributes {tpu.unit = \"mxu_256x256\", tpu.trm_slice = \"tpu_v6e_bf16\"} {",
+      "    %pre = stablehlo.dot_general %z, %w1, contracting_dims = [1] x [0] : (tensor<64x64xbf16>, tensor<64x128xbf16>) -> tensor<64x128xbf16>",
+      "    %zero = stablehlo.constant dense<0.0> : tensor<64x128xbf16>",
+      "    %cap16 = stablehlo.constant dense<16.0> : tensor<64x128xbf16>",
+      "    %pos = stablehlo.maximum %pre, %zero : tensor<64x128xbf16>",
+      "    %sq = stablehlo.multiply %pos, %pos : tensor<64x128xbf16>",
+      "    %act = stablehlo.minimum %sq, %cap16 : tensor<64x128xbf16>",
+      "    %delta = stablehlo.dot_general %act, %w2, contracting_dims = [1] x [0] : (tensor<64x128xbf16>, tensor<128x64xbf16>) -> tensor<64x64xbf16>",
+      "    %out = stablehlo.add %z, %delta : tensor<64x64xbf16>",
+      "    return %out : tensor<64x64xbf16>",
+      "  }"
     ]
   ]
   let declFuncs := m.decls.foldl (fun acc d =>

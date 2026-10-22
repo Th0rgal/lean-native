@@ -910,8 +910,10 @@ def run_local_tactic_model_training(req: Dict[str, Any]) -> Dict[str, Any]:
         def _trm_relu2_step(w: Any, inp: Any) -> Any:
             z = inp
             for _ in range(recursion_depth):
-                pre = jnp.matmul(z, w)
-                z = z + jnp.square(jnp.maximum(pre, 0)) * jnp.bfloat16(0.1)
+                rms = jnp.sqrt(jnp.mean(jnp.square(z), axis=1, keepdims=True) + jnp.bfloat16(1e-5))
+                pre = jnp.matmul(z / rms, w) - jnp.bfloat16(0.85)
+                act = jnp.minimum(jnp.square(jnp.maximum(pre, 0)), jnp.bfloat16(16.0))
+                z = z + act * jnp.bfloat16(0.1)
             return jnp.mean(jnp.square(z))
 
         initial_loss = float(_trm_relu2_step(w1, x))
@@ -1290,7 +1292,7 @@ def main() -> int:
     parser.add_argument("--cloudflared", action="store_true", help="Automatically download and start a Cloudflare Quick Tunnel for --serve")
     parser.add_argument("--port", type=int, default=8765, help="Port for --serve (default: 8765)")
     parser.add_argument("--token", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_TOKEN", "fCiXWLdlEhfaImpQUDBA5OOXEYngnGwn"), help="Bearer token")
-    parser.add_argument("--api-url", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_API_URL", "https://sell-exist-blues-banners.trycloudflare.com"), help="Remote Colab URL")
+    parser.add_argument("--api-url", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_API_URL", "https://alphabetical-paso-performance-increases.trycloudflare.com"), help="Remote Colab URL")
     parser.add_argument("--peers", type=str, default=os.environ.get("LEAN_NATIVE_PEERS", ""), help="Comma-separated list of sub-server peer URLs for hierarchical delegation")
     parser.add_argument("--max-queue", type=int, default=int(os.environ.get("LEAN_NATIVE_MAX_QUEUE", "4")), help="Maximum local hardware queue depth before delegating to peers (default: 4)")
     parser.add_argument("--max-concurrency", type=int, default=int(os.environ.get("LEAN_NATIVE_MAX_CONCURRENCY", "2")), help="Maximum concurrent hardware executions per node (default: 2)")

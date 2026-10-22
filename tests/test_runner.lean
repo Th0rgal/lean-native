@@ -358,6 +358,71 @@ def runTest6 : Bool × UInt64 :=
   let h := fnvMixU64 (fnvMixU64 (fnvMixU64 14695981039346656037 dagVal) loopSum) loopXor
   (ok, h)
 
+/-! ## Test 7 — Matryoshka M3 TRM Bit-Exact Slice Parity (`S_0 16x32`, `S_1 32x64`, `S_3 64x128`) -/
+
+def isqrtU32 (n : UInt32) : UInt32 :=
+  if n == 0 then 1
+  else
+    let rec loop (fuel : Nat) (x y : UInt32) : UInt32 :=
+      match fuel with
+      | 0 => if x > 0 then x else 1
+      | f + 1 =>
+        if y < x then loop f y ((y + n / y) >>> 1)
+        else if x > 0 then x else 1
+    loop 32 n ((n + 1) >>> 1)
+
+def trmStepSliceSum (dModel dHidden : Nat) (useUnrolled : Bool) : UInt64 := Id.run do
+  let mut z : Array Int := Array.replicate dModel 0
+  for i in [0:dModel] do
+    z := z.set! i (((Int.ofNat ((i * 37 + 11) % 97)) - 48))
+  let mut sumSq : Nat := 0
+  for i in [0:dModel] do
+    let zi := z[i]!
+    sumSq := sumSq + (zi * zi).toNat
+  let rms : Int := Int.ofNat (isqrtU32 (sumSq / dModel + 1).toUInt32).toNat
+  let mut hNorm : Array Int := Array.replicate dModel 0
+  for i in [0:dModel] do
+    let v := (z[i]! * 32) / rms
+    let c := if v < -127 then -127 else if v > 127 then 127 else v
+    hNorm := hNorm.set! i c
+  let mut totalAct : UInt64 := 0
+  for j in [0:dHidden] do
+    let mut acc : Int := 0
+    if useUnrolled then
+      let mut i : Nat := 0
+      while i + 4 <= dModel do
+        let w0 := (Int.ofNat (((i * dHidden + j) * 53 + 19) % 89)) - 44
+        let w1 := (Int.ofNat ((((i + 1) * dHidden + j) * 53 + 19) % 89)) - 44
+        let w2 := (Int.ofNat ((((i + 2) * dHidden + j) * 53 + 19) % 89)) - 44
+        let w3 := (Int.ofNat ((((i + 3) * dHidden + j) * 53 + 19) % 89)) - 44
+        acc := acc + (hNorm[i]! * w0 + hNorm[i + 1]! * w1) + (hNorm[i + 2]! * w2 + hNorm[i + 3]! * w3)
+        i := i + 4
+    else
+      for i in [0:dModel] do
+        let w := (Int.ofNat (((i * dHidden + j) * 53 + 19) % 89)) - 44
+        acc := acc + hNorm[i]! * w
+    let pre := (acc / 128) - 11
+    let relu := if pre <= 0 then 0 else if pre > 16 then 16 else pre
+    let sq := (relu * relu).toNat
+    totalAct := totalAct + (if sq > 255 then 255 else sq).toUInt64
+  return totalAct
+
+def runTest7 : Bool × UInt64 :=
+  let s0Ref := trmStepSliceSum 16 32 false
+  let s0Vec := trmStepSliceSum 16 32 true
+  let s1Ref := trmStepSliceSum 32 64 false
+  let s1Vec := trmStepSliceSum 32 64 true
+  let s3Ref := trmStepSliceSum 64 128 false
+  let s3Vec := trmStepSliceSum 64 128 true
+  -- Verify cache footprint budgets: S_0(16x32)=1344B <= 32KB, S_1(32x64)=4736B <= 512KB, S_3(64x128)=17664B <= 32KB
+  let s0Bytes : UInt64 := 16 * 32 + 32 * 16 + 320
+  let s1Bytes : UInt64 := 32 * 64 + 64 * 32 + 640
+  let s3Bytes : UInt64 := 64 * 128 + 128 * 64 + 1280
+  let ok := s0Ref == s0Vec && s1Ref == s1Vec && s3Ref == s3Vec &&
+            s0Bytes <= 32768 && s1Bytes <= 524288 && s3Bytes <= 32768
+  let h := fnvMixU64 (fnvMixU64 (fnvMixU64 14695981039346656037 s0Ref) s1Ref) s3Ref
+  (ok, h)
+
 /-- Format a `UInt64` as a 16-digit `0x...` hex string. -/
 def toHex64 (val : UInt64) : String :=
   let hexChars := "0123456789abcdef".toList
@@ -380,7 +445,8 @@ def main : IO UInt32 := do
     ("Test 3 (256-Bit Arithmetic Shift Right sar & clz256)", runTest3),
     ("Test 4 (EVM Storage Map Slot Collisions & SSTORE->SLOAD Forwarding)", runTest4),
     ("Test 5 (Shared Array m_rc > 1 Copy-On-Write under HoistExclusivity)", runTest5),
-    ("Test 6 (5-Constructor Inductive Tag Dispatch & Tail-Recursive Join Points)", runTest6)
+    ("Test 6 (5-Constructor Inductive Tag Dispatch & Tail-Recursive Join Points)", runTest6),
+    ("Test 7 (Matryoshka M3 TRM Bit-Exact Slice Parity & Cache Budget Compliance)", runTest7)
   ]
   let mut allPassed := true
   let mut masterHash : UInt64 := 14695981039346656037

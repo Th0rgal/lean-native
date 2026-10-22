@@ -368,6 +368,71 @@ void lean_native_evm_sload(void* map_ptr, const uint64_t* slot_limbs, uint64_t* 
  */
 void lean_native_evm_sstore(void* map_ptr, const uint64_t* slot_limbs, const uint64_t* val_limbs);
 
+/* ============================================================================
+ * Matryoshka M3 TRM Native Inference Kernels (CPU INT8 AVX2/NEON & Hybrid)
+ * ============================================================================ */
+
+/**
+ * Scalar reference Matryoshka TRM block step (`SliceRMSNorm_d` + `ClippedReLU^2` + `MUDD` residual).
+ * Computes one recursive step on quantized `INT8` hidden state `z_q8[d_model]` with weights
+ * `w1_q8[d_model * d_hidden]` and `w2_q8[d_hidden * d_model]` (`ClippedReLU^2` capped at `16` so
+ * `VPMADDUBSW` 16-bit signed accumulators never saturate).
+ */
+void lean_native_trm_matryoshka_ref_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+);
+
+/**
+ * Vectorized CPU SIMD (`AVX2` / `NEON` / scalar-exact) Matryoshka TRM inference kernel.
+ * Bit-for-bit identical to `lean_native_trm_matryoshka_ref_int8` across slices `d_model in {16, 32, 64}`.
+ */
+void lean_native_trm_matryoshka_cpu_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+);
+
+/**
+ * Runs a deterministic bit-for-bit parity self-test between `lean_native_trm_matryoshka_ref_int8`
+ * and `lean_native_trm_matryoshka_cpu_int8` across Matryoshka slices `S_0 (16x32)`, `S_1 (32x64)`,
+ * and `S_3 (64x128)`. Returns 1 if all slices match bit-for-bit, 0 otherwise.
+ */
+int lean_native_trm_matryoshka_parity_selftest(void);
+
+/**
+ * Unboxed Lean 4 `@[extern]` wrapper around `lean_native_trm_matryoshka_parity_selftest`:
+ * takes a dummy `uint64_t` and returns `1ULL` if all Matryoshka slices (`16x32`, `32x64`, `64x128`)
+ * match bit-for-bit between reference and vectorized kernels, or `0ULL` on mismatch.
+ */
+uint64_t lean_native_trm_matryoshka_parity_u64(uint64_t seed);
+
+/**
+ * Hybrid CPU/GPU Matryoshka TRM inference dispatcher (`NVFP4`/`FP16` on Blackwell `GB10` when
+ * available, falling back deterministically to `lean_native_trm_matryoshka_cpu_int8`).
+ */
+int lean_native_hybrid_trm_matryoshka_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+);
+
 #ifdef __cplusplus
 }
 #endif

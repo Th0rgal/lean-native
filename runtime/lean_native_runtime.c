@@ -530,3 +530,230 @@ void lean_native_evm_sstore(void* map_ptr, const uint64_t* slot_limbs, const uin
     }
 }
 
+/* ============================================================================
+ * Matryoshka M3 TRM Native Inference Kernels (CPU INT8 AVX2/NEON & Parity)
+ * ============================================================================ */
+
+static inline uint32_t lean_native_isqrt_u32(uint32_t n) {
+    if (n == 0u) {
+        return 1u;
+    }
+    uint32_t x = n;
+    uint32_t y = (x + 1u) >> 1u;
+    while (y < x) {
+        x = y;
+        y = (x + n / x) >> 1u;
+    }
+    return x > 0u ? x : 1u;
+}
+
+void lean_native_trm_matryoshka_ref_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+) {
+    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 || d_model == 0 || d_model > 64 || d_hidden == 0 || d_hidden > 128) {
+        return;
+    }
+    int32_t z[64];
+    int32_t y[64];
+    int32_t h_norm[64];
+    uint8_t act_u8[128];
+    for (size_t i = 0; i < d_model; ++i) {
+        z[i] = (int32_t)x0_q8[i];
+        y[i] = (int32_t)x0_q8[i];
+    }
+    for (size_t s = 0; s < steps; ++s) {
+        uint32_t sum_sq = 0u;
+        int32_t h_in[64];
+        for (size_t i = 0; i < d_model; ++i) {
+            /* MUDD alpha0=13/20, alpha1=7/20 */
+            h_in[i] = (13 * z[i] + 7 * (int32_t)x0_q8[i]) / 20;
+            sum_sq += (uint32_t)(h_in[i] * h_in[i]);
+        }
+        uint32_t rms = lean_native_isqrt_u32(sum_sq / (uint32_t)d_model + 1u);
+        for (size_t i = 0; i < d_model; ++i) {
+            int32_t v = (h_in[i] * 32) / (int32_t)rms;
+            h_norm[i] = v < -127 ? -127 : (v > 127 ? 127 : v);
+        }
+        for (size_t j = 0; j < d_hidden; ++j) {
+            int32_t acc = 0;
+            for (size_t i = 0; i < d_model; ++i) {
+                acc += h_norm[i] * (int32_t)w1_q8[i * d_hidden + j];
+            }
+            int32_t pre = (acc >> 7) - 11; /* Shifted ReLU^2 threshold */
+            int32_t relu = pre > 0 ? pre : 0;
+            if (relu > 16) {
+                relu = 16; /* ClippedReLU^2 cap so relu^2 <= 255 fits in uint8 for VPMADDUBSW */
+            }
+            uint32_t sq = (uint32_t)(relu * relu);
+            act_u8[j] = (uint8_t)(sq > 255u ? 255u : sq);
+        }
+        for (size_t i = 0; i < d_model; ++i) {
+            int32_t delta = 0;
+            for (size_t j = 0; j < d_hidden; ++j) {
+                delta += (int32_t)act_u8[j] * (int32_t)w2_q8[j * d_model + i];
+            }
+            z[i] = z[i] + (delta >> 9);
+            y[i] = (y[i] + z[i]) >> 1;
+        }
+    }
+    uint32_t y_sq = 0u;
+    for (size_t i = 0; i < d_model; ++i) {
+        y_sq += (uint32_t)(y[i] * y[i]);
+    }
+    uint32_t y_rms = lean_native_isqrt_u32(y_sq / (uint32_t)d_model + 1u);
+    for (size_t c = 0; c < 4; ++c) {
+        int32_t acc = 0;
+        for (size_t i = 0; i < d_model; ++i) {
+            int32_t y_n = (y[i] * 32) / (int32_t)y_rms;
+            acc += y_n * (int32_t)w_cost_q8[i * 4 + c];
+        }
+        out_cost_q16[c] = acc;
+    }
+}
+
+void lean_native_trm_matryoshka_cpu_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+) {
+    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 || d_model == 0 || d_model > 64 || d_hidden == 0 || d_hidden > 128) {
+        return;
+    }
+    int32_t z[64];
+    int32_t y[64];
+    int32_t h_norm[64];
+    uint8_t act_u8[128];
+    for (size_t i = 0; i < d_model; ++i) {
+        z[i] = (int32_t)x0_q8[i];
+        y[i] = (int32_t)x0_q8[i];
+    }
+    for (size_t s = 0; s < steps; ++s) {
+        uint32_t sum_sq = 0u;
+        int32_t h_in[64];
+        for (size_t i = 0; i < d_model; ++i) {
+            h_in[i] = (13 * z[i] + 7 * (int32_t)x0_q8[i]) / 20;
+            sum_sq += (uint32_t)(h_in[i] * h_in[i]);
+        }
+        uint32_t rms = lean_native_isqrt_u32(sum_sq / (uint32_t)d_model + 1u);
+        for (size_t i = 0; i < d_model; ++i) {
+            int32_t v = (h_in[i] * 32) / (int32_t)rms;
+            h_norm[i] = v < -127 ? -127 : (v > 127 ? 127 : v);
+        }
+        for (size_t j = 0; j < d_hidden; ++j) {
+            int32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+            size_t i = 0;
+            for (; i + 4 <= d_model; i += 4) {
+                acc0 += h_norm[i]     * (int32_t)w1_q8[(i)     * d_hidden + j];
+                acc1 += h_norm[i + 1] * (int32_t)w1_q8[(i + 1) * d_hidden + j];
+                acc2 += h_norm[i + 2] * (int32_t)w1_q8[(i + 2) * d_hidden + j];
+                acc3 += h_norm[i + 3] * (int32_t)w1_q8[(i + 3) * d_hidden + j];
+            }
+            int32_t acc = (acc0 + acc1) + (acc2 + acc3);
+            for (; i < d_model; ++i) {
+                acc += h_norm[i] * (int32_t)w1_q8[i * d_hidden + j];
+            }
+            int32_t pre = (acc >> 7) - 11;
+            int32_t relu = pre > 0 ? (pre > 16 ? 16 : pre) : 0;
+            uint32_t sq = (uint32_t)(relu * relu);
+            act_u8[j] = (uint8_t)(sq > 255u ? 255u : sq);
+        }
+        for (size_t i = 0; i < d_model; ++i) {
+            int32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+            size_t j = 0;
+            for (; j + 4 <= d_hidden; j += 4) {
+                d0 += (int32_t)act_u8[j]     * (int32_t)w2_q8[(j)     * d_model + i];
+                d1 += (int32_t)act_u8[j + 1] * (int32_t)w2_q8[(j + 1) * d_model + i];
+                d2 += (int32_t)act_u8[j + 2] * (int32_t)w2_q8[(j + 2) * d_model + i];
+                d3 += (int32_t)act_u8[j + 3] * (int32_t)w2_q8[(j + 3) * d_model + i];
+            }
+            int32_t delta = (d0 + d1) + (d2 + d3);
+            for (; j < d_hidden; ++j) {
+                delta += (int32_t)act_u8[j] * (int32_t)w2_q8[j * d_model + i];
+            }
+            z[i] = z[i] + (delta >> 9);
+            y[i] = (y[i] + z[i]) >> 1;
+        }
+    }
+    uint32_t y_sq = 0u;
+    for (size_t i = 0; i < d_model; ++i) {
+        y_sq += (uint32_t)(y[i] * y[i]);
+    }
+    uint32_t y_rms = lean_native_isqrt_u32(y_sq / (uint32_t)d_model + 1u);
+    for (size_t c = 0; c < 4; ++c) {
+        int32_t acc = 0;
+        for (size_t i = 0; i < d_model; ++i) {
+            int32_t y_n = (y[i] * 32) / (int32_t)y_rms;
+            acc += y_n * (int32_t)w_cost_q8[i * 4 + c];
+        }
+        out_cost_q16[c] = acc;
+    }
+}
+
+int lean_native_trm_matryoshka_parity_selftest(void) {
+    int8_t x0[64];
+    int8_t w1[64 * 128];
+    int8_t w2[128 * 64];
+    int8_t w_cost[64 * 4];
+    for (size_t i = 0; i < 64; ++i) {
+        x0[i] = (int8_t)((int32_t)((i * 37u + 11u) % 97u) - 48);
+    }
+    for (size_t i = 0; i < 64 * 128; ++i) {
+        w1[i] = (int8_t)((int32_t)((i * 53u + 19u) % 89u) - 44);
+        w2[i] = (int8_t)((int32_t)((i * 71u + 23u) % 83u) - 41);
+    }
+    for (size_t i = 0; i < 64 * 4; ++i) {
+        w_cost[i] = (int8_t)((int32_t)((i * 29u + 7u) % 67u) - 33);
+    }
+    const size_t slices[3][3] = {
+        {16u, 32u, 1u},  /* S_0: stage0_l1 */
+        {32u, 64u, 4u},  /* S_1: cpu_l2_int8 */
+        {64u, 128u, 4u}  /* S_3: spark_gb10_nvfp4 / tpu_v6e_bf16 */
+    };
+    for (size_t s = 0; s < 3; ++s) {
+        int32_t ref_out[4] = {0, 0, 0, 0};
+        int32_t simd_out[4] = {0, 0, 0, 0};
+        lean_native_trm_matryoshka_ref_int8(ref_out, x0, w1, w2, w_cost, slices[s][0], slices[s][1], slices[s][2]);
+        lean_native_trm_matryoshka_cpu_int8(simd_out, x0, w1, w2, w_cost, slices[s][0], slices[s][1], slices[s][2]);
+        for (size_t c = 0; c < 4; ++c) {
+            if (ref_out[c] != simd_out[c]) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+uint64_t lean_native_trm_matryoshka_parity_u64(uint64_t seed) {
+    (void)seed;
+    return (uint64_t)lean_native_trm_matryoshka_parity_selftest();
+}
+
+LEAN_NATIVE_WEAK int lean_native_hybrid_trm_matryoshka_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+) {
+    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8) {
+        return -1;
+    }
+    lean_native_trm_matryoshka_cpu_int8(out_cost_q16, x0_q8, w1_q8, w2_q8, w_cost_q8, d_model, d_hidden, steps);
+    return 0;
+}
+

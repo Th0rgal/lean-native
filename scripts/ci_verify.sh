@@ -66,6 +66,16 @@ fi
 echo "[5/5] Running Gate 5: Orthogonal Native Test Suite & Showcase Examples..."
 $FULL_BIN build-exe tests/test_runner.lean -o /tmp/ln_ci_test_runner
 /tmp/ln_ci_test_runner
+clang -O3 -Iruntime -x c - -o /tmp/ln_ci_trm_parity runtime/lean_native_runtime.c << 'EOF'
+#include "lean_native_runtime.h"
+#include <stdio.h>
+int main(void) {
+    int ok = lean_native_trm_matryoshka_parity_selftest();
+    printf("MATRYOSHKA_TRM_C_RUNTIME_PARITY=%s\n", ok ? "PASSED" : "FAILED");
+    return ok ? 0 : 1;
+}
+EOF
+/tmp/ln_ci_trm_parity
 lean --run examples/verity_amm_vault.lean
 lean --run examples/saxpy_matmul_gpu.lean
 lean --run examples/persistent_tuple_tree.lean

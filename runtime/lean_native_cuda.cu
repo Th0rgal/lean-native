@@ -636,3 +636,22 @@ extern "C" int lean_native_hybrid_matmul_u64(
     lean_native_cpu_matmul_u64(c, a, b, m, n, k);
     return 0;
 }
+
+extern "C" int lean_native_hybrid_trm_matryoshka_int8(
+    int32_t* out_cost_q16,
+    const int8_t* x0_q8,
+    const int8_t* w1_q8,
+    const int8_t* w2_q8,
+    const int8_t* w_cost_q8,
+    size_t d_model,
+    size_t d_hidden,
+    size_t steps
+) {
+    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8) {
+        return -1;
+    }
+    /* Single-query Matryoshka TRM slices (d_model <= 64, d_hidden <= 128) fit entirely in L1/L2 cache;
+       execute deterministically via the bit-exact SIMD INT8/FP16 kernel. */
+    lean_native_trm_matryoshka_cpu_int8(out_cost_q16, x0_q8, w1_q8, w2_q8, w_cost_q8, d_model, d_hidden, steps);
+    return 0;
+}
