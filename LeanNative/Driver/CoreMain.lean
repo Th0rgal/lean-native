@@ -1,4 +1,5 @@
 import LeanNative.Core
+import LeanNative.Proofs.AxiomAudit
 
 open LeanNative.Driver.CoreCLI
 

@@ -692,9 +692,17 @@ extern "C" int lean_native_speculate_forest(
             rpn_arg1[g],
             &min_idx
         );
-        out_cex_found[g] = (uint8_t)(cex ? 1u : 0u);
-        out_min_sample_idx[g] = min_idx;
-        if (cex) {
+        int recert_ok = cex ? lean_native_verify_indexed_witness_recert(
+            base_seed,
+            (uint64_t)g,
+            min_idx,
+            rpn_opcodes + g * 16u,
+            rpn_arg0[g],
+            rpn_arg1[g]
+        ) : 0;
+        out_cex_found[g] = (uint8_t)(recert_ok ? 1u : 0u);
+        out_min_sample_idx[g] = recert_ok ? min_idx : UINT64_MAX;
+        if (recert_ok) {
             out_survival_permille[g] = 0;
             out_router_action[g] = 1u; /* prune_stop */
             out_effective_tier[g] = gpu_ready ? LEAN_NATIVE_TIER_S3_SPARK_CUDA : LEAN_NATIVE_TIER_S0_CPU_L1;

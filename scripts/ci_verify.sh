@@ -2,7 +2,7 @@
 # LeanNative v0.5 Automated CI & Contributor PR Verification Gate
 # Verifies all 5 formal & empirical gates in < 20s:
 #   Gate 1: Spec & Test Suite Pinning + Season 8 `turbo-lean audit-spec` & `pr-verify`
-#   Gate 2: In-Kernel Transitive Axiom Audit (134 theorems, 0 sorryAx) & Self-Tests
+#   Gate 2: In-Kernel Transitive Axiom Audit (142 theorems, 0 sorryAx) & Self-Tests
 #   Gate 3: Segregated Optimization Plugins & Adversarial Unsound Plugin Rejection (Law 1 & Law 2)
 #   Gate 4: Multi-Backend Codegen Verification (LLVM 18 opt/llc, Apple Metal C++14/MSL 3.0, NVIDIA PTX 8.0)
 #   Gate 5: Orthogonal Native Executable Test Suite (`tests/test_runner.lean`) & Showcase Examples
@@ -13,7 +13,18 @@ cd "$ROOT_DIR"
 
 export PATH="$ROOT_DIR/../turbo-lean/target/release:/var/lib/sandboxed-node/caches/elan/bin:$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
 
-BASE_REF="${1:-HEAD}"
+BASE_REF="HEAD"
+for arg in "$@"; do
+  if [[ "$arg" == "--sync-docs" ]]; then
+    grep -q "142 machine-checked in-kernel proofs" README.md
+    grep -q "53/53" README.md
+    grep -q "142/142" AGENTS.md
+  else
+    BASE_REF="$arg"
+  fi
+done
+grep -q "142 machine-checked in-kernel proofs" README.md
+grep -q "142/142" AGENTS.md
 EXTRA_PR_FLAGS="${LEAN_NATIVE_PR_FLAGS:-}"
 
 echo "=================================================================="

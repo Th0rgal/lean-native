@@ -461,6 +461,22 @@ int lean_native_rpn_u256_fastcheck_goal(
 );
 
 /**
+ * O(1) deterministic indexed-witness recertification (`verifyIndexedWitness` C-ABI v2).
+ * Reconstructs the exact 256-bit state at `(base_seed, goal_idx, sample_idx)` via
+ * `splitmix64(base_seed ^ (goal_idx * PHI) + sample_idx * PHI)` without transferring
+ * 64-byte raw `U256` payloads over PCIe/HTTP, and returns 1 iff `sample_idx` is a
+ * genuine counterexample to `rpn_opcodes[16]`.
+ */
+int lean_native_verify_indexed_witness_recert(
+    uint64_t base_seed,
+    uint64_t goal_idx,
+    uint64_t sample_idx,
+    const int32_t* rpn_opcodes,
+    uint64_t arg0,
+    uint64_t arg1
+);
+
+/**
  * Cross-slice Matryoshka cascade (`S_0 16x32` -> `S_1 32x64` -> `S_3 64x128` -> `S_4 128x256`)
  * with additive sum-of-squares (`combineSliceSumSq`) & pre-activation dot decomposition
  * (`combineSlicePrefixDot`) and tier-deviation margin abstention (`eps_tier_permille`).

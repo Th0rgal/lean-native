@@ -177,7 +177,7 @@ structure TheoremAxiomAudit where
   forbiddenFound   : List String
   nonStandardFound : List String
   passed           : Bool
-  deriving Repr, DecidableEq, Inhabited, BEq
+  deriving Repr, DecidableEq, Inhabited, BEq, ToExpr
 
 /-- Aggregate report of the in-kernel transitive axiom audit. -/
 structure AxiomAuditReport where
@@ -185,7 +185,7 @@ structure AxiomAuditReport where
   theoremsAudited      : Nat
   results              : List TheoremAxiomAudit
   forbiddenAxiomsFound : List String
-  deriving Repr, DecidableEq, Inhabited, BEq
+  deriving Repr, DecidableEq, Inhabited, BEq, ToExpr
 
 /-- Inspect a single theorem in `CoreM` using `Lean.collectAxioms`. -/
 def auditTheoremInCoreM (declName : Name) : CoreM TheoremAxiomAudit := do
@@ -234,29 +234,25 @@ def auditAllProofsCoreM (names : List Name := auditedTheoremNames) : CoreM Axiom
     forbiddenAxiomsFound := allForbidden
   }
 
-/-- Elaboration-time kernel gate: runs `auditAllProofsCoreM` during compilation of `AxiomAudit.lean`
-    and fails the build if any theorem depends on `sorryAx`, `trustCompiler`, or non-standard axioms. -/
+/-- Elaboration-time kernel gate: runs `auditAllProofsCoreM` during compilation of `AxiomAudit.lean`,
+    fails the build if any theorem depends on `sorryAx`, `trustCompiler`, or non-standard axioms,
+    and binds `verifiedAxiomAuditReport` in the kernel environment to the exact `Lean.collectAxioms` result. -/
 elab "#verify_lean_native_axioms" : command => do
-  let report ← Elab.Command.liftCoreM (auditAllProofsCoreM auditedTheoremNames)
-  if !report.passed then
-    throwError s!"[AxiomAudit] Kernel axiom audit FAILED! Forbidden/non-standard axioms found: {report.forbiddenAxiomsFound}"
+  Elab.Command.liftCoreM do
+    let report ← auditAllProofsCoreM auditedTheoremNames
+    if !report.passed then
+      throwError s!"[AxiomAudit] Kernel axiom audit FAILED! Forbidden/non-standard axioms found: {report.forbiddenAxiomsFound}"
+    let decl := Declaration.defnDecl {
+      name := `LeanNative.Proofs.verifiedAxiomAuditReport
+      levelParams := []
+      type := mkConst ``AxiomAuditReport
+      value := toExpr report
+      hints := ReducibilityHints.abbrev
+      safety := DefinitionSafety.safe
+    }
+    addAndCompile decl
 
 #verify_lean_native_axioms
-
-/-- Snapshot of the compile-time verified `AxiomAuditReport` for CLI reporting without requiring a `.olean` search path at runtime. -/
-def verifiedAxiomAuditReport : AxiomAuditReport :=
-  let entries : List TheoremAxiomAudit := auditedTheoremNames.map (fun n => {
-    theoremName := n.toString
-    existsInEnv := true
-    axiomsUsed := ["propext", "Quot.sound"]
-    forbiddenFound := []
-    nonStandardFound := []
-    passed := true
-  })
-  { passed := true
-    theoremsAudited := entries.length
-    results := entries
-    forbiddenAxiomsFound := [] }
 
 private abbrev escapeJsonStr := LeanNative.IR.jsonEscape
 

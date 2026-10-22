@@ -1562,6 +1562,7 @@ def main() -> int:
     parser.add_argument("--max-concurrency", type=int, default=int(os.environ.get("LEAN_NATIVE_MAX_CONCURRENCY", "2")), help="Maximum concurrent hardware executions per node (default: 2)")
     parser.add_argument("--ttl", type=int, default=2, help="Request delegation time-to-live hops (default: 2)")
     parser.add_argument("--project-id", type=str, default="default", help="Project identifier for multi-project telemetry")
+    parser.add_argument("--target", type=str, default="auto", choices=["auto", "cpu-simd", "spark-cuda", "tpu-v6e"], help="Accelerator target tier (auto|cpu-simd|spark-cuda|tpu-v6e)")
     parser.add_argument("--status", action="store_true", help="Query remote Colab GPU/TPU hardware & queue status")
     parser.add_argument("--verify-ptx", type=str, default="", help="Verify PTX or .ptx.h file on remote Colab GPU")
     parser.add_argument("--tune-profile", type=str, default="", help="Calibrate hardware profile on remote Colab GPU/TPU and save to path")

@@ -9,6 +9,7 @@ import LeanNative.Proofs.PeepholeProofs
 import LeanNative.Proofs.LoopOptProofs
 import LeanNative.Proofs.SymbolicTV
 import LeanNative.Proofs.CertChecker
+import LeanNative.Proofs.AxiomAudit
 import LeanNative.Transform.Pass
 import LeanNative.Transform.AlgebraicOpt
 import LeanNative.Transform.UnboxTupleSROA

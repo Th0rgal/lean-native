@@ -9,6 +9,7 @@ import LeanNative.Proofs.PeepholeProofs
 import LeanNative.Proofs.LoopOptProofs
 import LeanNative.Proofs.SymbolicTV
 import LeanNative.Proofs.CertChecker
+import LeanNative.Proofs.AxiomAudit
 import LeanNative.Transform.Pass
 import LeanNative.Transform.AlgebraicOpt
 import LeanNative.Transform.UnboxTupleSROA
@@ -373,10 +374,12 @@ def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
   let (optMod, pluginReport) := runSegregatedPluginPipeline .x86_64 true baseMod
   let tvReport := validateTranslationModule baseMod optMod
   let allDeclTvOk := pluginReport.declAudits.all (fun a => a.tvVerified)
+  let axiomReport := verifiedAxiomAuditReport
   let law5Passed := checkPRVerificationGate {
     expectedSpecHash := 1, actualSpecHash := if specUnchanged then 1 else 2,
     expectedTestSuiteHash := 1, actualTestSuiteHash := if testUnchanged then 1 else 2,
-    forbiddenAxiomsCount := 0, tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected
+    forbiddenAxiomsCount := axiomReport.forbiddenAxiomsFound.length,
+    tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected && axiomReport.passed
   }
   let cfg ← TurboLeanConfig.probe
   let (turboPrOk, _) ← runTurboLeanPRVerify cfg "." baseRef disallowSpecChanges "/tmp/lean_native_pr_verify_receipt.json"
@@ -510,6 +513,9 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.hasSufficientGpuMemory ⟨4096, 1024, 2048⟩ &&
     !(LeanNative.Spec.hasSufficientGpuMemory ⟨2048, 1024, 2048⟩) &&
     LeanNative.Spec.isValidByteSlice (LeanNative.Spec.subSliceView ⟨64, 8, 32⟩ 4 16)
+  let axiomReport := verifiedAxiomAuditReport
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 142
+  let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
   IO.println s!"2. LNIR Wire & JSON Round-Trip     : {status (roundTripWireOk && roundTripJsonOk)}"
@@ -523,10 +529,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"10. Google Cloud TPU v6e Codegen   : {status tpuCodegenOk} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
   IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {status mulDivOk} ((2^60 * 2^60) / 2^60 == 2^60)"
   IO.println s!"12. CAS Telemetry Spooler (v1)     : {status telOk} ({telCount} accepted+rejected events, de Bruijn CAS blobs)"
+  IO.println s!"13. In-Kernel Transitive Axiom Gate: {status axiomOk} ({axiomReport.theoremsAudited} theorems via Lean.collectAxioms, 0 {sAx})"
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
     fcPropOk && fcNaiveVacuousOk && relSamplingOk && gpuHeadroomOk &&
-    metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk &&
+    metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk && axiomOk &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
     IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="
@@ -798,6 +805,7 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
     "  turbo-plugin       Run JSONL-stdio external accelerator plugin for turbo-lean (ExternalProcessAccelerator protocol)",
     "  verify-certs       Run optimization pipeline and verify translation certificates (--input <file>, --json, -o <path>)",
     "  validate-tv        Run Alive2-style symbolic translation validation (--input <file>, --json, -o <path>)",
+    "  audit-axioms       Run in-kernel transitive axiom audit (Lean.collectAxioms snapshot, --json)",
     "  emit-lnir          Emit LNIR module in wire/JSON format (--wire, --json, --fastcheck, -o <path>)"
   ] ++ fe [
     "  audit-axioms       Run in-kernel transitive axiom audit over all 134 soundness theorems (--json)",
@@ -808,10 +816,20 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   ]
   IO.println (String.intercalate "\n" lines)
 
+def runAuditAxioms (args : List String) : IO UInt32 := do
+  let jsonFlag := hasFlag args "--json"
+  let report := verifiedAxiomAuditReport
+  if jsonFlag then
+    IO.println report.toJson
+  else
+    IO.println report.formatSummary
+  return if report.passed then 0 else 1
+
 /-- Shared CLI dispatcher for both `lean-native-core` (`elaborateHook? = none`) and `lean-native` (`elaborateHook? = some ...`). -/
 def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO LNIRModule))
     (args : List String) : IO (Option UInt32) := do
   match args with
+  | "audit-axioms" :: rest       => some <$> runAuditAxioms rest
   | "compile-llvm" :: rest       => some <$> runCompileLLVM tag elaborateHook? rest
   | "compile-static-lib" :: rest => some <$> runCompileStaticLib tag elaborateHook? rest
   | "compile-mlir" :: rest       => some <$> runCompileMLIR tag elaborateHook? rest

@@ -1,6 +1,14 @@
 #include "lean_native_runtime.h"
 #include <stdlib.h>
 #include <string.h>
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+#if defined(_OPENMP) && defined(__has_include)
+#if __has_include(<omp.h>)
+#include <omp.h>
+#endif
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 #define LEAN_NATIVE_WEAK __attribute__((weak))
@@ -618,6 +626,33 @@ void lean_native_trm_matryoshka_ref_int8(
     }
 }
 
+static inline int32_t lean_native_div20_trunc(int32_t num) {
+    /* Exact signed truncation division by 20 via Q19 reciprocal (|num| <= 32768) */
+    uint32_t mag = (uint32_t)(num < 0 ? -num : num);
+    int32_t q = (int32_t)((mag * 26215u) >> 19u);
+    return num < 0 ? -q : q;
+}
+
+static inline int32_t lean_native_div_rms_trunc(int32_t num, uint32_t inv_rms_q16, int32_t rms) {
+    uint32_t mag = (uint32_t)(num < 0 ? -num : num);
+    int32_t q = (int32_t)((mag * inv_rms_q16) >> 16u);
+    if ((int32_t)mag - q * rms >= rms) {
+        q += 1;
+    }
+    return num < 0 ? -q : q;
+}
+
+#if defined(__AVX2__)
+static inline int32_t lean_native_avx2_hsum_epi32(__m256i v) {
+    __m128i lo = _mm256_castsi256_si128(v);
+    __m128i hi = _mm256_extracti128_si256(v, 1);
+    __m128i sum128 = _mm_add_epi32(lo, hi);
+    sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(1, 0, 3, 2)));
+    sum128 = _mm_add_epi32(sum128, _mm_shuffle_epi32(sum128, _MM_SHUFFLE(2, 3, 0, 1)));
+    return _mm_cvtsi128_si32(sum128);
+}
+#endif
+
 void lean_native_trm_matryoshka_cpu_int8(
     int32_t* out_cost_q16,
     const int8_t* x0_q8,
@@ -634,35 +669,70 @@ void lean_native_trm_matryoshka_cpu_int8(
     int32_t z[128];
     int32_t y[128];
     int32_t h_norm[128];
+    uint8_t h_norm_u8[128];
+    int8_t  h_norm_sign[128];
     uint8_t act_u8[256];
+    int8_t  w1_col[256 * 128];
+    int8_t  w2_row[128 * 256];
     for (size_t i = 0; i < d_model; ++i) {
         z[i] = (int32_t)x0_q8[i];
         y[i] = (int32_t)x0_q8[i];
+        for (size_t j = 0; j < d_hidden; ++j) {
+            w1_col[j * d_model + i] = w1_q8[i * d_hidden + j];
+            w2_row[i * d_hidden + j] = w2_q8[j * d_model + i];
+        }
     }
     for (size_t s = 0; s < steps; ++s) {
         uint32_t sum_sq = 0u;
         int32_t h_in[128];
         for (size_t i = 0; i < d_model; ++i) {
-            h_in[i] = (13 * z[i] + 7 * (int32_t)x0_q8[i]) / 20;
+            h_in[i] = lean_native_div20_trunc(13 * z[i] + 7 * (int32_t)x0_q8[i]);
             sum_sq += (uint32_t)(h_in[i] * h_in[i]);
         }
         uint32_t rms = lean_native_isqrt_u32(sum_sq / (uint32_t)d_model + 1u);
+        uint32_t inv_rms_q16 = 65536u / rms;
         for (size_t i = 0; i < d_model; ++i) {
-            int32_t v = (h_in[i] * 32) / (int32_t)rms;
-            h_norm[i] = v < -127 ? -127 : (v > 127 ? 127 : v);
+            int32_t v = lean_native_div_rms_trunc(h_in[i] * 32, inv_rms_q16, (int32_t)rms);
+            int32_t c = v < -127 ? -127 : (v > 127 ? 127 : v);
+            h_norm[i] = c;
+            h_norm_u8[i] = (uint8_t)(c < 0 ? -c : c);
+            h_norm_sign[i] = (int8_t)(c < 0 ? -1 : (c > 0 ? 1 : 0));
         }
         for (size_t j = 0; j < d_hidden; ++j) {
-            int32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+            const int8_t* w1_c = &w1_col[j * d_model];
+            int32_t acc = 0;
             size_t i = 0;
-            for (; i + 4 <= d_model; i += 4) {
-                acc0 += h_norm[i]     * (int32_t)w1_q8[(i)     * d_hidden + j];
-                acc1 += h_norm[i + 1] * (int32_t)w1_q8[(i + 1) * d_hidden + j];
-                acc2 += h_norm[i + 2] * (int32_t)w1_q8[(i + 2) * d_hidden + j];
-                acc3 += h_norm[i + 3] * (int32_t)w1_q8[(i + 3) * d_hidden + j];
+#if defined(__AVX2__)
+            __m256i v_ones = _mm256_set1_epi16(1);
+            __m256i v_acc = _mm256_setzero_si256();
+            for (; i + 32 <= d_model; i += 32) {
+                __m256i va_abs = _mm256_loadu_si256((const __m256i*)(h_norm_u8 + i));
+                __m256i va_sgn = _mm256_loadu_si256((const __m256i*)(h_norm_sign + i));
+                __m256i vw = _mm256_loadu_si256((const __m256i*)(w1_c + i));
+                __m256i vw_adj = _mm256_sign_epi8(vw, va_sgn);
+                __m256i prod16 = _mm256_maddubs_epi16(va_abs, vw_adj);
+                v_acc = _mm256_add_epi32(v_acc, _mm256_madd_epi16(prod16, v_ones));
             }
-            int32_t acc = (acc0 + acc1) + (acc2 + acc3);
+            if (i + 16 <= d_model) {
+                __m128i va_abs128 = _mm_loadu_si128((const __m128i*)(h_norm_u8 + i));
+                __m128i va_sgn128 = _mm_loadu_si128((const __m128i*)(h_norm_sign + i));
+                __m128i vw128 = _mm_loadu_si128((const __m128i*)(w1_c + i));
+                __m128i vw_adj128 = _mm_sign_epi8(vw128, va_sgn128);
+                __m128i prod16_128 = _mm_maddubs_epi16(va_abs128, vw_adj128);
+                __m128i prod32_128 = _mm_madd_epi16(prod16_128, _mm_set1_epi16(1));
+                v_acc = _mm256_add_epi32(v_acc, _mm256_zextsi128_si256(prod32_128));
+                i += 16;
+            }
+            acc = lean_native_avx2_hsum_epi32(v_acc);
+#endif
+            for (; i + 4 <= d_model; i += 4) {
+                acc += (h_norm[i]     * (int32_t)w1_c[i] +
+                        h_norm[i + 1] * (int32_t)w1_c[i + 1]) +
+                       (h_norm[i + 2] * (int32_t)w1_c[i + 2] +
+                        h_norm[i + 3] * (int32_t)w1_c[i + 3]);
+            }
             for (; i < d_model; ++i) {
-                acc += h_norm[i] * (int32_t)w1_q8[i * d_hidden + j];
+                acc += h_norm[i] * (int32_t)w1_c[i];
             }
             int32_t pre = (acc >> 7) - 11;
             int32_t relu = pre > 0 ? (pre > 16 ? 16 : pre) : 0;
@@ -670,17 +740,28 @@ void lean_native_trm_matryoshka_cpu_int8(
             act_u8[j] = (uint8_t)(sq > 255u ? 255u : sq);
         }
         for (size_t i = 0; i < d_model; ++i) {
-            int32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+            const int8_t* w2_r = &w2_row[i * d_hidden];
+            int32_t delta = 0;
             size_t j = 0;
-            for (; j + 4 <= d_hidden; j += 4) {
-                d0 += (int32_t)act_u8[j]     * (int32_t)w2_q8[(j)     * d_model + i];
-                d1 += (int32_t)act_u8[j + 1] * (int32_t)w2_q8[(j + 1) * d_model + i];
-                d2 += (int32_t)act_u8[j + 2] * (int32_t)w2_q8[(j + 2) * d_model + i];
-                d3 += (int32_t)act_u8[j + 3] * (int32_t)w2_q8[(j + 3) * d_model + i];
+#if defined(__AVX2__)
+            __m256i v_ones = _mm256_set1_epi16(1);
+            __m256i v_delta = _mm256_setzero_si256();
+            for (; j + 32 <= d_hidden; j += 32) {
+                __m256i vact = _mm256_loadu_si256((const __m256i*)(act_u8 + j));
+                __m256i vw2  = _mm256_loadu_si256((const __m256i*)(w2_r + j));
+                __m256i prod16 = _mm256_maddubs_epi16(vact, vw2);
+                v_delta = _mm256_add_epi32(v_delta, _mm256_madd_epi16(prod16, v_ones));
             }
-            int32_t delta = (d0 + d1) + (d2 + d3);
+            delta = lean_native_avx2_hsum_epi32(v_delta);
+#endif
+            for (; j + 4 <= d_hidden; j += 4) {
+                delta += ((int32_t)act_u8[j]     * (int32_t)w2_r[j] +
+                          (int32_t)act_u8[j + 1] * (int32_t)w2_r[j + 1]) +
+                         ((int32_t)act_u8[j + 2] * (int32_t)w2_r[j + 2] +
+                          (int32_t)act_u8[j + 3] * (int32_t)w2_r[j + 3]);
+            }
             for (; j < d_hidden; ++j) {
-                delta += (int32_t)act_u8[j] * (int32_t)w2_q8[j * d_model + i];
+                delta += (int32_t)act_u8[j] * (int32_t)w2_r[j];
             }
             z[i] = z[i] + (delta >> 9);
             y[i] = (y[i] + z[i]) >> 1;
@@ -691,10 +772,11 @@ void lean_native_trm_matryoshka_cpu_int8(
         y_sq += (uint32_t)(y[i] * y[i]);
     }
     uint32_t y_rms = lean_native_isqrt_u32(y_sq / (uint32_t)d_model + 1u);
+    uint32_t inv_y_rms_q16 = 65536u / y_rms;
     for (size_t c = 0; c < 4; ++c) {
         int32_t acc = 0;
         for (size_t i = 0; i < d_model; ++i) {
-            int32_t y_n = (y[i] * 32) / (int32_t)y_rms;
+            int32_t y_n = lean_native_div_rms_trunc(y[i] * 32, inv_y_rms_q16, (int32_t)y_rms);
             acc += y_n * (int32_t)w_cost_q8[i * 4 + c];
         }
         out_cost_q16[c] = acc;
@@ -765,6 +847,48 @@ static inline uint64_t lean_native_splitmix64_step(uint64_t z) {
     return z ^ (z >> 31u);
 }
 
+int lean_native_verify_indexed_witness_recert(
+    uint64_t base_seed,
+    uint64_t goal_idx,
+    uint64_t sample_idx,
+    const int32_t* rpn_opcodes,
+    uint64_t arg0,
+    uint64_t arg1
+) {
+    if (!rpn_opcodes || sample_idx == UINT64_MAX) {
+        return 0;
+    }
+    uint64_t g_seed = base_seed ^ (goal_idx * 0x9E3779B97F4A7C15ULL);
+    uint64_t x1 = lean_native_splitmix64_step(g_seed + sample_idx * 0x9E3779B97F4A7C15ULL);
+    uint64_t x0 = x1 + arg0;
+    uint64_t acc = x0;
+    int violated = 0;
+    for (size_t pc = 0; pc < 16u; ++pc) {
+        int32_t op = rpn_opcodes[pc];
+        if (op == 0) {
+            break;
+        } else if (op == 1) {
+            acc = acc + x1 + arg0;
+        } else if (op == 2) {
+            acc = (acc >= x1) ? (acc - x1) : 0ULL;
+        } else if (op == 3) {
+            acc = acc * (x1 | 1ULL);
+        } else if (op == 7) {
+            if (x1 >= arg1 && x0 >= arg1) {
+                violated = 1;
+            }
+        } else if (op == 8) {
+            uint64_t sum_lo = x0 + x1;
+            uint64_t carry = (sum_lo < x0) ? 1ULL : 0ULL;
+            acc = sum_lo ^ carry;
+        } else if (op == 15) {
+            uint64_t rot = (acc << 1u) | (acc >> 63u);
+            acc ^= rot ^ 0xA5A5A5A55A5A5A5AULL;
+        }
+    }
+    return violated;
+}
+
 int lean_native_rpn_u256_fastcheck_goal(
     uint64_t base_seed,
     uint64_t goal_idx,
@@ -780,36 +904,8 @@ int lean_native_rpn_u256_fastcheck_goal(
     if (!rpn_opcodes || n_samples == 0) {
         return 0;
     }
-    uint64_t g_seed = base_seed ^ (goal_idx * 0x9E3779B97F4A7C15ULL);
     for (size_t s = 0; s < n_samples; ++s) {
-        uint64_t x1 = lean_native_splitmix64_step(g_seed + (uint64_t)s * 0x9E3779B97F4A7C15ULL);
-        uint64_t x0 = x1 + arg0;
-        uint64_t acc = x0;
-        int violated = 0;
-        for (size_t pc = 0; pc < 16u; ++pc) {
-            int32_t op = rpn_opcodes[pc];
-            if (op == 0) {
-                break;
-            } else if (op == 1) { /* ADD */
-                acc = acc + x1 + arg0;
-            } else if (op == 2) { /* SUB */
-                acc = (acc >= x1) ? (acc - x1) : 0ULL;
-            } else if (op == 3) { /* MUL */
-                acc = acc * (x1 | 1ULL);
-            } else if (op == 7) { /* LT_BOUND_BUGGY */
-                if (x1 >= arg1 && x0 >= arg1) {
-                    violated = 1;
-                }
-            } else if (op == 8) { /* ADD256_CC */
-                uint64_t sum_lo = x0 + x1;
-                uint64_t carry = (sum_lo < x0) ? 1ULL : 0ULL;
-                acc = sum_lo ^ carry;
-            } else if (op == 15) { /* KECCAK_ROUND_PROXY */
-                uint64_t rot = (acc << 1u) | (acc >> 63u);
-                acc ^= rot ^ 0xA5A5A5A55A5A5A5AULL;
-            }
-        }
-        if (violated) {
+        if (lean_native_verify_indexed_witness_recert(base_seed, goal_idx, (uint64_t)s, rpn_opcodes, arg0, arg1)) {
             if (out_min_sample_idx) {
                 *out_min_sample_idx = (uint64_t)s;
             }
@@ -903,6 +999,9 @@ LEAN_NATIVE_WEAK int lean_native_speculate_forest(
         !out_cex_found || !out_min_sample_idx || !out_survival_permille || !out_router_action || !out_effective_tier) {
         return -1;
     }
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(static) if(n_goals > 1)
+#endif
     for (size_t g = 0; g < n_goals; ++g) {
         uint64_t min_idx = UINT64_MAX;
         int cex = lean_native_rpn_u256_fastcheck_goal(
@@ -914,9 +1013,17 @@ LEAN_NATIVE_WEAK int lean_native_speculate_forest(
             rpn_arg1[g],
             &min_idx
         );
-        out_cex_found[g] = (uint8_t)(cex ? 1u : 0u);
-        out_min_sample_idx[g] = min_idx;
-        if (cex) {
+        int recert_ok = cex ? lean_native_verify_indexed_witness_recert(
+            base_seed,
+            (uint64_t)g,
+            min_idx,
+            rpn_opcodes + g * 16u,
+            rpn_arg0[g],
+            rpn_arg1[g]
+        ) : 0;
+        out_cex_found[g] = (uint8_t)(recert_ok ? 1u : 0u);
+        out_min_sample_idx[g] = recert_ok ? min_idx : UINT64_MAX;
+        if (recert_ok) {
             out_survival_permille[g] = 0;
             out_router_action[g] = 1u; /* prune_stop */
             out_effective_tier[g] = LEAN_NATIVE_TIER_S0_CPU_L1;
