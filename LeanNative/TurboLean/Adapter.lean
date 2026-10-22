@@ -42,31 +42,23 @@ def IV : Array UInt32 := #[
   0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
   0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
 ]
-
 abbrev iv : Array UInt32 := IV
 
-def MSG_PERMUTATION : Array Nat := #[
-  2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8
-]
-
+def MSG_PERMUTATION : Array Nat := #[2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]
 abbrev msgPermutation : Array Nat := MSG_PERMUTATION
 
 def CHUNK_START : UInt32 := 1
 def CHUNK_END   : UInt32 := 2
 def PARENT      : UInt32 := 4
 def ROOT        : UInt32 := 8
-
 abbrev flagChunkStart : UInt32 := CHUNK_START
 abbrev flagChunkEnd   : UInt32 := CHUNK_END
 abbrev flagParent     : UInt32 := PARENT
 abbrev flagRoot       : UInt32 := ROOT
 
-@[inline]
-def rotr32 (x : UInt32) (n : UInt32) : UInt32 :=
-  (x >>> n) ||| (x <<< (32 - n))
+@[inline] def rotr32 (x : UInt32) (n : UInt32) : UInt32 := (x >>> n) ||| (x <<< (32 - n))
 
-@[inline]
-def g (state : Array UInt32) (a b c d : Nat) (mx my : UInt32) : Array UInt32 :=
+@[inline] def g (state : Array UInt32) (a b c d : Nat) (mx my : UInt32) : Array UInt32 :=
   let va := state[a]! + state[b]! + mx
   let vd := rotr32 (state[d]! ^^^ va) 16
   let vc := state[c]! + vd
@@ -75,70 +67,39 @@ def g (state : Array UInt32) (a b c d : Nat) (mx my : UInt32) : Array UInt32 :=
   let vd := rotr32 (vd ^^^ va) 8
   let vc := vc + vd
   let vb := rotr32 (vb ^^^ vc) 7
-  let state := state.set! a va
-  let state := state.set! b vb
-  let state := state.set! c vc
-  state.set! d vd
+  (((state.set! a va).set! b vb).set! c vc).set! d vd
 
-@[inline]
-def roundFn (state : Array UInt32) (m : Array UInt32) : Array UInt32 :=
-  let state := g state 0 4 8  12 m[0]!  m[1]!
-  let state := g state 1 5 9  13 m[2]!  m[3]!
-  let state := g state 2 6 10 14 m[4]!  m[5]!
-  let state := g state 3 7 11 15 m[6]!  m[7]!
-  let state := g state 0 5 10 15 m[8]!  m[9]!
-  let state := g state 1 6 11 12 m[10]! m[11]!
-  let state := g state 2 7 8  13 m[12]! m[13]!
-  g state 3 4 9 14 m[14]! m[15]!
+@[inline] def roundFn (state : Array UInt32) (m : Array UInt32) : Array UInt32 :=
+  let state := g (g (g (g state 0 4 8 12 m[0]! m[1]!) 1 5 9 13 m[2]! m[3]!) 2 6 10 14 m[4]! m[5]!) 3 7 11 15 m[6]! m[7]!
+  g (g (g (g state 0 5 10 15 m[8]! m[9]!) 1 6 11 12 m[10]! m[11]!) 2 7 8 13 m[12]! m[13]!) 3 4 9 14 m[14]! m[15]!
 
-@[inline]
-def permute (m : Array UInt32) : Array UInt32 :=
-  MSG_PERMUTATION.map (fun idx => m[idx]!)
+@[inline] def permute (m : Array UInt32) : Array UInt32 := MSG_PERMUTATION.map (fun idx => m[idx]!)
 
 def compress (cv : Array UInt32) (blockWords : Array UInt32) (counter : UInt64)
     (blockLen : UInt32) (flags : UInt32) : Array UInt32 :=
   let st0 : Array UInt32 := #[
-    cv[0]!, cv[1]!, cv[2]!, cv[3]!,
-    cv[4]!, cv[5]!, cv[6]!, cv[7]!,
-    IV[0]!, IV[1]!, IV[2]!, IV[3]!,
-    counter.toUInt32, (counter >>> 32).toUInt32, blockLen, flags
+    cv[0]!, cv[1]!, cv[2]!, cv[3]!, cv[4]!, cv[5]!, cv[6]!, cv[7]!,
+    IV[0]!, IV[1]!, IV[2]!, IV[3]!, counter.toUInt32, (counter >>> 32).toUInt32, blockLen, flags
   ]
   let (st, _) := (List.range 7).foldl (fun (st, m) r =>
-    let st' := roundFn st m
-    let m' := if r < 6 then permute m else m
-    (st', m')
+    (roundFn st m, if r < 6 then permute m else m)
   ) (st0, blockWords)
   (List.range 8).foldl (fun acc i =>
-    let lo := acc[i]! ^^^ acc[i + 8]!
-    let hi := acc[i + 8]! ^^^ cv[i]!
-    (acc.set! i lo).set! (i + 8) hi
+    (acc.set! i (acc[i]! ^^^ acc[i + 8]!)).set! (i + 8) (acc[i + 8]! ^^^ cv[i]!)
   ) st
 
 def blockBytesToWords (bytes : ByteArray) (offset : Nat) (len : Nat) : Array UInt32 :=
   let getByte (k : Nat) : UInt32 :=
-    if k < len && offset + k < bytes.size then
-      (bytes.get! (offset + k)).toUInt32
-    else
-      0
+    if k < len && offset + k < bytes.size then (bytes.get! (offset + k)).toUInt32 else 0
   (Array.range 16).map (fun w =>
     let base := w * 4
-    getByte base |||
-    (getByte (base + 1) <<< 8) |||
-    (getByte (base + 2) <<< 16) |||
-    (getByte (base + 3) <<< 24)
-  )
+    getByte base ||| (getByte (base + 1) <<< 8) ||| (getByte (base + 2) <<< 16) ||| (getByte (base + 3) <<< 24))
 
 def wordToHexLE (w : UInt32) : String :=
   let hexChars := "0123456789abcdef".toList
   let byteHex (b : UInt32) : List Char :=
-    let hi := ((b >>> 4) &&& 0xf).toNat
-    let lo := (b &&& 0xf).toNat
-    [hexChars[hi]?.getD '0', hexChars[lo]?.getD '0']
-  let b0 := w &&& 0xff
-  let b1 := (w >>> 8) &&& 0xff
-  let b2 := (w >>> 16) &&& 0xff
-  let b3 := (w >>> 24) &&& 0xff
-  String.ofList (byteHex b0 ++ byteHex b1 ++ byteHex b2 ++ byteHex b3)
+    [hexChars[((b >>> 4) &&& 0xf).toNat]?.getD '0', hexChars[(b &&& 0xf).toNat]?.getD '0']
+  String.ofList (byteHex (w &&& 0xff) ++ byteHex ((w >>> 8) &&& 0xff) ++ byteHex ((w >>> 16) &&& 0xff) ++ byteHex ((w >>> 24) &&& 0xff))
 
 def cvToHex (cv : Array UInt32) : String :=
   String.join ((List.range 8).map (fun i => wordToHexLE cv[i]!))
@@ -322,28 +283,14 @@ def probe : IO TurboLeanConfig := do
   let daemonPath := s!"{homeDir}/.cache/turbo-lean/zygote_daemon.json"
 
   if forceNo then
-    return {
-      mode := .standalone
-      standalone := true
-      forceNoTurbo := true
-      hasTurboBinary := false
-      hasZygoteDaemon := false
-      turboBin := none
-      zygoteUrl := none
-      zygoteReachable := false
-      daemonJsonPath := daemonPath
-    }
+    return { daemonJsonPath := daemonPath, forceNoTurbo := true }
 
   -- 1. Probe `LEAN_NATIVE_TURBO_BIN` or `turbo-lean` in `PATH`
   let envBin ← IO.getEnv "LEAN_NATIVE_TURBO_BIN"
   let mut resolvedBin : Option String := none
-  match envBin with
-  | some b =>
+  if let some b := envBin then
     let bt := trimStr b
-    if !bt.isEmpty then
-      if ← System.FilePath.pathExists bt then
-        resolvedBin := some bt
-  | none => pure ()
+    if !bt.isEmpty && (← System.FilePath.pathExists bt) then resolvedBin := some bt
 
   if resolvedBin.isNone then
     let cargoCandidate := s!"{homeDir}/.cargo/bin/turbo-lean"
@@ -353,10 +300,8 @@ def probe : IO TurboLeanConfig := do
       try
         let out ← IO.Process.output { cmd := "which", args := #["turbo-lean"] }
         let wt := trimStr out.stdout
-        if out.exitCode == 0 && !wt.isEmpty then
-          resolvedBin := some wt
-      catch _ =>
-        pure ()
+        if out.exitCode == 0 && !wt.isEmpty then resolvedBin := some wt
+      catch _ => pure ()
 
   -- 2. Probe `LEAN_NATIVE_TURBO_URL` or `~/.cache/turbo-lean/zygote_daemon.json`
   let envUrl ← IO.getEnv "LEAN_NATIVE_TURBO_URL"
@@ -364,15 +309,13 @@ def probe : IO TurboLeanConfig := do
   match envUrl with
   | some u =>
     let ut := trimStr u
-    if !ut.isEmpty then
-      resolvedUrl := some ut
+    if !ut.isEmpty then resolvedUrl := some ut
   | none =>
     if ← System.FilePath.pathExists daemonPath then
       try
         let raw ← IO.FS.readFile daemonPath
         resolvedUrl := extractJsonStringField raw "url" <|> extractJsonStringField raw "base_url"
-      catch _ =>
-        pure ()
+      catch _ => pure ()
 
   let mode : TurboOperatingMode :=
     match resolvedUrl, resolvedBin with
@@ -381,15 +324,10 @@ def probe : IO TurboLeanConfig := do
     | none, none => .standalone
 
   return {
-    mode := mode
-    standalone := mode == .standalone
-    forceNoTurbo := false
-    hasTurboBinary := resolvedBin.isSome
-    hasZygoteDaemon := resolvedUrl.isSome
-    turboBin := resolvedBin
-    zygoteUrl := resolvedUrl
-    zygoteReachable := resolvedUrl.isSome
-    daemonJsonPath := daemonPath
+    mode, standalone := mode == .standalone, forceNoTurbo := false
+    hasTurboBinary := resolvedBin.isSome, hasZygoteDaemon := resolvedUrl.isSome
+    turboBin := resolvedBin, zygoteUrl := resolvedUrl
+    zygoteReachable := resolvedUrl.isSome, daemonJsonPath := daemonPath
   }
 
 end TurboLeanConfig
@@ -510,17 +448,8 @@ def create (mode interfaceHash actionKey : String)
   let sorted := sortFileInterfaces perFileInterfaces
   let rHash := computeReceiptHash schemaVersion mode interfaceHash actionKey
     filesAudited theoremShards forbiddenConstructsFound sorted
-  {
-    schemaVersion
-    mode
-    interfaceHash
-    actionKey
-    filesAudited
-    theoremShards
-    forbiddenConstructsFound
-    perFileInterfaces := sorted
-    receiptHash := rHash
-  }
+  { schemaVersion, mode, interfaceHash, actionKey, filesAudited, theoremShards,
+    forbiddenConstructsFound, perFileInterfaces := sorted, receiptHash := rHash }
 
 /-- Verify cryptographic integrity (`receiptHash`) and hygiene (`forbiddenConstructsFound == 0`). -/
 def verify (r : VerificationReceipt) : Bool :=
@@ -541,17 +470,8 @@ def fromJsonString? (json : String) : Option VerificationReceipt := do
   let receiptHash ←
     TurboLeanConfig.extractJsonStringField json "receipt_blake3" <|>
     TurboLeanConfig.extractJsonStringField json "receipt_hash"
-  some {
-    schemaVersion
-    mode
-    interfaceHash
-    actionKey
-    filesAudited
-    theoremShards
-    forbiddenConstructsFound
-    perFileInterfaces
-    receiptHash
-  }
+  some { schemaVersion, mode, interfaceHash, actionKey, filesAudited, theoremShards,
+         forbiddenConstructsFound, perFileInterfaces, receiptHash }
 
 /-- Serialize `VerificationReceipt` to JSON matching `pr_verify.rs`. -/
 def toJsonString (r : VerificationReceipt) : String :=
@@ -1208,36 +1128,27 @@ private def escapeJsonBlob (s : String) : String :=
     | _    => acc.push c
   ) ""
 
+private def appendJsonlLineBestEffort (dirPath : System.FilePath) (fileName : String) (jsonLine : String) : IO Unit := do
+  try
+    IO.FS.createDirAll dirPath
+    let h ← IO.FS.Handle.mk (dirPath / fileName) .append
+    h.putStrLn jsonLine
+    h.flush
+  catch _ => pure ()
+
 /-- Append a single JSONL event line to `<spoolDir>/events.jsonl`, best-effort shared
-    `~/.cache/research-governor/lean_native_events.jsonl`, and best-effort remote `cfg.remoteUrl`
+    `~/.cache/lean-native/telemetry/lean_native_events.jsonl`, and best-effort remote `cfg.remoteUrl`
     (with optional content-addressed `(digest, payload)` blobs). -/
 def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) (blobs : List (String × String) := []) : IO Unit := do
   if !cfg.enabled then
     return ()
-  try
-    let dirPath : System.FilePath := cfg.spoolDir
-    IO.FS.createDirAll dirPath
-    let evPath : System.FilePath := dirPath / "events.jsonl"
-    let h ← IO.FS.Handle.mk evPath .append
-    h.putStrLn jsonLine
-    h.flush
-  catch _ =>
-    pure ()
-  try
-    if let some home ← IO.getEnv "HOME" then
-      let govDir : System.FilePath := s!"{home}/.cache/research-governor"
-      IO.FS.createDirAll govDir
-      let govPath : System.FilePath := govDir / "lean_native_events.jsonl"
-      let h2 ← IO.FS.Handle.mk govPath .append
-      h2.putStrLn jsonLine
-      h2.flush
-  catch _ =>
-    pure ()
+  appendJsonlLineBestEffort cfg.spoolDir "events.jsonl" jsonLine
+  if let some home ← IO.getEnv "HOME" then
+    appendJsonlLineBestEffort s!"{home}/.cache/lean-native/telemetry" "lean_native_events.jsonl" jsonLine
   if !cfg.remoteUrl.isEmpty && (cfg.remoteUrl.startsWith "http://" || cfg.remoteUrl.startsWith "https://") then
     try
       let body :=
-        if blobs.isEmpty || cfg.mode == "metrics" then
-          jsonLine
+        if blobs.isEmpty || cfg.mode == "metrics" then jsonLine
         else
           let kvs := blobs.map (fun (k, v) =>
             let cleanK := if k.startsWith "blake3:" then (k.drop 7).toString else k
@@ -1246,12 +1157,9 @@ def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) (blobs
       let _ ← IO.Process.spawn {
         cmd := "curl"
         args := #["-fsSL", "--max-time", "2", "-X", "POST", cfg.remoteUrl, "-H", "Content-Type: application/json", "-d", body]
-        stdin := .null
-        stdout := .null
-        stderr := .null
+        stdin := .null, stdout := .null, stderr := .null
       }
-    catch _ =>
-      pure ()
+    catch _ => pure ()
 
 end LeanNative.TurboLean
 

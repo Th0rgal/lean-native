@@ -129,17 +129,18 @@ def emitLine (line : String) : EmitM Unit := do
   modify fun st => { st with lines := st.lines ++ [line] }
 
 def getVarSlotType (vid : VarId) : EmitM LNIRType := do
-  let st ← get
-  return (st.varTypes.lookup vid).getD .i64
+  return ((← get).varTypes.lookup vid).getD .i64
+
+private def loadVarSlotRaw (vid : VarId) (pfx : String) : EmitM (String × String) := do
+  let llvmTy := slotLLVMType (← getVarSlotType vid)
+  let raw ← freshTmp pfx
+  emitLine s!"  {raw} = load {llvmTy}, ptr %slot_v{vid}, align 8"
+  return (llvmTy, raw)
 
 /-- Load a `VarId` as an `i64` SSA value (converting `ptr` via `ptrtoint` or `i256` via `trunc` if necessary). -/
 def loadVarAsI64 (vid : VarId) : EmitM String := do
-  let ty ← getVarSlotType vid
-  let llvmTy := slotLLVMType ty
-  let raw ← freshTmp "ld"
-  emitLine s!"  {raw} = load {llvmTy}, ptr %slot_v{vid}, align 8"
-  if llvmTy == "i64" then
-    return raw
+  let (llvmTy, raw) ← loadVarSlotRaw vid "ld"
+  if llvmTy == "i64" then return raw
   else if llvmTy == "i256" then
     let c ← freshTmp "tr64"
     emitLine s!"  {c} = trunc i256 {raw} to i64"
@@ -155,54 +156,30 @@ def loadVarAsI64 (vid : VarId) : EmitM String := do
 
 /-- Load a `VarId` as an `i256` SSA value (converting `i64` via `zext` if necessary). -/
 def loadVarAsI256 (vid : VarId) : EmitM String := do
-  let ty ← getVarSlotType vid
-  let llvmTy := slotLLVMType ty
-  let raw ← freshTmp "ld256"
-  emitLine s!"  {raw} = load {llvmTy}, ptr %slot_v{vid}, align 8"
-  if llvmTy == "i256" then
-    return raw
-  else if llvmTy == "i64" then
-    let c ← freshTmp "zext256"
-    emitLine s!"  {c} = zext i64 {raw} to i256"
-    return c
-  else if llvmTy == "ptr" then
-    let p2i ← freshTmp "p2i"
-    let c ← freshTmp "zext256"
-    emitLine s!"  {p2i} = ptrtoint ptr {raw} to i64"
-    emitLine s!"  {c} = zext i64 {p2i} to i256"
-    return c
-  else
-    let extr ← freshTmp "extr"
-    let c ← freshTmp "zext256"
-    emitLine s!"  {extr} = extractvalue {llvmTy} {raw}, 0"
-    emitLine s!"  {c} = zext i64 {extr} to i256"
-    return c
+  let (llvmTy, raw) ← loadVarSlotRaw vid "ld256"
+  if llvmTy == "i256" then return raw
+  let v64 ← if llvmTy == "i64" then pure raw else loadVarAsI64 vid
+  let c ← freshTmp "zext256"
+  emitLine s!"  {c} = zext i64 {v64} to i256"
+  return c
 
 /-- Load a `VarId` as an LLVM `ptr` SSA value (converting `i64` via `inttoptr` if necessary). -/
 def loadVarAsPtr (vid : VarId) : EmitM String := do
-  let ty ← getVarSlotType vid
-  let llvmTy := slotLLVMType ty
-  let raw ← freshTmp "ldp"
-  emitLine s!"  {raw} = load {llvmTy}, ptr %slot_v{vid}, align 8"
-  if llvmTy == "ptr" then
-    return raw
-  else if llvmTy == "i64" then
+  let (llvmTy, raw) ← loadVarSlotRaw vid "ldp"
+  if llvmTy == "ptr" then return raw
+  else if llvmTy == "i64" || llvmTy == "i256" then
+    let v64 ← if llvmTy == "i64" then pure raw else do
+      let tr ← freshTmp "tr64"
+      emitLine s!"  {tr} = trunc i256 {raw} to i64"
+      pure tr
     let c ← freshTmp "i2p"
-    emitLine s!"  {c} = inttoptr i64 {raw} to ptr"
+    emitLine s!"  {c} = inttoptr i64 {v64} to ptr"
     return c
-  else if llvmTy == "i256" then
-    let tr ← freshTmp "tr64"
-    let c ← freshTmp "i2p"
-    emitLine s!"  {tr} = trunc i256 {raw} to i64"
-    emitLine s!"  {c} = inttoptr i64 {tr} to ptr"
-    return c
-  else
-    return "null"
+  else return "null"
 
 /-- Store an `i64` SSA value into `%slot_v{dst}`, coercing to the slot's type if needed. -/
 def storeI64ToVar (dst : VarId) (valI64 : String) : EmitM Unit := do
-  let ty ← getVarSlotType dst
-  let llvmTy := slotLLVMType ty
+  let llvmTy := slotLLVMType (← getVarSlotType dst)
   if llvmTy == "i64" then
     emitLine s!"  store i64 {valI64}, ptr %slot_v{dst}, align 8"
   else if llvmTy == "i256" then
@@ -218,65 +195,42 @@ def storeI64ToVar (dst : VarId) (valI64 : String) : EmitM Unit := do
 
 /-- Store an `i256` SSA value into `%slot_v{dst}`, coercing to the slot's type if needed. -/
 def storeI256ToVar (dst : VarId) (valI256 : String) : EmitM Unit := do
-  let ty ← getVarSlotType dst
-  let llvmTy := slotLLVMType ty
+  let llvmTy := slotLLVMType (← getVarSlotType dst)
   if llvmTy == "i256" then
     emitLine s!"  store i256 {valI256}, ptr %slot_v{dst}, align 8"
-  else if llvmTy == "i64" then
+  else if llvmTy == "i64" || llvmTy == "ptr" then
     let tr ← freshTmp "tr64"
     emitLine s!"  {tr} = trunc i256 {valI256} to i64"
-    emitLine s!"  store i64 {tr}, ptr %slot_v{dst}, align 8"
-  else if llvmTy == "ptr" then
-    let tr ← freshTmp "tr64"
-    let p ← freshTmp "i2p"
-    emitLine s!"  {tr} = trunc i256 {valI256} to i64"
-    emitLine s!"  {p} = inttoptr i64 {tr} to ptr"
-    emitLine s!"  store ptr {p}, ptr %slot_v{dst}, align 8"
+    storeI64ToVar dst tr
   else
     emitLine s!"  ; tuple slot %slot_v{dst} skipped i256 store"
 
 /-- Store a `ptr` SSA value into `%slot_v{dst}`, coercing to the slot's type if needed. -/
 def storePtrToVar (dst : VarId) (valPtr : String) : EmitM Unit := do
-  let ty ← getVarSlotType dst
-  let llvmTy := slotLLVMType ty
+  let llvmTy := slotLLVMType (← getVarSlotType dst)
   if llvmTy == "ptr" then
     emitLine s!"  store ptr {valPtr}, ptr %slot_v{dst}, align 8"
-  else if llvmTy == "i64" then
+  else if llvmTy == "i64" || llvmTy == "i256" then
     let i ← freshTmp "p2i"
     emitLine s!"  {i} = ptrtoint ptr {valPtr} to i64"
-    emitLine s!"  store i64 {i}, ptr %slot_v{dst}, align 8"
-  else if llvmTy == "i256" then
-    let i ← freshTmp "p2i"
-    let z ← freshTmp "zext256"
-    emitLine s!"  {i} = ptrtoint ptr {valPtr} to i64"
-    emitLine s!"  {z} = zext i64 {i} to i256"
-    emitLine s!"  store i256 {z}, ptr %slot_v{dst}, align 8"
+    storeI64ToVar dst i
   else
     emitLine s!"  ; tuple slot %slot_v{dst} skipped ptr store"
 
 /-- Copy value from `%slot_v{src}` to `%slot_v{dst}`. -/
 def copyVarSlot (dst src : VarId) : EmitM Unit := do
-  let dstTy ← getVarSlotType dst
-  let llvmDst := slotLLVMType dstTy
-  if llvmDst == "ptr" then
-    let p ← loadVarAsPtr src
-    storePtrToVar dst p
-  else if llvmDst == "i256" then
-    let v ← loadVarAsI256 src
-    storeI256ToVar dst v
-  else if llvmDst == "i64" then
-    let v ← loadVarAsI64 src
-    storeI64ToVar dst v
+  let llvmDst := slotLLVMType (← getVarSlotType dst)
+  if llvmDst == "ptr" then storePtrToVar dst (← loadVarAsPtr src)
+  else if llvmDst == "i256" then storeI256ToVar dst (← loadVarAsI256 src)
+  else if llvmDst == "i64" then storeI64ToVar dst (← loadVarAsI64 src)
   else
-    let srcTy ← getVarSlotType src
-    let llvmSrc := slotLLVMType srcTy
+    let llvmSrc := slotLLVMType (← getVarSlotType src)
     if llvmSrc == llvmDst then
       let tmp ← freshTmp "tup"
       emitLine s!"  {tmp} = load {llvmDst}, ptr %slot_v{src}, align 8"
       emitLine s!"  store {llvmDst} {tmp}, ptr %slot_v{dst}, align 8"
     else
-      let v ← loadVarAsI64 src
-      storeI64ToVar dst v
+      storeI64ToVar dst (← loadVarAsI64 src)
 
 /-- Check whether a `ScalarExpr` references any 256-bit variable or 256-bit operator. -/
 partial def scalarExprIs256Bit : ScalarExpr → EmitM Bool
@@ -773,6 +727,12 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
   let v0 ← freshTmp "v_in0"
   emitLine s!"  {p0} = getelementptr inbounds i64, ptr {in0Data}, i64 {ivVal}"
   emitLine s!"  {v0} = load i64, ptr {p0}, align 8"
+  let loadIn1 : EmitM String := do
+    let p1 ← freshTmp "p_in1"
+    let v1 ← freshTmp "v_in1"
+    emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}"
+    emitLine s!"  {v1} = load i64, ptr {p1}, align 8"
+    return v1
   let resVal ← match kernel with
     | .mapScaleAdd scale bias => do
       let m ← freshTmp "msa_mul"
@@ -781,28 +741,19 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
       emitLine s!"  {a} = add i64 {m}, {bias}"
       pure a
     | .zipAdd => do
-      let p1 ← freshTmp "p_in1"
-      let v1 ← freshTmp "v_in1"
+      let v1 ← loadIn1
       let a ← freshTmp "za_add"
-      emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}"
-      emitLine s!"  {v1} = load i64, ptr {p1}, align 8"
       emitLine s!"  {a} = add i64 {v0}, {v1}"
       pure a
     | .zipMul | .dotProduct => do
-      let p1 ← freshTmp "p_in1"
-      let v1 ← freshTmp "v_in1"
+      let v1 ← loadIn1
       let m ← freshTmp "zm_mul"
-      emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}"
-      emitLine s!"  {v1} = load i64, ptr {p1}, align 8"
       emitLine s!"  {m} = mul i64 {v0}, {v1}"
       pure m
     | .saxpy alphaBits => do
-      let p1 ← freshTmp "p_in1"
-      let v1 ← freshTmp "v_in1"
+      let v1 ← loadIn1
       let m ← freshTmp "sax_mul"
       let a ← freshTmp "sax_add"
-      emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}"
-      emitLine s!"  {v1} = load i64, ptr {p1}, align 8"
       emitLine s!"  {m} = mul i64 {v0}, {alphaBits}"
       emitLine s!"  {a} = add i64 {m}, {v1}"
       pure a
@@ -812,12 +763,9 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
       pure m
     | .customScalar idxVar _ _ => do
       storeI64ToVar idxVar ivVal
-      let p1 ← freshTmp "p_in1"
-      let v1 ← freshTmp "v_in1"
+      let v1 ← loadIn1
       let m ← freshTmp "cs_mul"
       let a ← freshTmp "cs_add"
-      emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}"
-      emitLine s!"  {v1} = load i64, ptr {p1}, align 8"
       emitLine s!"  {m} = mul i64 {v0}, {v1}"
       emitLine s!"  {a} = add i64 {m}, {ivVal}"
       pure a
