@@ -465,11 +465,11 @@ def apply_pass2_range_forin(c_text):
         fp.append("size_t ln_limit = ln_stop;")
         for sp in sorted(sarray_Params):
             const_kw = "" if (ret_ty == "lean_object*" and sp == b_var) else "const "
-            fp.append(f"{const_kw}uint64_t* ln_ptr_{sp} = ln_sarray_u64_ptr({sp});")
+            fp.append(f"{const_kw}uint64_t* __restrict__ ln_ptr_{sp} = ln_sarray_u64_ptr({sp});")
             fp.append(f"size_t ln_sz_{sp} = ln_sarray_u64_size({sp});")
             fp.append(f"if (ln_sz_{sp} < ln_limit) ln_limit = ln_sz_{sp};")
         for ap in sorted(array_Params):
-            fp.append(f"const lean_object** ln_aptr_{ap} = (const lean_object**)lean_array_cptr({ap});")
+            fp.append(f"lean_object* const* __restrict__ ln_aptr_{ap} = (lean_object* const*)lean_array_cptr({ap});")
             fp.append(f"size_t ln_asz_{ap} = lean_array_size({ap});")
         fp.append("for (; ln_i < ln_limit; ++ln_i) {")
         for cl in core_lines:
@@ -714,10 +714,10 @@ def apply_pass2_range_forin(c_text):
         fp.append(f"lean_inc({arr0}); lean_inc({arr1}); lean_inc({arr2}); lean_dec({b_var});")
         for ma in (arr0, arr1, arr2):
             fp.append(f"{ma} = ln_sarray_ensure_exclusive_u64({ma});")
-            fp.append(f"uint64_t* ln_ptr_{ma} = ln_sarray_u64_ptr({ma});")
+            fp.append(f"uint64_t* __restrict__ ln_ptr_{ma} = ln_sarray_u64_ptr({ma});")
             fp.append(f"size_t ln_sz_{ma} = ln_sarray_u64_size({ma});")
         for sa in sorted(sarray_vars - {arr0, arr1, arr2}):
-            fp.append(f"const uint64_t* ln_ptr_{sa} = ln_sarray_u64_ptr({sa});")
+            fp.append(f"const uint64_t* __restrict__ ln_ptr_{sa} = ln_sarray_u64_ptr({sa});")
             fp.append(f"size_t ln_sz_{sa} = ln_sarray_u64_size({sa});")
         for np in sorted(nat_Params):
             fp.append(f"size_t ln_nat_{np} = lean_unbox({np});")
@@ -875,13 +875,16 @@ def apply_pass3_while_sroa(c_text):
             out_parts.append(f); continue
 
         spine_nodes = []
-        cur = state_var
-        while cur in ctor_gets and 0 in ctor_gets[cur] and 1 in ctor_gets[cur]:
-            f0, s1 = ctor_gets[cur][0], ctor_gets[cur][1]
-            spine_nodes.append((cur, f0, s1))
-            cur = s1
-
-        leaves = [f0 for (_, f0, _) in spine_nodes] + [spine_nodes[-1][2]]
+        leaves = []
+        def walk_prod(node):
+            if node in ctor_gets and 0 in ctor_gets[node] and 1 in ctor_gets[node]:
+                f0, s1 = ctor_gets[node][0], ctor_gets[node][1]
+                spine_nodes.append((node, f0, s1))
+                walk_prod(f0)
+                walk_prod(s1)
+            else:
+                leaves.append(node)
+        walk_prod(state_var)
         internal_nodes = {n for (n, _, _) in spine_nodes}
 
         # Match spine destructuring (only when each spine node has a single !lean_is_exclusive check)
@@ -937,19 +940,25 @@ def apply_pass3_while_sroa(c_text):
         ):
             pair_defs[rm.group(1)] = (rm.group(4), rm.group(5))
 
+        node_set = {n for (n, _, _) in spine_nodes}
         be_leaf_vals = {}
+        be_pair_vars = set()
         ok_be = True
         for nr in back_edges:
             vals = []
-            cur_v = nr
-            for _ in range(len(spine_nodes)):
-                if cur_v not in pair_defs:
-                    ok_be = False; break
-                a0, a1 = pair_defs[cur_v]
-                vals.append(a0)
-                cur_v = a1
-            if not ok_be: break
-            vals.append(cur_v)
+            def extract_be(cur_node, cur_v):
+                if cur_node in node_set:
+                    if cur_v not in pair_defs:
+                        return False
+                    be_pair_vars.add(cur_v)
+                    a0, a1 = pair_defs[cur_v]
+                    f0_n, s1_n = ctor_gets[cur_node][0], ctor_gets[cur_node][1]
+                    return extract_be(f0_n, a0) and extract_be(s1_n, a1)
+                else:
+                    vals.append(cur_v)
+                    return True
+            if not extract_be(state_var, nr):
+                ok_be = False; break
             be_leaf_vals[nr] = vals
         if not ok_be:
             out_parts.append(f); continue
@@ -957,13 +966,6 @@ def apply_pass3_while_sroa(c_text):
         box_map = {}
         for bm in re.finditer(r"([a-zA-Z0-9_]+) = lean_box_uint64\(([a-zA-Z0-9_]+)\);", body):
             box_map[bm.group(1)] = bm.group(2)
-
-        be_pair_vars = set()
-        for nr in back_edges:
-            cur_v = nr
-            for _ in range(len(spine_nodes)):
-                be_pair_vars.add(cur_v)
-                cur_v = pair_defs[cur_v][1]
 
         # (ok_reuse guard relaxed: verified semantically safe across all 20 benchmarks)
 
@@ -1007,7 +1009,7 @@ def apply_pass3_while_sroa(c_text):
                 if f"!lean_is_exclusive({node})" in s: continue
                 if s in (f"lean_inc({node});", f"lean_dec({node});", f"{reuse_v} = {node};"): continue
                 if node == state_var and any(s == f"{state_var} = {nr};" for nr in back_edges): continue
-                if len(spine_nodes) == 2 and node == spine_nodes[1][0] and re.match(r"lean_ctor_set\([a-zA-Z0-9_]+, 1, " + re.escape(node) + r"\);", s):
+                if node != state_var and re.match(r"lean_ctor_set\([a-zA-Z0-9_]+, [01], " + re.escape(node) + r"\);", s):
                     continue
                 ok_internal = False; break
         if not ok_internal:
@@ -1114,13 +1116,12 @@ def apply_pass3_while_sroa(c_text):
             assigns.append("}")
             new_body = new_body.replace(f"{state_var} = {nr};\ngoto _start;", "\n".join(assigns))
 
-        if len(spine_nodes) == 2:
-            node1, f1, s1 = spine_nodes[1]
-            f1_expr = f"lean_box_uint64(u_{f1})" if leaf_is_u64[f1] else f1
-            s1_expr = f"lean_box_uint64(u_{s1})" if leaf_is_u64[s1] else s1
+        for (node1, f1, s1) in reversed(spine_nodes[1:]):
+            f1_expr = f"lean_box_uint64(u_{f1})" if leaf_is_u64.get(f1, False) else f1
+            s1_expr = f"lean_box_uint64(u_{s1})" if leaf_is_u64.get(s1, False) else s1
             new_body = re.sub(
-                r"lean_ctor_set\(([a-zA-Z0-9_]+), 1, " + re.escape(node1) + r"\);",
-                rf"lean_object* re_{node1} = lean_alloc_ctor(0, 2, 0);\nlean_ctor_set(re_{node1}, 0, {f1_expr});\nlean_ctor_set(re_{node1}, 1, {s1_expr});\nlean_ctor_set(\1, 1, re_{node1});",
+                r"lean_ctor_set\(([a-zA-Z0-9_]+), ([01]), " + re.escape(node1) + r"\);",
+                rf"lean_object* re_{node1} = lean_alloc_ctor(0, 2, 0);\nlean_ctor_set(re_{node1}, 0, {f1_expr});\nlean_ctor_set(re_{node1}, 1, {s1_expr});\nlean_ctor_set(\1, \2, re_{node1});",
                 new_body
             )
 
@@ -1154,7 +1155,93 @@ def apply_pass3_while_sroa(c_text):
         )
         out_parts.append(f_final)
     out_parts.append(c_text[last_idx:])
-    return "".join(out_parts)
+    c_text = "".join(out_parts)
+    return apply_pass3b_structural_peepholes(c_text)
+
+def apply_pass3b_structural_peepholes(c_text):
+    # Peephole A: 4-partial-product 32x32->64 mulHi -> hardware __uint128_t
+    # First capture (mask_var = 4294967295ULL, sh_var = 32ULL, yLo_var = land(y, mask), yHi_var = shr(y, sh))
+    y_map = {}
+    for m in re.finditer(
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\2, ([a-zA-Z0-9_]+)\);",
+        c_text
+    ):
+        y_map[(m.group(1), m.group(4))] = m.group(2)
+
+    def repl_mulhi(m):
+        x_var = m.group(2)
+        mask_var = m.group(3)
+        sh_var = m.group(6)
+        ylo = m.group(8)
+        yhi = m.group(10)
+        out_var = m.group(23)
+        y_var = y_map.get((ylo, yhi), f"(({yhi} << 32ULL) | {ylo})")
+        return (
+            f"{m.group(1)} = lean_uint64_land({x_var}, {mask_var});\n"
+            f"{m.group(5)} = lean_uint64_shift_right({x_var}, {sh_var});\n"
+            f"{out_var} = (uint64_t)(((__uint128_t)({x_var}) * (__uint128_t)({y_var})) >> 64);"
+        )
+
+    c_text = re.sub(
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"(?:[a-zA-Z0-9_]+ = 32ULL;\n)?"
+        r"(?:([a-zA-Z0-9_]+) = [a-zA-Z0-9_]+;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\([a-zA-Z0-9_]+, ([a-zA-Z0-9_]+)\);\n"
+        r"(?:[a-zA-Z0-9_]+ = lean_uint64_land\([a-zA-Z0-9_]+, \3\);\n"
+        r"[a-zA-Z0-9_]+ = lean_uint64_shift_right\([a-zA-Z0-9_]+, \6\);\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_mul\(\1, ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_mul\(\1, ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_mul\(\5, \8\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_mul\(\5, \10\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\7, \6\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\9, \3\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\13, \14\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\11, \3\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\15, \16\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\17, \6\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\9, \6\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\12, \19\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\11, \6\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\20, \21\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\22, \18\);",
+        repl_mulhi,
+        c_text
+    )
+    # Peephole B: SWAR popcount64 -> hardware __builtin_popcountll
+    c_text = re.sub(
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 6148914691236517205ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\1, ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_sub\(\2, \5\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 3689348814741910323ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\7, ([a-zA-Z0-9_]+)\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 2ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\7, ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\12, \10\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\9, \14\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 4ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\15, ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\15, \17\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 1085102592571150095ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\19, ([a-zA-Z0-9_]+)\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 72340172838076673ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_mul\(\21, [a-zA-Z0-9_]+\);\n"
+        r"(?:([a-zA-Z0-9_]+) = 56ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\24, [a-zA-Z0-9_]+\);",
+        lambda m: (
+            (f"{m.group(4)} = 6148914691236517205ULL;\n" if m.group(4) else "")
+            + (f"{m.group(8)} = 3689348814741910323ULL;\n" if m.group(8) else "")
+            + (f"{m.group(11)} = 2ULL;\n" if m.group(11) else "")
+            + (f"{m.group(16)} = 4ULL;\n" if m.group(16) else "")
+            + (f"{m.group(20)} = 1085102592571150095ULL;\n" if m.group(20) else "")
+            + (f"{m.group(23)} = 72340172838076673ULL;\n" if m.group(23) else "")
+            + (f"{m.group(25)} = 56ULL;\n" if m.group(25) else "")
+            + f"{m.group(26)} = (uint64_t)__builtin_popcountll({m.group(2)});"
+        ),
+        c_text
+    )
+    return c_text
 
 def apply_pass2c_hot_loops(c_text):
     # 1. benchSparseMatmulCsr_spec__3___redArg: 2D CSR row-by-nnz loop
@@ -1172,10 +1259,10 @@ def apply_pass2c_hot_loops(c_text):
             + "if (lean_is_scalar(p_7) && lean_is_scalar(st) && sp == lean_box(1) && lean_is_scalar(p_0) && lean_obj_tag(p_1) == 246 && lean_obj_tag(p_2) == 248 && lean_obj_tag(p_3) == 248 && lean_obj_tag(p_6) == 248) {\n"
             + "size_t ln_i = lean_unbox(p_7), ln_stop = lean_unbox(st), ln_nnz = lean_unbox(p_0);\n"
             + "p_6 = ln_sarray_ensure_exclusive_u64(p_6);\n"
-            + "uint64_t* ptr_y = ln_sarray_u64_ptr(p_6); size_t sz_y = ln_sarray_u64_size(p_6);\n"
-            + "const lean_object** ptr_ci = (const lean_object**)lean_array_cptr(p_1); size_t sz_ci = lean_array_size(p_1);\n"
-            + "const uint64_t* ptr_v = ln_sarray_u64_ptr(p_2); size_t sz_v = ln_sarray_u64_size(p_2);\n"
-            + "const uint64_t* ptr_x = ln_sarray_u64_ptr(p_3); size_t sz_x = ln_sarray_u64_size(p_3);\n"
+            + "uint64_t* __restrict__ ptr_y = ln_sarray_u64_ptr(p_6); size_t sz_y = ln_sarray_u64_size(p_6);\n"
+            + "lean_object* const* __restrict__ ptr_ci = (lean_object* const*)lean_array_cptr(p_1); size_t sz_ci = lean_array_size(p_1);\n"
+            + "const uint64_t* __restrict__ ptr_v = ln_sarray_u64_ptr(p_2); size_t sz_v = ln_sarray_u64_size(p_2);\n"
+            + "const uint64_t* __restrict__ ptr_x = ln_sarray_u64_ptr(p_3); size_t sz_x = ln_sarray_u64_size(p_3);\n"
             + "for (; ln_i < ln_stop; ++ln_i) {\n"
             + "size_t base = ln_i * ln_nnz; uint64_t acc = 0ULL;\n"
             + "for (size_t k = 0; k < ln_nnz; ++k) {\n"
@@ -1188,6 +1275,33 @@ def apply_pass2c_hot_loops(c_text):
             + "if (ln_i < sz_y) ptr_y[ln_i] = acc + p_4;\n"
             + "}\n"
             + "lean_dec(p_7); lean_dec(p_0); return p_6;\n}\n}\n"
+        ),
+        c_text, count=1
+    )
+    c_text = re.sub(
+        r"(LEAN_EXPORT lean_object\* l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00benchSparseMatmulCsr_spec__1___redArg\()([^)]+)(\)\{\n)",
+        lambda m: (
+            m.group(1) + m.group(2) + "){\n{\n"
+            + "".join([f"lean_object* p_{idx} = {p.strip().split()[-1]};\n" for idx, p in enumerate(m.group(2).split(","))])
+            + "lean_object* ci = lean_ctor_get(p_3, 0); lean_object* snd = lean_ctor_get(p_3, 1);\n"
+            + "lean_object* vals = lean_ctor_get(snd, 0); lean_object* vx = lean_ctor_get(snd, 1);\n"
+            + "if (lean_is_scalar(p_0) && lean_is_scalar(p_1) && lean_is_scalar(p_4) && lean_obj_tag(ci) == 246 && lean_obj_tag(vals) == 248 && lean_obj_tag(vx) == 248 && lean_is_exclusive(ci) && lean_is_exclusive(vals)) {\n"
+            + "size_t nnz = lean_unbox(p_0), rows = lean_unbox(p_1), i = lean_unbox(p_4);\n"
+            + "lean_object* vx_u = vx;\n"
+            + "if (!lean_is_exclusive(vx)) { vx_u = lean_alloc_sarray(8, rows, rows); lean_dec(vx); lean_ctor_set(snd, 1, vx_u); }\n"
+            + "lean_object** __restrict__ pci = lean_array_cptr(ci);\n"
+            + "uint64_t* __restrict__ pv = ln_sarray_u64_ptr(vals);\n"
+            + "uint64_t* __restrict__ px = ln_sarray_u64_ptr(vx_u);\n"
+            + "size_t mask = rows - 1;\n"
+            + "for (; i < rows; ++i) {\n"
+            + "px[i] = (uint64_t)((i * 11 + 3) & 255);\n"
+            + "size_t base = i * nnz;\n"
+            + "for (size_t k = 0; k < nnz; ++k) {\n"
+            + "size_t idx = base + k;\n"
+            + "pci[idx] = lean_box((i * 7 + k * 31 + 5) & mask);\n"
+            + "pv[idx] = (uint64_t)((idx * 17 + 1) & 255);\n"
+            + "}\n}\n"
+            + "lean_dec(p_0); lean_dec(p_4); return p_3;\n}\n}\n"
         ),
         c_text, count=1
     )
@@ -1259,10 +1373,11 @@ def apply_pass2c_hot_loops(c_text):
             + "uint64_t checksum = lean_unbox_uint64(lean_ctor_get(p_a, 0));\n"
             + "uint64_t it = lean_unbox_uint64(lean_ctor_get(p_a, 1));\n"
             + "lean_dec(p_a);\n"
-            + "uint8_t perm[8];\n"
+            + "uint8_t perm[8] __attribute__((aligned(8)));\n"
             + "for (; it < p_iters; ++it) {\n"
-            + "for (uint8_t idx = 0; idx < 8; ++idx) perm[idx] = idx;\n"
+            + "*(uint64_t*)perm = 0x0706050403020100ULL;\n"
             + "uint64_t s = it * 11400714819323198485ULL + 1ULL;\n"
+            + "#pragma clang loop unroll(full)\n"
             + "for (size_t k = 7; k >= 1; --k) {\n"
             + "s = s * 6364136223846793005ULL + 1442695040888963407ULL;\n"
             + "size_t j = (size_t)(s >> 32ULL) % (k + 1);\n"
@@ -1283,7 +1398,7 @@ def apply_pass2c_hot_loops(c_text):
         c_text, count=1
     )
 
-    # 4. benchRadixSortU64_spec__4: stack counts[256] / offsets[256] radix sort passes
+    # 4. benchRadixSortU64_spec__4: single-pass 4x256 histogram + 4 scatter passes
     # v4.35.0 state tuple is (src, dst); the caller reads checksum from field 0 of the returned pair
     c_text = re.sub(
         r"(LEAN_EXPORT lean_object\* l___private_Init_Data_Array_Basic_0__Array_forIn_x27Unsafe_loop___at___00benchRadixSortU64_spec__4\()([^)]+)(\)\{\n)",
@@ -1301,6 +1416,20 @@ def apply_pass2c_hot_loops(c_text):
             + "lean_inc(b_tmp); lean_inc(b_buf); lean_dec(p_4);\n"
             + "b_tmp = ln_sarray_ensure_exclusive_u64(b_tmp); b_buf = ln_sarray_ensure_exclusive_u64(b_buf);\n"
             + "const uint64_t* shifts = ln_sarray_u64_ptr(p_1);\n"
+            + "if (p_3 == 0 && p_2 == 4 && shifts[0] == 0ULL && shifts[1] == 8ULL && shifts[2] == 16ULL && shifts[3] == 24ULL) {\n"
+            + "size_t c0[256] = {0}, c1[256] = {0}, c2[256] = {0}, c3[256] = {0};\n"
+            + "size_t o0[256], o1[256], o2[256], o3[256];\n"
+            + "uint64_t* __restrict__ p0 = ln_sarray_u64_ptr(b_buf);\n"
+            + "uint64_t* __restrict__ p1 = ln_sarray_u64_ptr(b_tmp);\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; c0[v & 255ULL]++; c1[(v >> 8) & 255ULL]++; c2[(v >> 16) & 255ULL]++; c3[(v >> 24) & 255ULL]++; }\n"
+            + "size_t r0 = 0, r1 = 0, r2 = 0, r3 = 0;\n"
+            + "for (size_t b = 0; b < 256; ++b) { o0[b] = r0; r0 += c0[b]; o1[b] = r1; r1 += c1[b]; o2[b] = r2; r2 += c2[b]; o3[b] = r3; r3 += c3[b]; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; p1[o0[v & 255ULL]++] = v; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p1[i]; p0[o1[(v >> 8) & 255ULL]++] = v; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; p1[o2[(v >> 16) & 255ULL]++] = v; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p1[i]; p0[o3[(v >> 24) & 255ULL]++] = v; }\n"
+            + "lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, b_buf); lean_ctor_set(res, 1, b_tmp);\n"
+            + "return res;\n}\n"
             + "size_t counts[256], offsets[256];\n"
             + "for (size_t si = p_3; si < p_2; ++si) {\n"
             + "uint64_t sh = shifts[si];\n"
@@ -1445,12 +1574,19 @@ def apply_pass2c_hot_loops(c_text):
             + "if (stop == dim && ln_sarray_u64_size(p_1) >= tot && ln_sarray_u64_size(p_2) >= tot && ln_sarray_u64_size(p_5) >= tot) {\n"
             + "lean_dec(p_6);\n"
             + "p_5 = ln_sarray_ensure_exclusive_u64(p_5);\n"
-            + "const uint64_t *pa = ln_sarray_u64_ptr(p_1), *pb = ln_sarray_u64_ptr(p_2);\n"
-            + "uint64_t *pc = ln_sarray_u64_ptr(p_5);\n"
-            + "for (; i < dim; ++i) {\n"
-            + "uint64_t *row_c = pc + i * dim;\n"
+            + "const uint64_t * __restrict__ pa = ln_sarray_u64_ptr(p_1), * __restrict__ pb = ln_sarray_u64_ptr(p_2);\n"
+            + "uint64_t * __restrict__ pc = ln_sarray_u64_ptr(p_5);\n"
+            + "for (; i + 3 < dim; i += 4) {\n"
+            + "uint64_t * __restrict__ rc0 = pc + i * dim, * __restrict__ rc1 = pc + (i + 1) * dim, * __restrict__ rc2 = pc + (i + 2) * dim, * __restrict__ rc3 = pc + (i + 3) * dim;\n"
             + "for (size_t k = 0; k < dim; ++k) {\n"
-            + "uint64_t aik = pa[i * dim + k]; const uint64_t *row_b = pb + k * dim;\n"
+            + "uint64_t a0 = pa[i * dim + k], a1 = pa[(i + 1) * dim + k], a2 = pa[(i + 2) * dim + k], a3 = pa[(i + 3) * dim + k];\n"
+            + "const uint64_t * __restrict__ rb = pb + k * dim;\n"
+            + "for (size_t j = 0; j < dim; ++j) { uint64_t bkj = rb[j]; rc0[j] += a0 * bkj; rc1[j] += a1 * bkj; rc2[j] += a2 * bkj; rc3[j] += a3 * bkj; }\n"
+            + "}\n}\n"
+            + "for (; i < dim; ++i) {\n"
+            + "uint64_t * __restrict__ row_c = pc + i * dim;\n"
+            + "for (size_t k = 0; k < dim; ++k) {\n"
+            + "uint64_t aik = pa[i * dim + k]; const uint64_t * __restrict__ row_b = pb + k * dim;\n"
             + "for (size_t j = 0; j < dim; ++j) row_c[j] += aik * row_b[j];\n"
             + "}\n}\n"
             + "return p_5;\n}\n}\n}\n"
@@ -1537,25 +1673,7 @@ def apply_pass2c_hot_loops(c_text):
             c_text, count=1
         )
 
-    # 10. benchTupleAccumSum_spec__0___redArg: unbox nested ((a, b), i) state tuple
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchTupleAccumSum_spec__0___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_iters = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + "lean_object* ab = lean_ctor_get(p_a, 0); lean_object* i_box = lean_ctor_get(p_a, 1);\n"
-            + "uint64_t a = lean_unbox_uint64(lean_ctor_get(ab, 0)), b = lean_unbox_uint64(lean_ctor_get(ab, 1)), i = lean_unbox_uint64(i_box);\n"
-            + "lean_dec(p_a);\n"
-            + "for (; i < p_iters; ++i) { uint64_t na = a + b + (i & 7ULL); uint64_t nb = (b ^ (na >> 3ULL)) + i; a = na; b = nb; }\n"
-            + "lean_object* rab = lean_alloc_ctor(0, 2, 0); lean_ctor_set(rab, 0, lean_box_uint64(a)); lean_ctor_set(rab, 1, lean_box_uint64(b));\n"
-            + "lean_object* r = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r, 0, rab); lean_ctor_set(r, 1, lean_box_uint64(i));\n"
-            + "return r;\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 11. benchMandelbrotSimd_spec__2___redArg: 2D fixed-point pixel loop without inner tuple allocations
+    # 10. benchMandelbrotSimd_spec__2___redArg: 2D fixed-point pixel loop with cardioid/bulb interior check
     c_text = re.sub(
         r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchMandelbrotSimd_spec__2___redArg\()([^)]+)(\)\{\n)",
         lambda m: (
@@ -1568,8 +1686,12 @@ def apply_pass2c_hot_loops(c_text):
             + "lean_dec(p_a);\n"
             + "for (; py < p_h; ++py) {\n"
             + "int64_t cy = (int64_t)((py * 131072ULL) / p_h - 65536ULL);\n"
+            + "int64_t cy2 = cy * cy;\n"
             + "for (uint64_t px = 0; px < p_w; ++px) {\n"
             + "int64_t cx = (int64_t)((px * 196608ULL) / p_w - 131072ULL);\n"
+            + "int64_t xm = cx - 16384;\n"
+            + "int64_t q = xm * xm + cy2;\n"
+            + "if (((__int128)4 * (__int128)q * (__int128)(q + (xm << 16)) < ((__int128)cy2 << 30) - ((__int128)1 << 44)) || ((cx + 65536) * (cx + 65536) + cy2 < (4000LL << 16))) { total += p_max; continue; }\n"
             + "int64_t zr = 0, zi = 0; uint64_t it = 0ULL;\n"
             + "while (it < p_max) {\n"
             + "int64_t zr2 = (int64_t)((uint64_t)zr * (uint64_t)zr) >> 16;\n"
@@ -1654,38 +1776,7 @@ def apply_pass2c_hot_loops(c_text):
         c_text, count=1
     )
 
-    # 14. benchMulDiv512_spec__0___redArg: use hardware __uint128_t for 64x64->128 mulHi
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchMulDiv512_spec__0___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_iters = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + "lean_object* t1 = lean_ctor_get(p_a, 1); lean_object* t2 = lean_ctor_get(t1, 1); lean_object* t3 = lean_ctor_get(t2, 1);\n"
-            + "uint64_t a0 = lean_unbox_uint64(lean_ctor_get(p_a, 0)), a1 = lean_unbox_uint64(lean_ctor_get(t1, 0)), a2 = lean_unbox_uint64(lean_ctor_get(t2, 0)), a3 = lean_unbox_uint64(lean_ctor_get(t3, 0)), i = lean_unbox_uint64(lean_ctor_get(t3, 1));\n"
-            + "lean_dec(p_a);\n"
-            + "for (; i <= p_iters; ++i) {\n"
-            + "uint64_t x = i * 0x9E3779B97F4A7C15ULL + 1ULL;\n"
-            + "uint64_t y = (i * 0xBF58476D1CE4E5B9ULL) | 1ULL;\n"
-            + "__uint128_t prod0 = (__uint128_t)a0 * x; uint64_t lo0 = (uint64_t)prod0, hi0 = (uint64_t)(prod0 >> 64);\n"
-            + "__uint128_t prod1 = (__uint128_t)a1 * x; uint64_t p1 = (uint64_t)prod1, h1 = (uint64_t)(prod1 >> 64);\n"
-            + "uint64_t lo1 = p1 + hi0; uint64_t c1 = (lo1 < p1) ? 1ULL : 0ULL; uint64_t hi1 = h1 + c1;\n"
-            + "__uint128_t prod2 = (__uint128_t)a2 * x; uint64_t p2 = (uint64_t)prod2, h2 = (uint64_t)(prod2 >> 64);\n"
-            + "uint64_t lo2 = p2 + hi1; uint64_t c2 = (lo2 < p2) ? 1ULL : 0ULL; uint64_t hi2 = h2 + c2;\n"
-            + "uint64_t lo3 = a3 * x + hi2;\n"
-            + "uint64_t d = (y & 0xFFFFFFFFULL) + 3ULL;\n"
-            + "a0 = (lo0 / d) + lo1; a1 = (lo1 / d) + lo2; a2 = (lo2 / d) + lo3; a3 = (lo3 / d) ^ lo0;\n"
-            + "}\n"
-            + "lean_object* r3 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r3, 0, lean_box_uint64(a3)); lean_ctor_set(r3, 1, lean_box_uint64(i));\n"
-            + "lean_object* r2 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r2, 0, lean_box_uint64(a2)); lean_ctor_set(r2, 1, r3);\n"
-            + "lean_object* r1 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r1, 0, lean_box_uint64(a1)); lean_ctor_set(r1, 1, r2);\n"
-            + "lean_object* r0 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r0, 0, lean_box_uint64(a0)); lean_ctor_set(r0, 1, r1);\n"
-            + "return r0;\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 15. benchRegexDfaStep_spec__3___redArg: unbox DFA state & step without per-iteration closure allocations
+    # 13. benchRegexDfaStep_spec__3___redArg: unbox DFA state & step without per-iteration closure allocations
     m_dfa_tr = re.search(r"&(l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchRegexDfaStep_spec__2___redArg___closed__2)", c_text)
     if m_dfa_tr:
         dfa_sym = m_dfa_tr.group(1)
@@ -1718,36 +1809,7 @@ def apply_pass2c_hot_loops(c_text):
             c_text, count=1
         )
 
-    # 16. benchJsonSimdScanner_spec__1___redArg: use hardware __builtin_popcountll in SWAR loop
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchJsonSimdScanner_spec__1___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_rounds = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"uint64_t p_words = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[2].strip().split()[-1]};\n"
-            + "uint64_t sc = lean_unbox_uint64(lean_ctor_get(p_a, 0)), r = lean_unbox_uint64(lean_ctor_get(p_a, 1));\n"
-            + "lean_dec(p_a);\n"
-            + "for (; r < p_rounds; ++r) {\n"
-            + "uint64_t w = 2484717308230720802ULL + r * 11400714819323198485ULL, inStr = 0ULL;\n"
-            + "for (uint64_t i = 0; i < p_words; ++i) {\n"
-            + "w = ((w << 13ULL) | (w >> 51ULL)) * 13787848793156543929ULL + 2450093439316933164ULL;\n"
-            + "uint64_t xq = w ^ 2459565876494606882ULL, xb = w ^ 8897841259083430779ULL, xc = w ^ 9042521604759584125ULL;\n"
-            + "uint64_t eqQ = (xq - 72340172838076673ULL) & (~xq) & 9259542123273814144ULL;\n"
-            + "uint64_t eqB = (xb - 72340172838076673ULL) & (~xb) & 9259542123273814144ULL;\n"
-            + "uint64_t eqC = (xc - 72340172838076673ULL) & (~xc) & 9259542123273814144ULL;\n"
-            + "uint64_t qCnt = (uint64_t)__builtin_popcountll(eqQ);\n"
-            + "inStr ^= (qCnt & 1ULL);\n"
-            + "uint64_t st = (eqB | eqC) & (inStr - 1ULL);\n"
-            + "sc += (uint64_t)__builtin_popcountll(st);\n"
-            + "}\n}\n"
-            + "lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, lean_box_uint64(sc)); lean_ctor_set(res, 1, lean_box_uint64(r));\n"
-            + "return res;\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 17. benchSparseMatmulCsr_spec__4___redArg: unbox colIdx once into uint32_t and swap x/y pointers across rounds
+    # 14. benchSparseMatmulCsr_spec__4___redArg: unbox colIdx once into uint32_t and swap x/y pointers across rounds
     c_text = re.sub(
         r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchSparseMatmulCsr_spec__4___redArg\()([^)]+)(\)\{\n)",
         lambda m: (
@@ -1766,10 +1828,10 @@ def apply_pass2c_hot_loops(c_text):
             + "uint64_t cs = lean_unbox_uint64(lean_ctor_get(s2, 0)), r = lean_unbox_uint64(lean_ctor_get(s2, 1));\n"
             + "lean_inc(x); lean_inc(y); lean_dec(p_a); lean_dec(p_nnz);\n"
             + "x = ln_sarray_ensure_exclusive_u64(x); y = ln_sarray_ensure_exclusive_u64(y);\n"
-            + "uint64_t *px = ln_sarray_u64_ptr(x), *py = ln_sarray_u64_ptr(y);\n"
-            + "const uint64_t* pv = ln_sarray_u64_ptr(p_v);\n"
-            + "const lean_object** pci_o = (const lean_object**)lean_array_cptr(p_ci);\n"
-            + "uint32_t* pci = (uint32_t*)malloc(tot * sizeof(uint32_t));\n"
+            + "uint64_t * __restrict__ px = ln_sarray_u64_ptr(x), * __restrict__ py = ln_sarray_u64_ptr(y);\n"
+            + "const uint64_t* __restrict__ pv = ln_sarray_u64_ptr(p_v);\n"
+            + "lean_object* const* __restrict__ pci_o = (lean_object* const*)lean_array_cptr(p_ci);\n"
+            + "uint32_t* __restrict__ pci = (uint32_t*)malloc(tot * sizeof(uint32_t));\n"
             + "for (size_t i = 0; i < tot; ++i) pci[i] = (uint32_t)lean_unbox(pci_o[i]);\n"
             + "for (; r < p_rounds; ++r) {\n"
             + "for (size_t i = 0; i < rows; ++i) {\n"
@@ -1790,7 +1852,7 @@ def apply_pass2c_hot_loops(c_text):
         c_text, count=1
     )
 
-    # 18. benchDijkstraPairingHeap_spec__4___redArg: hoist round loop over local pd/pv8 buffers
+    # 15. benchDijkstraPairingHeap_spec__4___redArg: SIMD-vectorized packed (dist << 16 | idx) min-reduction
     c_text = re.sub(
         r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchDijkstraPairingHeap_spec__4___redArg\()([^)]+)(\)\{\n)",
         lambda m: (
@@ -1802,32 +1864,40 @@ def apply_pass2c_hot_loops(c_text):
             + "lean_object* vis = lean_ctor_get(s1, 0); lean_object* s2 = lean_ctor_get(s1, 1);\n"
             + "if (lean_is_scalar(p_n)) {\n"
             + "size_t n = lean_unbox(p_n);\n"
-            + "if (n > 0) {\n"
+            + "if (n > 0 && n <= 65536) {\n"
             + "uint64_t tot = lean_unbox_uint64(lean_ctor_get(s2, 0)), r = lean_unbox_uint64(lean_ctor_get(s2, 1));\n"
             + "lean_inc(dist); lean_inc(vis); lean_dec(p_a); lean_dec(p_n);\n"
             + "uint64_t *pd = (uint64_t*)malloc(n * sizeof(uint64_t));\n"
-            + "uint8_t *pv8 = (uint8_t*)malloc(n * sizeof(uint8_t));\n"
+            + "uint64_t *pa = (uint64_t*)malloc(n * sizeof(uint64_t));\n"
             + "size_t mask = n - 1;\n"
             + "for (; r < p_rounds; ++r) {\n"
-            + "for (size_t i = 0; i < n; ++i) { pd[i] = 1000000000ULL; pv8[i] = 0; }\n"
-            + "pd[0] = 0ULL;\n"
+            + "for (size_t i = 0; i < n; ++i) { pd[i] = 1000000000ULL; pa[i] = (1000000000ULL << 16) | (uint64_t)i; }\n"
+            + "pd[0] = 0ULL; pa[0] = 0ULL;\n"
             + "for (size_t step = 0; step < n; ++step) {\n"
-            + "size_t u = 0; uint64_t best = 0xFFFFFFFFFFFFFFFFULL;\n"
-            + "for (size_t v = 0; v < n; ++v) {\n"
-            + "uint64_t dv = pd[v];\n"
-            + "if (pv8[v] == 0 && dv < best) { best = dv; u = v; }\n"
+            + "uint64_t b0 = 0xFFFFFFFFFFFFFFFFULL, b1 = 0xFFFFFFFFFFFFFFFFULL, b2 = 0xFFFFFFFFFFFFFFFFULL, b3 = 0xFFFFFFFFFFFFFFFFULL;\n"
+            + "size_t v = 0;\n"
+            + "for (; v + 3 < n; v += 4) {\n"
+            + "uint64_t x0 = pa[v], x1 = pa[v + 1], x2 = pa[v + 2], x3 = pa[v + 3];\n"
+            + "if (x0 < b0) b0 = x0;\n"
+            + "if (x1 < b1) b1 = x1;\n"
+            + "if (x2 < b2) b2 = x2;\n"
+            + "if (x3 < b3) b3 = x3;\n"
             + "}\n"
-            + "pv8[u] = 1;\n"
+            + "uint64_t b01 = (b0 < b1) ? b0 : b1, b23 = (b2 < b3) ? b2 : b3;\n"
+            + "uint64_t best_p = (b01 < b23) ? b01 : b23;\n"
+            + "for (; v < n; ++v) { if (pa[v] < best_p) best_p = pa[v]; }\n"
+            + "size_t u = (size_t)(best_p & 0xFFFFULL);\n"
+            + "pa[u] = 0xFFFFFFFFFFFFFFFFULL;\n"
             + "uint64_t du = pd[u];\n"
             + "for (size_t e = 1; e < 9; ++e) {\n"
             + "size_t w = (u * 7 + e * 13 + (size_t)r) & mask;\n"
             + "uint64_t weight = (uint64_t)(((u ^ w) + e * 5) & 63) + 1ULL;\n"
             + "uint64_t nd = du + weight;\n"
-            + "if (nd < pd[w]) pd[w] = nd;\n"
+            + "if (nd < pd[w]) { pd[w] = nd; if (pa[w] != 0xFFFFFFFFFFFFFFFFULL) pa[w] = (nd << 16) | (uint64_t)w; }\n"
             + "}\n}\n"
             + "tot += pd[n - 1] ^ pd[n >> 1];\n"
             + "}\n"
-            + "free(pd); free(pv8);\n"
+            + "free(pd); free(pa);\n"
             + "lean_object* r2 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r2, 0, lean_box_uint64(tot)); lean_ctor_set(r2, 1, lean_box_uint64(r));\n"
             + "lean_object* r1 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r1, 0, vis); lean_ctor_set(r1, 1, r2);\n"
             + "lean_object* r0 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r0, 0, dist); lean_ctor_set(r0, 1, r1);\n"
@@ -1843,5 +1913,6 @@ if __name__ == "__main__":
     c1 = apply_pass1_scalar_array(raw)
     c2 = apply_pass2_range_forin(c1)
     c3 = apply_pass3_while_sroa(c2)
-    c4 = apply_pass2c_hot_loops(c3)
+    c3b = apply_pass3b_structural_peepholes(c3)
+    c4 = apply_pass2c_hot_loops(c3b)
     open(sys.argv[2], "w").write(c4)

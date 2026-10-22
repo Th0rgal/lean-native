@@ -733,7 +733,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   -- Step 1: clang -S -emit-llvm -O3 -DNDEBUG -march=native -I<sysroot>/include
   let clangEmitOut ← IO.Process.output {
     cmd  := clangCmd
-    args := #["-S", "-emit-llvm", optLevel, "-DNDEBUG", "-march=native", "-funroll-loops", s!"-I{incDir}", s!"-I{runtimeDir}", cPath, "-o", rawLlPath]
+    args := #["-S", "-emit-llvm", optLevel, "-DNDEBUG", "-march=native", s!"-I{incDir}", s!"-I{runtimeDir}", cPath, "-o", rawLlPath]
   }
   if clangEmitOut.exitCode != 0 then
     throw <| IO.userError s!"clang -emit-llvm failed:\n{clangEmitOut.stderr}"
@@ -754,7 +754,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let linkOut ← IO.Process.output {
     cmd  := clangCmd
     args := #[
-      optLevel, "-DNDEBUG", "-march=native", "-funroll-loops", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}",
+      optLevel, "-DNDEBUG", "-march=native", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}",
       optLlPath, lnirOptLlPath, runtimePath, "-Wl,--allow-multiple-definition",
       s!"-L{libDir}", "-lleanshared", s!"-Wl,-rpath,{libDir}", "-lm", "-lpthread", "-ldl", "-o", outBin
     ]
