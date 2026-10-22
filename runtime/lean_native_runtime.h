@@ -550,6 +550,69 @@ int lean_native_speculate_forest(
     uint8_t* out_effective_tier
 );
 
+/* ============================================================================
+ * Unboxed Scalar Array (`LeanScalarArray` / `uint64_t`) & Post-LCNF Helpers
+ * ============================================================================ */
+
+#if defined(LEAN_H) || defined(_LEAN_LEAN_H) || defined(lean_alloc_sarray)
+#include <string.h>
+static inline uint64_t* ln_sarray_u64_ptr(lean_object* a) {
+    return (uint64_t*)(((char*)a) + sizeof(lean_sarray_object));
+}
+static inline size_t ln_sarray_u64_size(lean_object* a) {
+    return ((lean_sarray_object*)a)->m_size;
+}
+static inline lean_object* ln_mk_empty_sarray_u64(lean_object* cap_obj) {
+    size_t cap = lean_unbox(cap_obj);
+    lean_dec(cap_obj);
+    return lean_alloc_sarray(8, 0, cap);
+}
+static inline lean_object* ln_mk_sarray_u64(lean_object* n_obj, uint64_t v) {
+    size_t n = lean_unbox(n_obj);
+    lean_dec(n_obj);
+    lean_object* a = lean_alloc_sarray(8, n, n);
+    uint64_t* p = ln_sarray_u64_ptr(a);
+    for (size_t i = 0; i < n; ++i) p[i] = v;
+    return a;
+}
+static inline uint64_t ln_sarray_uget_u64(lean_object* a, size_t i) {
+    return ln_sarray_u64_ptr(a)[i];
+}
+static inline lean_object* ln_sarray_ensure_exclusive_u64(lean_object* a) {
+    if (lean_is_exclusive(a)) return a;
+    size_t n = ln_sarray_u64_size(a);
+    size_t cap = ((lean_sarray_object*)a)->m_capacity;
+    lean_object* r = lean_alloc_sarray(8, n, cap < n ? n : cap);
+    memcpy(ln_sarray_u64_ptr(r), ln_sarray_u64_ptr(a), n * 8);
+    lean_dec_ref(a);
+    return r;
+}
+static inline lean_object* ln_sarray_set_u64(lean_object* a, lean_object* idx, uint64_t v) {
+    size_t i = lean_unbox(idx);
+    lean_dec(idx);
+    size_t n = ln_sarray_u64_size(a);
+    if (i >= n) return a;
+    a = ln_sarray_ensure_exclusive_u64(a);
+    ln_sarray_u64_ptr(a)[i] = v;
+    return a;
+}
+static inline lean_object* ln_sarray_push_u64(lean_object* a, uint64_t v) {
+    size_t n = ln_sarray_u64_size(a);
+    size_t cap = ((lean_sarray_object*)a)->m_capacity;
+    if (lean_is_exclusive(a) && n < cap) {
+        ln_sarray_u64_ptr(a)[n] = v;
+        ((lean_sarray_object*)a)->m_size = n + 1;
+        return a;
+    }
+    size_t new_cap = cap == 0 ? 4 : (cap < n + 1 ? cap * 2 : cap);
+    lean_object* r = lean_alloc_sarray(8, n + 1, new_cap);
+    if (n > 0) memcpy(ln_sarray_u64_ptr(r), ln_sarray_u64_ptr(a), n * 8);
+    ln_sarray_u64_ptr(r)[n] = v;
+    lean_dec(a);
+    return r;
+}
+#endif
+
 #ifdef __cplusplus
 }
 #endif

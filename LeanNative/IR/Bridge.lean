@@ -550,10 +550,7 @@ def ingestModuleDecls (declNames : Array Lean.Name) (moduleName : String := "Lea
 /-- Check whether `name` is an internal compiler-synthesized closed constant or repr auxiliary. -/
 def isInternalClosedOrReprAux (name : Lean.Name) : Bool :=
   let s := name.toString
-  (s.splitOn "___closed__").length > 1 ||
-  (s.splitOn "instRepr").length > 1 ||
-  (s.splitOn "_cstage").length > 1 ||
-  (s.splitOn "ctorElim").length > 1
+  ["___closed__", "instRepr", "_cstage", "ctorElim"].any fun pat => (s.splitOn pat).length > 1
 
 /-- Extract and lower all local impure and mono LCNF declarations compiled in the current environment. -/
 def ingestAllLocalDecls (moduleName : String := "LeanNative.Ingested") : Lean.CoreM LNIRModule := do
@@ -708,10 +705,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let (cCode, rawMod) ← emitLeanCFromSourceFile filePath `Main
   let (optMod, _) := LeanNative.Transform.runDefaultPipeline rawMod
   let hostArch : TargetArch :=
-    if System.Platform.target.startsWith "aarch64" || System.Platform.target.startsWith "arm64" then
-      .arm64
-    else
-      .x86_64
+    if System.Platform.target.startsWith "aarch64" || System.Platform.target.startsWith "arm64" then .arm64 else .x86_64
   let lnirLlPath := s!"{outBin}.lnir.ll"
   let lnirOptLlPath := s!"{outBin}.lnir.opt.ll"
   let lnirLlText := LeanNative.Backend.LLVM.emitLLVMOptimized optMod hostArch
@@ -723,21 +717,23 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   IO.FS.writeFile cPath cCode
 
   let incDir := (sysroot / "include").toString
-  let _clangIncDir := (sysroot / "include" / "clang").toString
   let libDir := (sysroot / "lib" / "lean").toString
 
   let relRuntime : System.FilePath := "runtime/lean_native_runtime.c"
   let absRuntime : System.FilePath := "/var/lib/spark-admin/jobs/3730b838-a03b-49e3-bbd2-eb51c132a4e7/lean-native/runtime/lean_native_runtime.c"
   let runtimePath ← if (← relRuntime.pathExists) then pure relRuntime.toString else pure absRuntime.toString
   let runtimeDir := ((System.FilePath.mk runtimePath).parent.getD (System.FilePath.mk "runtime")).toString
+  let cOptScript : System.FilePath := ((System.FilePath.mk runtimeDir).parent.getD (System.FilePath.mk ".")) / "scripts" / "ln_c_opt.py"
+  let cOptPath := if (← cOptScript.pathExists) then cOptScript.toString else "scripts/ln_c_opt.py"
+  discard <| IO.Process.output { cmd := "python3", args := #[cOptPath, cPath, cPath] }
 
   let sysClang : System.FilePath := "/usr/bin/clang"
   let clangCmd ← if (← sysClang.pathExists) then pure sysClang.toString else pure "clang"
 
-  -- Step 1: clang -S -emit-llvm -O3 -I<sysroot>/include
+  -- Step 1: clang -S -emit-llvm -O3 -DNDEBUG -march=native -I<sysroot>/include
   let clangEmitOut ← IO.Process.output {
     cmd  := clangCmd
-    args := #["-S", "-emit-llvm", optLevel, s!"-I{incDir}", cPath, "-o", rawLlPath]
+    args := #["-S", "-emit-llvm", optLevel, "-DNDEBUG", "-march=native", "-funroll-loops", s!"-I{incDir}", s!"-I{runtimeDir}", cPath, "-o", rawLlPath]
   }
   if clangEmitOut.exitCode != 0 then
     throw <| IO.userError s!"clang -emit-llvm failed:\n{clangEmitOut.stderr}"
@@ -758,22 +754,9 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let linkOut ← IO.Process.output {
     cmd  := clangCmd
     args := #[
-      optLevel,
-      "-Wno-override-module",
-      s!"-I{incDir}",
-      s!"-I{runtimeDir}",
-      optLlPath,
-      lnirOptLlPath,
-      runtimePath,
-      "-Wl,--allow-multiple-definition",
-      s!"-L{libDir}",
-      "-lleanshared",
-      s!"-Wl,-rpath,{libDir}",
-      "-lm",
-      "-lpthread",
-      "-ldl",
-      "-o",
-      outBin
+      optLevel, "-DNDEBUG", "-march=native", "-funroll-loops", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}",
+      optLlPath, lnirOptLlPath, runtimePath, "-Wl,--allow-multiple-definition",
+      s!"-L{libDir}", "-lleanshared", s!"-Wl,-rpath,{libDir}", "-lm", "-lpthread", "-ldl", "-o", outBin
     ]
   }
   if linkOut.exitCode != 0 then
