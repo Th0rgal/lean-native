@@ -453,6 +453,10 @@ def emitModuleTelemetryEvents
           "{" ++
           "\"schema\":\"lean-native.telemetry.v1\"," ++
           s!"\"event_id\":\"{evId.take 32}\"," ++
+          s!"\"namespace\":\"{escapeJsonPlugin cfg.ns}\"," ++
+          s!"\"machine_id\":\"{escapeJsonPlugin cfg.machineId}\"," ++
+          s!"\"project_id\":\"{escapeJsonPlugin cfg.projectId}\"," ++
+          s!"\"session_id\":\"{escapeJsonPlugin cfg.sessionId}\"," ++
           s!"\"timestamp_ns\":{tsNs}," ++
           "\"context\":{" ++
             "\"lean_native_version\":\"0.5.0\"," ++

@@ -969,57 +969,131 @@ def runTurboLeanAgentStep (cfg : TurboLeanConfig) (filePath : String)
 
 structure TelemetryConfig where
   enabled   : Bool := true
-  mode      : String := "full" -- "off" | "metrics" | "full"
+  mode      : String := "full" -- "off" | "local" | "metrics" | "full"
   spoolDir  : String := ".lean-native/telemetry"
+  tmpSpool  : String := "/tmp/sandboxed-telemetry"
   remoteUrl : String := "https://telemetry.thomas.md/v1/ingest"
+  token     : String := ""
+  ns        : String := "community"
+  machineId : String := ""
+  projectId : String := ""
+  sessionId : String := ""
+  batchOnly : Bool := false
   deriving Repr, DecidableEq, Inhabited, BEq
 
 namespace TelemetryConfig
+
+private def extractSimpleJsonStr (text key : String) : Option String :=
+  let pat := s!"\"{key}\""
+  match text.splitOn pat with
+  | _ :: rest :: _ =>
+    match rest.splitOn ":" with
+    | _ :: afterColon :: _ =>
+      let t := afterColon.trimAsciiStart.toString
+      if t.startsWith "\"" then
+        match (t.drop 1).toString.splitOn "\"" with
+        | val :: _ => some val
+        | [] => none
+      else none
+    | _ => none
+  | _ => none
 
 def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let envMode ← IO.getEnv "LEAN_NATIVE_TELEMETRY"
   let globalEnv ← IO.getEnv "SANDBOXED_TELEMETRY"
   let remoteEnv ← IO.getEnv "SANDBOXED_TELEMETRY_URL"
+  let tokEnv ← IO.getEnv "SANDBOXED_TELEMETRY_TOKEN"
+  let tokAlt ← IO.getEnv "TELEMETRY_API_KEY"
+  let nsEnv ← IO.getEnv "SANDBOXED_TELEMETRY_NAMESPACE"
+  let midEnv ← IO.getEnv "SANDBOXED_TELEMETRY_MACHINE_ID"
+  let pidEnv ← IO.getEnv "SANDBOXED_TELEMETRY_PROJECT_ID"
+  let sidEnv ← IO.getEnv "SANDBOXED_TELEMETRY_SESSION_ID"
+  let sidAlt1 ← IO.getEnv "SANDBOXED_MISSION_ID"
+  let sidAlt2 ← IO.getEnv "MAXWELL_MISSION_ID"
+  let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
   let dirEnv ← IO.getEnv "LEAN_NATIVE_TELEMETRY_DIR"
+  let homeOpt ← IO.getEnv "HOME"
+  let mut cfgText := ""
+  if let some home := homeOpt then
+    let cfgPath : System.FilePath := s!"{home}/.config/sandboxed-telemetry/config.json"
+    try
+      if ← cfgPath.pathExists then
+        cfgText ← IO.FS.readFile cfgPath
+    catch _ => pure ()
+  let cfgMode := extractSimpleJsonStr cfgText "mode"
+  let cfgUrl := extractSimpleJsonStr cfgText "url"
+  let cfgTok := extractSimpleJsonStr cfgText "token"
+  let cfgNs := extractSimpleJsonStr cfgText "namespace"
   let rawMode :=
     if cliArgs.contains "--no-telemetry" then "off"
     else if cliArgs.contains "--telemetry=off" || cliArgs.contains "--telemetry=0" then "off"
     else if cliArgs.contains "--telemetry=metrics" then "metrics"
+    else if cliArgs.contains "--telemetry=local" then "local"
     else if cliArgs.contains "--telemetry=full" || cliArgs.contains "--telemetry" then "full"
     else
-      match envMode <|> globalEnv with
+      match envMode <|> globalEnv <|> cfgMode with
       | some v =>
         let s := (trimStr v).toLower
         if s == "0" || s == "off" || s == "false" || s == "no" then "off"
+        else if s == "local" then "local"
         else if s == "metrics" then "metrics"
         else "full"
       | none => "full"
   let spoolDir := (dirEnv.map trimStr).filter (!·.isEmpty) |>.getD ".lean-native/telemetry"
-  let remoteUrl := (remoteEnv.map trimStr).filter (!·.isEmpty) |>.getD "https://telemetry.thomas.md/v1/ingest"
+  let remoteUrl := ((remoteEnv <|> cfgUrl).map trimStr).filter (!·.isEmpty) |>.getD "https://telemetry.thomas.md/v1/ingest"
+  let token := ((tokEnv <|> tokAlt <|> cfgTok).map trimStr).filter (!·.isEmpty) |>.getD ""
+  let ns := ((nsEnv <|> cfgNs).map trimStr).filter (!·.isEmpty) |>.getD (if token.isEmpty then "community" else "th0rgal")
+  let mut hostStr := "host"
+  let mut midRaw := ""
+  try
+    if ← (System.FilePath.mk "/etc/hostname").pathExists then
+      hostStr := trimStr (← IO.FS.readFile "/etc/hostname")
+    if ← (System.FilePath.mk "/etc/machine-id").pathExists then
+      midRaw := trimStr (← IO.FS.readFile "/etc/machine-id")
+  catch _ => pure ()
+  let machineId := (midEnv.map trimStr).filter (!·.isEmpty) |>.getD ((blake3Hex s!"telemetry-machine-v1:{hostStr}:{midRaw}").take 16).toString
+  let cwd ← IO.currentDir
+  let projectId := (pidEnv.map trimStr).filter (!·.isEmpty) |>.getD ((blake3Hex s!"telemetry-project-v1:{cwd}").take 16).toString
+  let sessionId := ((sidEnv <|> sidAlt1 <|> sidAlt2).map trimStr).filter (!·.isEmpty) |>.getD s!"sess-{((blake3Hex s!"{cwd}:{machineId}").take 12).toString}"
+  let mut uidStr := "0"
+  try
+    let uOut ← IO.Process.output { cmd := "id", args := #["-u"] }
+    if uOut.exitCode == 0 && !(trimStr uOut.stdout).isEmpty then
+      uidStr := trimStr uOut.stdout
+  catch _ => pure ()
+  let batchOnly := (batchEnv.map trimStr).getD "" == "1" || rawMode == "local"
   return {
     enabled := rawMode != "off"
     mode := rawMode
     spoolDir := spoolDir
+    tmpSpool := s!"/tmp/sandboxed-telemetry-{uidStr}"
     remoteUrl := remoteUrl
+    token := token
+    ns := ns
+    machineId := machineId
+    projectId := projectId
+    sessionId := sessionId
+    batchOnly := batchOnly
   }
 
 end TelemetryConfig
 
-/-- Store a content-addressed payload in `<spoolDir>/blobs/<blake3>` if not already present,
+/-- Store a content-addressed payload in `<spoolDir>/blobs/<blake3>` and `/tmp/sandboxed-telemetry-<uid>/blobs/<blake3>`,
     and return `"blake3:<digest>"`. -/
 def storeTelemetryBlob (cfg : TelemetryConfig) (payload : String) : IO String := do
   let digest := blake3Hex payload
   let refStr := s!"blake3:{digest}"
   if !cfg.enabled || cfg.mode == "metrics" then
     return refStr
-  try
-    let blobsDir : System.FilePath := s!"{cfg.spoolDir}/blobs"
-    IO.FS.createDirAll blobsDir
-    let blobPath : System.FilePath := blobsDir / digest
-    if !(← blobPath.pathExists) then
-      IO.FS.writeFile blobPath payload
-  catch _ =>
-    pure ()
+  for baseDir in [cfg.spoolDir, cfg.tmpSpool] do
+    try
+      let blobsDir : System.FilePath := s!"{baseDir}/blobs"
+      IO.FS.createDirAll blobsDir
+      let blobPath : System.FilePath := blobsDir / digest
+      if !(← blobPath.pathExists) then
+        IO.FS.writeFile blobPath payload
+    catch _ =>
+      pure ()
   return refStr
 
 private abbrev escapeJsonBlob := LeanNative.IR.jsonEscape
@@ -1032,16 +1106,18 @@ private def appendJsonlLineBestEffort (dirPath : System.FilePath) (fileName : St
     h.flush
   catch _ => pure ()
 
-/-- Append a single JSONL event line to `<spoolDir>/events.jsonl`, best-effort shared
-    `~/.cache/lean-native/telemetry/lean_native_events.jsonl`, and best-effort remote `cfg.remoteUrl`
-    (with optional content-addressed `(digest, payload)` blobs). -/
+/-- Append a single JSONL event line to `<spoolDir>/events.jsonl`, `/tmp/sandboxed-telemetry-<uid>/events.jsonl`,
+    best-effort `~/.cache/lean-native/telemetry/lean_native_events.jsonl`, and best-effort remote `cfg.remoteUrl`
+    (unless `cfg.batchOnly` is set). -/
 def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) (blobs : List (String × String) := []) : IO Unit := do
   if !cfg.enabled then
     return ()
-  appendJsonlLineBestEffort cfg.spoolDir "events.jsonl" jsonLine
+  for baseDir in [cfg.spoolDir, cfg.tmpSpool] do
+    appendJsonlLineBestEffort baseDir "events.jsonl" jsonLine
   if let some home ← IO.getEnv "HOME" then
     appendJsonlLineBestEffort s!"{home}/.cache/lean-native/telemetry" "lean_native_events.jsonl" jsonLine
-  if !cfg.remoteUrl.isEmpty && (cfg.remoteUrl.startsWith "http://" || cfg.remoteUrl.startsWith "https://") then
+    appendJsonlLineBestEffort s!"{home}/.cache/research-governor" "lean_native_events.jsonl" jsonLine
+  if !cfg.batchOnly && !cfg.remoteUrl.isEmpty && (cfg.remoteUrl.startsWith "http://" || cfg.remoteUrl.startsWith "https://") then
     try
       let body :=
         if blobs.isEmpty || cfg.mode == "metrics" then jsonLine
@@ -1050,9 +1126,13 @@ def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) (blobs
             let cleanK := if k.startsWith "blake3:" then (k.drop 7).toString else k
             s!"\"{escapeJsonBlob cleanK}\":\"{escapeJsonBlob v}\"")
           "{\"events\":[" ++ jsonLine ++ "],\"blobs\":{" ++ String.intercalate "," kvs ++ "}}"
+      let mut curlArgs := #["-fsSL", "--max-time", "2", "-X", "POST", cfg.remoteUrl, "-H", "Content-Type: application/json"]
+      if !cfg.token.isEmpty then
+        curlArgs := curlArgs ++ #["-H", s!"Authorization: Bearer {cfg.token}"]
+      curlArgs := curlArgs ++ #["-d", body]
       let _ ← IO.Process.spawn {
         cmd := "curl"
-        args := #["-fsSL", "--max-time", "2", "-X", "POST", cfg.remoteUrl, "-H", "Content-Type: application/json", "-d", body]
+        args := curlArgs
         stdin := .null, stdout := .null, stderr := .null
       }
     catch _ => pure ()
