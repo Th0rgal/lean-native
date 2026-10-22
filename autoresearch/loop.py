@@ -1285,6 +1285,27 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
     ]
 
 
+def _run_json(argv: List[str]) -> Dict[str, Any]:
+    if not Path(argv[0]).is_file():
+        return {}
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        return {}
+    try:
+        parsed = json.loads(proc.stdout)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _record_fields(cand: Dict[str, Any]) -> Dict[str, Any]:
+    keys = (
+        "title", "target_pass", "target_benchmark", "hypothesis", "rewrite_rule",
+        "assurance_level", "theorem_name",
+    )
+    return {key: cand[key] for key in keys}
+
+
 def evaluate_in_isolated_worktree(cand: Dict[str, Any], prev_chain_hash: str) -> Dict[str, Any]:
     """
     Evaluates a candidate optimization hypothesis inside an isolated git worktree
@@ -1336,13 +1357,7 @@ def evaluate_in_isolated_worktree(cand: Dict[str, Any], prev_chain_hash: str) ->
         record_payload = {
             "experiment_id": cand["id"],
             "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "title": cand["title"],
-            "target_pass": cand["target_pass"],
-            "target_benchmark": cand["target_benchmark"],
-            "hypothesis": cand["hypothesis"],
-            "rewrite_rule": cand["rewrite_rule"],
-            "assurance_level": cand["assurance_level"],
-            "theorem_name": cand["theorem_name"],
+            **_record_fields(cand),
             "isolated_git_worktree": used_git_worktree,
             "accepted": verdict["accepted"],
             "rejected_at_stage": verdict["rejected_at_stage"],
@@ -1366,6 +1381,21 @@ def evaluate_in_isolated_worktree(cand: Dict[str, Any], prev_chain_hash: str) ->
                 check=False,
             )
         shutil.rmtree(wt_dir, ignore_errors=True)
+
+
+def _stage_cells(record: Dict[str, Any]) -> tuple[str, str, str]:
+    s1 = record["stage1_fastcheck"]
+    s2 = record["stage2_formal_audit"]
+    s3 = record["stage3_benchmarks"]
+    c1 = "PASS (100k)" if s1["ok"] else "FAIL (CEX)"
+    c2 = "SKIPPED" if s2 is None else ("PASS (Law1/5+TV)" if s2["ok"] else "FAIL (Law1/5/Axiom/TV)")
+    if s3 is None:
+        c3 = "SKIPPED"
+    elif s3["ok"]:
+        c3 = f"PASS ({s3['combined_geomean_speedup_x']:.2f}x, p<0.001)"
+    else:
+        c3 = f"FAIL (-{s3['worst_regression_pct']:.1f}% reg)"
+    return c1, c2, c3
 
 
 def generate_research_log_md(records: List[Dict[str, Any]]) -> str:
@@ -1396,17 +1426,7 @@ def generate_research_log_md(records: List[Dict[str, Any]]) -> str:
     ]
 
     for r in records:
-        s1 = "PASS (100k)" if r["stage1_fastcheck"]["ok"] else "FAIL (CEX)"
-        if r["stage2_formal_audit"] is None:
-            s2 = "SKIPPED"
-        else:
-            s2 = "PASS (Law1/5+TV)" if r["stage2_formal_audit"]["ok"] else "FAIL (Law1/5/Axiom/TV)"
-        if r["stage3_benchmarks"] is None:
-            s3 = "SKIPPED"
-        elif r["stage3_benchmarks"]["ok"]:
-            s3 = f"PASS ({r['stage3_benchmarks']['combined_geomean_speedup_x']:.2f}x, p<0.001)"
-        else:
-            s3 = f"FAIL (-{r['stage3_benchmarks']['worst_regression_pct']:.1f}% reg)"
+        s1, s2, s3 = _stage_cells(r)
         verdict_str = "**ACCEPTED**" if r["accepted"] else f"**REJECTED** (`{r['rejected_at_stage']}`)"
         short_hash = r["ledger_entry_blake3"][:12]
         lines.append(
@@ -1467,39 +1487,11 @@ def run_overnight_cycle(cycle_idx: int, prev_hash: str) -> str:
       3. Season 8 `turbo-lean audit-spec LeanNative/Spec.lean` & `lean-native pr-verify`,
       4. Parameterized algebraic/bitwise candidate synthesis & 100k-state FastCheck verification.
     """
-    ln_core = REPO_ROOT / ".lake" / "build" / "bin" / "lean-native-core"
-    ln_full = REPO_ROOT / ".lake" / "build" / "bin" / "lean-native"
-
+    bin_dir = REPO_ROOT / ".lake" / "build" / "bin"
     targets = ["x86_64", "arm64", "cuda_ptx", "apple_metal"]
     target = targets[cycle_idx % len(targets)]
-
-    superopt_res = {}
-    if ln_core.is_file():
-        p = subprocess.run(
-            [str(ln_core), "superopt", "--target", target, "--json"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if p.returncode == 0:
-            try:
-                superopt_res = json.loads(p.stdout)
-            except Exception:
-                pass
-
-    pr_verify_res = {}
-    if ln_full.is_file():
-        p2 = subprocess.run(
-            [str(ln_full), "pr-verify", "--base", "HEAD", "--json"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if p2.returncode == 0:
-            try:
-                pr_verify_res = json.loads(p2.stdout)
-            except Exception:
-                pass
+    superopt_res = _run_json([str(bin_dir / "lean-native-core"), "superopt", "--target", target, "--json"])
+    pr_verify_res = _run_json([str(bin_dir / "lean-native"), "pr-verify", "--base", "HEAD", "--json"])
 
     # Rotate across 12 algebraic, bitwise, 256-bit EVM, and adversarial test rules
     candidate_rules = [

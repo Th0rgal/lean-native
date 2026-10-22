@@ -65,13 +65,10 @@ def BuffersExclusiveFor (bs : List ArrayBuffer) (bufId : Nat) : Prop :=
 
 theorem map_ensureExclusive_establishes (bs : List ArrayBuffer) (bufId : Nat) :
     BuffersExclusiveFor (bs.map (fun b => if b.id == bufId then { b with exclusive := true } else b)) bufId := by
-  intro b hb hid
-  rw [List.mem_map] at hb
-  rcases hb with ⟨b0, _, rfl⟩
+  intro b hb hid; rw [List.mem_map] at hb; rcases hb with ⟨b0, _, rfl⟩
   by_cases h : (b0.id == bufId) = true
   · simp [h]
-  · have hf : (b0.id == bufId) = false := Bool.eq_false_iff.mpr h
-    simp [hf] at hid
+  · simp [Bool.eq_false_iff.mpr h] at hid
 
 theorem map_ensureExclusive_idempotent (bs : List ArrayBuffer) (bufId : Nat)
     (hexcl : BuffersExclusiveFor bs bufId) :
@@ -81,50 +78,34 @@ theorem map_ensureExclusive_idempotent (bs : List ArrayBuffer) (bufId : Nat)
   | cons b rest ih =>
     have hhead : (if b.id == bufId then { b with exclusive := true } else b) = b := by
       by_cases h : (b.id == bufId) = true
-      · have he : b.exclusive = true := hexcl b (List.mem_cons_self ..) h
-        cases b
-        simp only at he
-        simp [h, he]
-      · have hf : (b.id == bufId) = false := Bool.eq_false_iff.mpr h
-        simp [hf]
-    have hrest : BuffersExclusiveFor rest bufId := by
-      intro x hx hxid
-      exact hexcl x (List.mem_cons_of_mem b hx) hxid
-    simp only [List.map]
-    rw [hhead, ih hrest]
+      · have he := hexcl b (List.mem_cons_self ..) h; cases b; simp only at he; simp [h, he]
+      · simp [Bool.eq_false_iff.mpr h]
+    have hrest : BuffersExclusiveFor rest bufId := fun x hx => hexcl x (List.mem_cons_of_mem b hx)
+    simp only [List.map, hhead, ih hrest]
 
 theorem find?_map_preserve_id (bs : List ArrayBuffer) (bufId : Nat) (f : ArrayBuffer → ArrayBuffer)
     (hid : ∀ b, (f b).id = b.id) :
     (bs.map f).find? (fun b => b.id == bufId) = (bs.find? (fun b => b.id == bufId)).map f := by
   induction bs with
   | nil => rfl
-  | cons b rest ih =>
-    simp only [List.map, List.find?, hid b]
-    cases b.id == bufId <;> simp [ih]
+  | cons b rest ih => simp only [List.map, List.find?, hid b]; cases b.id == bufId <;> simp [ih]
 
 theorem map_write_preserves_BuffersExclusiveFor (bs : List ArrayBuffer) (bufId : Nat) (idx : Nat) (val : UInt64)
     (hexcl : BuffersExclusiveFor bs bufId) :
     BuffersExclusiveFor (bs.map (fun b => if b.id == bufId then { b with data := b.data.set! idx val } else b)) bufId := by
-  intro b hb hid
-  rw [List.mem_map] at hb
-  rcases hb with ⟨b0, hb0, rfl⟩
+  intro b hb hid; rw [List.mem_map] at hb; rcases hb with ⟨b0, hb0, rfl⟩
   by_cases h : (b0.id == bufId) = true
-  · simp [h]
-    exact hexcl b0 hb0 h
-  · have hf : (b0.id == bufId) = false := Bool.eq_false_iff.mpr h
-    simp [hf] at hid
+  · simp [h, hexcl b0 hb0 h]
+  · simp [Bool.eq_false_iff.mpr h] at hid
 
 /-- Ensuring exclusivity on a `HeapState` where `bufId` is present and already exclusive is a no-op. -/
 theorem ensureExclusive_of_exclusive (st : HeapState) (bufId : Nat) (buf : ArrayBuffer)
     (hfind : st.findBuffer bufId = some buf)
     (hexcl : BuffersExclusiveFor st.buffers bufId) :
     st.ensureExclusive bufId = .ok st := by
-  unfold HeapState.ensureExclusive
-  rw [hfind]
-  simp only
+  unfold HeapState.ensureExclusive; rw [hfind]; simp only
   have hmap := map_ensureExclusive_idempotent st.buffers bufId hexcl
-  cases st
-  simp only [hmap]
+  cases st; simp only [hmap]
 
 /-- If `st.ensureExclusive bufId = .ok st1`, then `st1` satisfies `BuffersExclusiveFor` and `findBuffer` succeeds. -/
 theorem ensureExclusive_post (st st1 : HeapState) (bufId : Nat)
@@ -132,19 +113,14 @@ theorem ensureExclusive_post (st st1 : HeapState) (bufId : Nat)
     BuffersExclusiveFor st1.buffers bufId ∧ (∃ buf1, st1.findBuffer bufId = some buf1) := by
   unfold HeapState.ensureExclusive at h
   cases hfind : st.findBuffer bufId with
-  | none =>
-    rw [hfind] at h
-    contradiction
+  | none => rw [hfind] at h; contradiction
   | some buf =>
-    rw [hfind] at h
-    injection h with hst1
-    subst hst1
+    rw [hfind] at h; injection h with hst1; subst hst1
     refine ⟨map_ensureExclusive_establishes st.buffers bufId, ?_⟩
     unfold HeapState.findBuffer at hfind ⊢
-    have hid : ∀ b : ArrayBuffer, (if b.id == bufId then { b with exclusive := true } else b).id = b.id := by
-      intro b; by_cases hb : (b.id == bufId) = true <;> simp [hb]
-    rw [find?_map_preserve_id st.buffers bufId _ hid, hfind]
-    exact ⟨_, rfl⟩
+    have hid : ∀ b : ArrayBuffer, (if b.id == bufId then { b with exclusive := true } else b).id = b.id :=
+      fun b => by by_cases hb : (b.id == bufId) = true <;> simp [hb]
+    rw [find?_map_preserve_id st.buffers bufId _ hid, hfind]; exact ⟨_, rfl⟩
 
 /-- If `st` already satisfies `BuffersExclusiveFor st.buffers bufId`, then `writeElemExclusive` preserves it. -/
 theorem writeElemExclusive_preserves (st st' : HeapState) (bufId idx : Nat) (val : UInt64)
@@ -153,25 +129,19 @@ theorem writeElemExclusive_preserves (st st' : HeapState) (bufId idx : Nat) (val
     BuffersExclusiveFor st'.buffers bufId ∧ (∃ buf', st'.findBuffer bufId = some buf') := by
   unfold HeapState.writeElemExclusive at hw
   cases hfind : st.findBuffer bufId with
-  | none =>
-    rw [hfind] at hw
-    contradiction
+  | none => rw [hfind] at hw; contradiction
   | some buf =>
-    rw [hfind] at hw
-    simp only at hw
+    rw [hfind] at hw; simp only at hw
     by_cases hex : (!buf.exclusive) = true
     · rw [if_pos hex] at hw; contradiction
     · rw [if_neg hex] at hw
       by_cases hlt : idx < buf.data.size
-      · rw [dif_pos hlt] at hw
-        injection hw with hst'
-        subst hst'
+      · rw [dif_pos hlt] at hw; injection hw with hst'; subst hst'
         refine ⟨map_write_preserves_BuffersExclusiveFor st.buffers bufId idx val hexcl, ?_⟩
         unfold HeapState.findBuffer at hfind ⊢
-        have hid : ∀ b : ArrayBuffer, (if b.id == bufId then { b with data := b.data.set! idx val } else b).id = b.id := by
-          intro b; by_cases hb : (b.id == bufId) = true <;> simp [hb]
-        rw [find?_map_preserve_id st.buffers bufId _ hid, hfind]
-        exact ⟨_, rfl⟩
+        have hid : ∀ b : ArrayBuffer, (if b.id == bufId then { b with data := b.data.set! idx val } else b).id = b.id :=
+          fun b => by by_cases hb : (b.id == bufId) = true <;> simp [hb]
+        rw [find?_map_preserve_id st.buffers bufId _ hid, hfind]; exact ⟨_, rfl⟩
       · rw [dif_neg hlt] at hw; contradiction
 
 /-- Unoptimized sequence of array writes: checks `ensureExclusive` on every single write step. -/
@@ -301,26 +271,15 @@ theorem unboxedLoopAccumulator_sim (count curIdx : Nat) (idxVar accVar : VarId)
   induction count generalizing curIdx acc st with
   | zero => rfl
   | succ count' ih =>
-    have hidx : (((env.bind idxVar (.u64 curIdx.toUInt64)).bind accVar (.tuple [.u64 acc])) idxVar) =
-        some (.u64 curIdx.toUInt64) := by
-      have hne_beq : (idxVar == accVar) = false := beq_false_of_ne hne
-      simp [VarEnv.bind, hne_beq]
-    have hidx2 : (((env.bind idxVar (.u64 curIdx.toUInt64)).bind accVar (.u64 acc)) idxVar) =
-        some (.u64 curIdx.toUInt64) := by
-      have hne_beq : (idxVar == accVar) = false := beq_false_of_ne hne
-      simp [VarEnv.bind, hne_beq]
-    have hacc1 : (((env.bind idxVar (.u64 curIdx.toUInt64)).bind accVar (.tuple [.u64 acc])) accVar) =
-        some (.tuple [.u64 acc]) := by
-      simp [VarEnv.bind]
-    have hacc2 : (((env.bind idxVar (.u64 curIdx.toUInt64)).bind accVar (.u64 acc)) accVar) =
-        some (.u64 acc) := by
-      simp [VarEnv.bind]
-    simp only [evalSeqLoop, evalBoxedStep, evalUnboxedStep, hidx, hidx2, hacc1, hacc2]
+    have hne_beq : (idxVar == accVar) = false := beq_false_of_ne hne
+    have hidx : ∀ v, (((env.bind idxVar (.u64 curIdx.toUInt64)).bind accVar v) idxVar) =
+        some (.u64 curIdx.toUInt64) := fun _ => by simp [VarEnv.bind, hne_beq]
+    have hacc : ∀ v, (((env.bind idxVar (.u64 curIdx.toUInt64)).bind accVar v) accVar) =
+        some v := fun _ => by simp [VarEnv.bind]
+    simp only [evalSeqLoop, evalBoxedStep, evalUnboxedStep, hidx, hacc]
     cases stepFn curIdx.toUInt64.toNat acc st with
     | error err => rfl
-    | ok pair =>
-      rcases pair with ⟨nextAcc, st'⟩
-      exact ih (curIdx + 1) nextAcc st'
+    | ok pair => exact ih (curIdx + 1) pair.1 pair.2
 
 /-! ## 4. End-to-End `CodeRefines` Theorems for Tuple SROA & Preheader Exclusivity Hoisting -/
 

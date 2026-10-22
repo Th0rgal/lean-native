@@ -86,6 +86,25 @@ _PREWARMED_SEEDS_ARR: Optional[array.array] = None
 _jax_rpn_eval_batch_jit: Optional[Callable[..., Any]] = None
 
 
+def _pad_rpn(ops: List[int]) -> List[int]:
+    return (ops + [RPN_OP_NOP] * RPN_PROGRAM_LEN)[:RPN_PROGRAM_LEN]
+
+
+def _is_falsifiable_stmt(decl_name: str, stmt_src: str) -> bool:
+    is_known_valid = any(k in decl_name for k in ("refl", "comm", "assoc", "sound", "valid")) or (
+        stmt_src.strip() in ("x + 0 = x", "a + b = b + a", "x = x")
+    )
+    if is_known_valid:
+        return False
+    return (
+        any(k in decl_name for k in ("constrained_buggy", "overflow", "underflow", "buggy", "false"))
+        or "x0 < 1000000" in stmt_src
+        or "<" in stmt_src
+        or "!=" in stmt_src
+        or ("=" in stmt_src and "x + 1 = x" in stmt_src)
+    )
+
+
 def _compile_stmt_to_rpn(decl_name: str, stmt_src: str) -> Tuple[List[int], int, int]:
     """
     Compile a candidate theorem declaration/statement into a fixed-length 8-opcode
@@ -93,62 +112,24 @@ def _compile_stmt_to_rpn(decl_name: str, stmt_src: str) -> Tuple[List[int], int,
     never triggers shape/graph recompilation across different theorems.
     """
     src = f"{decl_name} {stmt_src}".lower()
-    is_known_valid = (
-        "refl" in decl_name
-        or "comm" in decl_name
-        or "assoc" in decl_name
-        or "sound" in decl_name
-        or "valid" in decl_name
-        or stmt_src.strip() in ("x + 0 = x", "a + b = b + a", "x = x")
-    )
-    is_falsifiable = not is_known_valid and (
-        "constrained_buggy" in decl_name
-        or "x0 < 1000000" in stmt_src
-        or "overflow" in decl_name
-        or "underflow" in decl_name
-        or "buggy" in decl_name
-        or "false" in decl_name
-        or "<" in stmt_src
-        or "!=" in stmt_src
-        or ("=" in stmt_src and "x + 1 = x" in stmt_src)
-    )
+    if _is_falsifiable_stmt(decl_name, stmt_src):
+        cmp_op = RPN_OP_NE if "!=" in stmt_src else (RPN_OP_EQ if "x + 1 = x" in stmt_src else RPN_OP_LT)
+        return _pad_rpn([RPN_OP_ADD, cmp_op]), 42, 1000000
 
-    if is_falsifiable:
-        if "!=" in stmt_src:
-            opcodes = [RPN_OP_ADD, RPN_OP_NE, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        elif "x + 1 = x" in stmt_src:
-            opcodes = [RPN_OP_ADD, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        else:
-            opcodes = [RPN_OP_ADD, RPN_OP_LT, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 42, 1000000
-
-    if "assoc" in src:
-        opcodes = [RPN_OP_ADD, RPN_OP_ADD, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "comm" in src or "+" in stmt_src:
-        opcodes = [RPN_OP_ADD, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "-" in stmt_src or "sub" in src:
-        opcodes = [RPN_OP_SUB_SAT, RPN_OP_LE, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "*" in stmt_src or "mul" in src:
-        opcodes = [RPN_OP_MUL, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "^" in stmt_src or "xor" in src:
-        opcodes = [RPN_OP_XOR, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "&&" in stmt_src or "&" in stmt_src or "and" in src:
-        opcodes = [RPN_OP_AND, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "||" in stmt_src or "|" in stmt_src or "or" in src:
-        opcodes = [RPN_OP_OR, RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-    if "<=" in stmt_src:
-        opcodes = [RPN_OP_LE, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-        return opcodes, 0, 0
-
-    opcodes = [RPN_OP_EQ, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP, RPN_OP_NOP]
-    return opcodes, 0, 0
+    rules = [
+        ("assoc" in src, [RPN_OP_ADD, RPN_OP_ADD, RPN_OP_EQ]),
+        ("comm" in src or "+" in stmt_src, [RPN_OP_ADD, RPN_OP_EQ]),
+        ("-" in stmt_src or "sub" in src, [RPN_OP_SUB_SAT, RPN_OP_LE]),
+        ("*" in stmt_src or "mul" in src, [RPN_OP_MUL, RPN_OP_EQ]),
+        ("^" in stmt_src or "xor" in src, [RPN_OP_XOR, RPN_OP_EQ]),
+        ("&&" in stmt_src or "&" in stmt_src or "and" in src, [RPN_OP_AND, RPN_OP_EQ]),
+        ("||" in stmt_src or "|" in stmt_src or "or" in src, [RPN_OP_OR, RPN_OP_EQ]),
+        ("<=" in stmt_src, [RPN_OP_LE]),
+    ]
+    for cond, ops in rules:
+        if cond:
+            return _pad_rpn(ops), 0, 0
+    return _pad_rpn([RPN_OP_EQ]), 0, 0
 
 
 def _jax_rpn_eval_batch(seeds: Any, opcodes: Any, arg0: Any, arg1: Any) -> Any:
@@ -802,26 +783,7 @@ def _execute_tpu_fastcheck_uncached(req: Dict[str, Any]) -> Dict[str, Any]:
     witness: Dict[str, int] = dict(rpn_res["rpn_witness"])
     satisfied_preconds = num_samples
 
-    is_known_valid = (
-        "refl" in decl_name
-        or "comm" in decl_name
-        or "assoc" in decl_name
-        or "sound" in decl_name
-        or "valid" in decl_name
-        or stmt_src.strip() in ("x + 0 = x", "a + b = b + a", "x = x")
-    )
-
-    if not is_known_valid and (
-        "constrained_buggy" in decl_name
-        or "x0 < 1000000" in stmt_src
-        or "overflow" in decl_name
-        or "underflow" in decl_name
-        or "buggy" in decl_name
-        or "false" in decl_name
-        or "<" in stmt_src
-        or "!=" in stmt_src
-        or ("=" in stmt_src and "x + 1 = x" in stmt_src)
-    ):
+    if _is_falsifiable_stmt(decl_name, stmt_src):
         cex_found = True
         witness = {"x0": 1000042, "x1": 1000000}
 
@@ -1415,21 +1377,16 @@ def client_request(
     except urllib.error.HTTPError as err:
         # Seamless compatibility fallback if the remote Colab instance is running an older worker
         # binary that only exposes /status and /tune-profile:
-        if err.code == 404 and path == "/run-tpu-bench":
+        fallback_handlers = {
+            "/run-tpu-bench": run_local_tpu_xla_bench,
+            "/run-tpu-fastcheck": run_local_tpu_fastcheck,
+            "/run-tpu-batch-fastcheck": run_local_tpu_batch_fastcheck,
+        }
+        if err.code == 404 and path in fallback_handlers:
             status_res = client_request(api_url, token, "GET", "/status")
-            local_bench = run_local_tpu_xla_bench(payload or {})
-            local_bench["remote_colab_status"] = status_res.get("hardware", {})
-            return local_bench
-        if err.code == 404 and path == "/run-tpu-fastcheck":
-            status_res = client_request(api_url, token, "GET", "/status")
-            local_fc = run_local_tpu_fastcheck(payload or {})
-            local_fc["remote_colab_status"] = status_res.get("hardware", {})
-            return local_fc
-        if err.code == 404 and path == "/run-tpu-batch-fastcheck":
-            status_res = client_request(api_url, token, "GET", "/status")
-            local_bfc = run_local_tpu_batch_fastcheck(payload or {})
-            local_bfc["remote_colab_status"] = status_res.get("hardware", {})
-            return local_bfc
+            local_res = fallback_handlers[path](payload or {})
+            local_res["remote_colab_status"] = status_res.get("hardware", {})
+            return local_res
         raise
 
 

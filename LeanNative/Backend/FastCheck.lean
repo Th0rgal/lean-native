@@ -72,104 +72,70 @@ def substLNIRExpr (subs : List ConstraintSub) (e : LNIRExpr) : LNIRExpr :=
 
 /-- Substitute `ConstraintSub`s throughout an `LNIRCode` block. -/
 def substLNIRCode (subs : List ConstraintSub) : LNIRCode → LNIRCode
-  | .letBind dst ty val k =>
-    .letBind dst ty (substLNIRExpr subs val) (substLNIRCode subs k)
-  | .rawStore pv iv vv ty k =>
-    .rawStore pv iv vv ty (substLNIRCode subs k)
-  | .incRef ov c k =>
-    .incRef ov c (substLNIRCode subs k)
-  | .decRef ov c k =>
-    .decRef ov c (substLNIRCode subs k)
-  | .ite cv t e =>
-    .ite cv (substLNIRCode subs t) (substLNIRCode subs e)
+  | .letBind dst ty val k => .letBind dst ty (substLNIRExpr subs val) (substLNIRCode subs k)
+  | .rawStore pv iv vv ty k => .rawStore pv iv vv ty (substLNIRCode subs k)
+  | .incRef ov c k => .incRef ov c (substLNIRCode subs k)
+  | .decRef ov c k => .decRef ov c (substLNIRCode subs k)
+  | .ite cv t e => .ite cv (substLNIRCode subs t) (substLNIRCode subs e)
   | .seqFor iv lv hv av ai aty step k =>
     .seqFor iv lv hv av ai aty (substLNIRCode subs step) (substLNIRCode subs k)
-  | .parFor ov lv ins ety kern k =>
-    .parFor ov lv ins ety kern (substLNIRCode subs k)
+  | .parFor ov lv ins ety kern k => .parFor ov lv ins ety kern (substLNIRCode subs k)
   | .ret v => .ret v
   | .unreachable => .unreachable
+
+private def recordTrueVar (dst : VarId) (val : LNIRExpr) (trueVars : List VarId) : List VarId :=
+  match val with
+  | .scalar (.constBool true) | .scalar (.constU64 1) => dst :: trueVars
+  | _ => trueVars
 
 /-- Check whether an `elseBranch` in an `ite` guard represents a vacuous pass (returns constant `true` or `1`). -/
 def isVacuousTrueBranch (trueVars : List VarId) : LNIRCode → Bool
   | .ret v => trueVars.contains v
-  | .letBind dst _ (.scalar (.constBool true)) k =>
-    isVacuousTrueBranch (dst :: trueVars) k
-  | .letBind dst _ (.scalar (.constU64 1)) k =>
-    isVacuousTrueBranch (dst :: trueVars) k
-  | .letBind _ _ _ k =>
-    isVacuousTrueBranch trueVars k
+  | .letBind dst _ val k => isVacuousTrueBranch (recordTrueVar dst val trueVars) k
   | _ => false
 
-/-- Extract equality constraints `(x == rhs)` or `(lhs == x)` from precondition guards
-    (`ite condVar thenCode elseCode` where `elseCode` is a vacuous pass). -/
-def extractPreconditionSubs (paramIds : List VarId) (bindings : List (VarId × LNIRExpr))
-    (trueVars : List VarId) : LNIRCode → List ConstraintSub
+/-- Generic traversal over vacuous-else precondition guards `(ite condVar thenCode elseCode)`. -/
+def collectVacuousGuardHints {α : Type} (onGuard : List (VarId × LNIRExpr) → VarId → List α)
+    (bindings : List (VarId × LNIRExpr)) (trueVars : List VarId) : LNIRCode → List α
   | .letBind dst _ val k =>
-    let trueVars' :=
-      match val with
-      | .scalar (.constBool true) | .scalar (.constU64 1) => dst :: trueVars
-      | _ => trueVars
-    extractPreconditionSubs paramIds ((dst, val) :: bindings) trueVars' k
+    collectVacuousGuardHints onGuard ((dst, val) :: bindings) (recordTrueVar dst val trueVars) k
   | .ite condVar thenBranch elseBranch =>
-    let restSubs := extractPreconditionSubs paramIds bindings trueVars thenBranch
-    if isVacuousTrueBranch trueVars elseBranch then
-      match bindings.lookup condVar with
-      | some (.scalar (.binOp .eq (.var x) rhs)) =>
-        if paramIds.contains x && !scalarExprMentionsVar x rhs then
-          { lhsVar := x, rhsExpr := rhs } :: restSubs
-        else
-          match rhs with
-          | .var y =>
-            if paramIds.contains y then
-              { lhsVar := y, rhsExpr := .var x } :: restSubs
-            else restSubs
-          | _ => restSubs
-      | some (.scalar (.binOp .eq lhs (.var x))) =>
-        if paramIds.contains x && !scalarExprMentionsVar x lhs then
-          { lhsVar := x, rhsExpr := lhs } :: restSubs
-        else restSubs
-      | _ => restSubs
-    else
-      restSubs
+    let rest := collectVacuousGuardHints onGuard bindings trueVars thenBranch
+    if isVacuousTrueBranch trueVars elseBranch then onGuard bindings condVar ++ rest else rest
   | _ => []
+
+/-- Extract equality constraints `(x == rhs)` or `(lhs == x)` from precondition guards. -/
+def extractPreconditionSubs (paramIds : List VarId) (bindings : List (VarId × LNIRExpr))
+    (trueVars : List VarId) (code : LNIRCode) : List ConstraintSub :=
+  collectVacuousGuardHints (fun bnds condVar =>
+    match bnds.lookup condVar with
+    | some (.scalar (.binOp .eq (.var x) rhs)) =>
+      if paramIds.contains x && !scalarExprMentionsVar x rhs then [{ lhsVar := x, rhsExpr := rhs }]
+      else match rhs with
+        | .var y => if paramIds.contains y then [{ lhsVar := y, rhsExpr := .var x }] else []
+        | _ => []
+    | some (.scalar (.binOp .eq lhs (.var x))) =>
+      if paramIds.contains x && !scalarExprMentionsVar x lhs then [{ lhsVar := x, rhsExpr := lhs }] else []
+    | _ => []) bindings trueVars code
 
 /-- Extract all precondition equality constraints from an `LNIRDecl`. -/
 def extractDeclConstraints (d : LNIRDecl) : List ConstraintSub :=
-  let paramIds := d.params.map (·.id)
-  extractPreconditionSubs paramIds [] [] d.body
+  extractPreconditionSubs (d.params.map (·.id)) [] [] d.body
 
-/-- Extract upper-bound hints `(x, K)` from precondition guards `(x < K)` or `(x <= K)`
-    where `elseBranch` is a vacuous pass, so random SplitMix64 lanes fold into `[0, K]`
-    instead of suffering `VacuousPass` when `K << 2^64`. -/
+/-- Extract upper-bound hints `(x, K)` from precondition guards `(x < K)` or `(x <= K)`. -/
 def extractUpperBoundHints (paramIds : List VarId) (bindings : List (VarId × LNIRExpr))
-    (trueVars : List VarId) : LNIRCode → List (VarId × UInt64)
-  | .letBind dst _ val k =>
-    let trueVars' :=
-      match val with
-      | .scalar (.constBool true) | .scalar (.constU64 1) => dst :: trueVars
-      | _ => trueVars
-    extractUpperBoundHints paramIds ((dst, val) :: bindings) trueVars' k
-  | .ite condVar thenBranch elseBranch =>
-    let restHints := extractUpperBoundHints paramIds bindings trueVars thenBranch
-    if isVacuousTrueBranch trueVars elseBranch then
-      match bindings.lookup condVar with
-      | some (.scalar (.binOp .lt (.var x) (.constU64 k))) =>
-        if paramIds.contains x && k > 0 then
-          (x, k) :: restHints
-        else restHints
-      | some (.scalar (.binOp .le (.var x) (.constU64 k))) =>
-        if paramIds.contains x && k < 0xffffffffffffffff then
-          (x, k + 1) :: restHints
-        else restHints
-      | _ => restHints
-    else
-      restHints
-  | _ => []
+    (trueVars : List VarId) (code : LNIRCode) : List (VarId × UInt64) :=
+  collectVacuousGuardHints (fun bnds condVar =>
+    match bnds.lookup condVar with
+    | some (.scalar (.binOp .lt (.var x) (.constU64 k))) =>
+      if paramIds.contains x && k > 0 then [(x, k)] else []
+    | some (.scalar (.binOp .le (.var x) (.constU64 k))) =>
+      if paramIds.contains x && k < 0xffffffffffffffff then [(x, k + 1)] else []
+    | _ => []) bindings trueVars code
 
 /-- Extract all upper-bound precondition hints `(paramVarId, modulusK)` from an `LNIRDecl`. -/
 def extractDeclUpperBoundHints (d : LNIRDecl) : List (VarId × UInt64) :=
-  let paramIds := d.params.map (·.id)
-  extractUpperBoundHints paramIds [] [] d.body
+  extractUpperBoundHints (d.params.map (·.id)) [] [] d.body
 
 /-- Relational ordering / load-factor constraint hint extracted from a precondition guard. -/
 inductive RelationalHint where
@@ -184,28 +150,17 @@ partial def extractRelationalHintsFromCond (paramIds : List VarId)
     (bindings : List (VarId × LNIRExpr)) (condVar : VarId) : List RelationalHint :=
   match bindings.lookup condVar with
   | some (.scalar (.binOp .le (.var x) (.var y))) =>
-    if paramIds.contains x && paramIds.contains y && x != y then
-      [.leVar x y 0]
-    else []
+    if paramIds.contains x && paramIds.contains y && x != y then [.leVar x y 0] else []
   | some (.scalar (.binOp .lt (.var x) (.var y))) =>
-    if paramIds.contains x && paramIds.contains y && x != y then
-      [.leVar x y 1]
-    else []
+    if paramIds.contains x && paramIds.contains y && x != y then [.leVar x y 1] else []
   | some (.scalar (.binOp .le (.constU64 c) (.var x))) =>
     if paramIds.contains x then [.leConstLow x c] else []
   | some (.scalar (.binOp .lt (.constU64 c) (.var x))) =>
     if paramIds.contains x then [.leConstLow x (c + 1)] else []
-  | some (.scalar (.binOp .le (.binOp .mul (.constU64 s) (.var x)) (.var y))) =>
-    if paramIds.contains x && paramIds.contains y && s > 0 then
-      [.leScaledVar s x y]
-    else []
+  | some (.scalar (.binOp .le (.binOp .mul (.constU64 s) (.var x)) (.var y)))
   | some (.scalar (.binOp .le (.binOp .mul (.var x) (.constU64 s)) (.var y))) =>
-    if paramIds.contains x && paramIds.contains y && s > 0 then
-      [.leScaledVar s x y]
-    else []
-  | some (.scalar (.binOp .bitAnd (.var c1) (.var c2))) =>
-    extractRelationalHintsFromCond paramIds bindings c1 ++
-    extractRelationalHintsFromCond paramIds bindings c2
+    if paramIds.contains x && paramIds.contains y && s > 0 then [.leScaledVar s x y] else []
+  | some (.scalar (.binOp .bitAnd (.var c1) (.var c2)))
   | some (.scalar (.select (.var c1) (.var c2) (.constBool false)))
   | some (.scalar (.select (.var c1) (.var c2) (.constU64 0))) =>
     extractRelationalHintsFromCond paramIds bindings c1 ++
@@ -214,25 +169,12 @@ partial def extractRelationalHintsFromCond (paramIds : List VarId)
 
 /-- Walk `LNIRCode` and collect all `RelationalHint`s from vacuous-else precondition guards. -/
 def extractRelationalHints (paramIds : List VarId) (bindings : List (VarId × LNIRExpr))
-    (trueVars : List VarId) : LNIRCode → List RelationalHint
-  | .letBind dst _ val k =>
-    let trueVars' :=
-      match val with
-      | .scalar (.constBool true) | .scalar (.constU64 1) => dst :: trueVars
-      | _ => trueVars
-    extractRelationalHints paramIds ((dst, val) :: bindings) trueVars' k
-  | .ite condVar thenBranch elseBranch =>
-    let rest := extractRelationalHints paramIds bindings trueVars thenBranch
-    if isVacuousTrueBranch trueVars elseBranch then
-      extractRelationalHintsFromCond paramIds bindings condVar ++ rest
-    else
-      rest
-  | _ => []
+    (trueVars : List VarId) (code : LNIRCode) : List RelationalHint :=
+  collectVacuousGuardHints (extractRelationalHintsFromCond paramIds) bindings trueVars code
 
 /-- Extract all relational ordering and load-factor hints from an `LNIRDecl`. -/
 def extractDeclRelationalHints (d : LNIRDecl) : List RelationalHint :=
-  let paramIds := d.params.map (·.id)
-  extractRelationalHints paramIds [] [] d.body
+  extractRelationalHints (d.params.map (·.id)) [] [] d.body
 
 /-- Apply relational polytope projection (`c ≤ x`, `x + δ ≤ y`, `s * x ≤ y`) to a candidate `VarEnv`
     so ordered offset chains (`16 ≤ o0 ≤ o1 ≤ o2 ≤ o3 ≤ totalLen`) and load-factor guards (`2 * count ≤ cap`)
@@ -357,20 +299,13 @@ def genFastCheckParamVal (sampleIdx : Nat) (paramIdx : Nat) (ty : LNIRType) (st 
       ]
     let mapBuf : StorageMapBuffer := { id := mapId, entries := initEntries }
     (.storageMapId mapId, { st with nextId := mapId, storageMaps := mapBuf :: st.storageMaps })
-  | .sarray _ =>
+  | .sarray _ | .rawPtr _ =>
     let bufId := st.nextId + 1
     let elems : List UInt64 := (List.range 16).map (fun i =>
-      let (er, _) := fastCheckSplitMix64 (r + i.toUInt64)
-      er % 1024)
+      let (er, _) := fastCheckSplitMix64 (r + i.toUInt64); er % 1024)
     let buf : ArrayBuffer := { id := bufId, exclusive := true, data := elems.toArray }
-    (.sarrayId bufId, { st with buffers := buf :: st.buffers, nextId := bufId })
-  | .rawPtr _ =>
-    let bufId := st.nextId + 1
-    let elems : List UInt64 := (List.range 16).map (fun i =>
-      let (er, _) := fastCheckSplitMix64 (r + i.toUInt64)
-      er % 1024)
-    let buf : ArrayBuffer := { id := bufId, exclusive := true, data := elems.toArray }
-    (.rawPtrId bufId, { st with buffers := buf :: st.buffers, nextId := bufId })
+    let val := match ty with | .rawPtr _ => Val.rawPtrId bufId | _ => Val.sarrayId bufId
+    (val, { st with buffers := buf :: st.buffers, nextId := bufId })
   | .tuple fs =>
     let vals := fs.mapIdx (fun idx _ =>
       let (tr, _) := fastCheckSplitMix64 (r + idx.toUInt64 * 17)

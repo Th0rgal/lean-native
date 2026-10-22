@@ -75,6 +75,11 @@ structure SymStateVal where
   noUB      : Bool := true
   deriving Repr, Inhabited, BEq
 
+private def pow2ShiftLog2 : UInt64 → Option UInt64
+  | 2 => some 1 | 4 => some 2 | 8 => some 3
+  | 16 => some 4 | 32 => some 5 | 64 => some 6
+  | _ => none
+
 /-- Single-step algebraic & strength-reduction normalizer on `SymExpr`. -/
 def normSymBinOpStep (op : BinOp) (lhs rhs : SymExpr) : SymExpr :=
   -- Canonicalize operand order for commutative operators so constants migrate right
@@ -103,61 +108,41 @@ def normSymBinOpStep (op : BinOp) (lhs rhs : SymExpr) : SymExpr :=
   | .eq,     .constBool a, .constBool b => .constBool (a == b)
 
   -- Additive identities
-  | .add, x, .constU64 0 => x
-  | .add, .constU64 0, x => x
-  | .sub, x, .constU64 0 => x
+  | .add, x, .constU64 0 | .add, .constU64 0, x | .sub, x, .constU64 0 => x
   | .sub, x, y => if x == y then .constU64 0 else .binOp .sub x y
 
   -- Multiplicative identities & strength reduction (* 2^k -> <<< k)
-  | .mul, x, .constU64 1 => x
-  | .mul, .constU64 1, x => x
-  | .mul, _, .constU64 0 => .constU64 0
-  | .mul, .constU64 0, _ => .constU64 0
-  | .mul, x, .constU64 2 => .binOp .shl x (.constU64 1)
-  | .mul, .constU64 2, x => .binOp .shl x (.constU64 1)
-  | .mul, x, .constU64 4 => .binOp .shl x (.constU64 2)
-  | .mul, .constU64 4, x => .binOp .shl x (.constU64 2)
-  | .mul, x, .constU64 8 => .binOp .shl x (.constU64 3)
-  | .mul, .constU64 8, x => .binOp .shl x (.constU64 3)
-  | .mul, x, .constU64 16 => .binOp .shl x (.constU64 4)
-  | .mul, .constU64 16, x => .binOp .shl x (.constU64 4)
-  | .mul, x, .constU64 32 => .binOp .shl x (.constU64 5)
-  | .mul, .constU64 32, x => .binOp .shl x (.constU64 5)
-  | .mul, x, .constU64 64 => .binOp .shl x (.constU64 6)
-  | .mul, .constU64 64, x => .binOp .shl x (.constU64 6)
+  | .mul, x, .constU64 1 | .mul, .constU64 1, x => x
+  | .mul, _, .constU64 0 | .mul, .constU64 0, _ => .constU64 0
+  | .mul, x, .constU64 c =>
+    match pow2ShiftLog2 c with
+    | some k => .binOp .shl x (.constU64 k)
+    | none => .binOp .mul x (.constU64 c)
+  | .mul, .constU64 c, x =>
+    match pow2ShiftLog2 c with
+    | some k => .binOp .shl x (.constU64 k)
+    | none => .binOp .mul (.constU64 c) x
 
-  -- Division strength reduction (/ 2^k -> >>> k)
+  -- Division & modulo strength reduction (/ 2^k -> >>> k, % 2^k -> &&& (2^k - 1))
   | .div, x, .constU64 1 => x
-  | .div, x, .constU64 2 => .binOp .shr x (.constU64 1)
-  | .div, x, .constU64 4 => .binOp .shr x (.constU64 2)
-  | .div, x, .constU64 8 => .binOp .shr x (.constU64 3)
-  | .div, x, .constU64 16 => .binOp .shr x (.constU64 4)
-  | .div, x, .constU64 32 => .binOp .shr x (.constU64 5)
-  | .div, x, .constU64 64 => .binOp .shr x (.constU64 6)
-
-  -- Modulo strength reduction (% 2^k -> &&& (2^k - 1))
+  | .div, x, .constU64 c =>
+    match pow2ShiftLog2 c with
+    | some k => .binOp .shr x (.constU64 k)
+    | none => .binOp .div x (.constU64 c)
   | .mod, _, .constU64 1 => .constU64 0
-  | .mod, x, .constU64 2 => .binOp .bitAnd x (.constU64 1)
-  | .mod, x, .constU64 4 => .binOp .bitAnd x (.constU64 3)
-  | .mod, x, .constU64 8 => .binOp .bitAnd x (.constU64 7)
-  | .mod, x, .constU64 16 => .binOp .bitAnd x (.constU64 15)
-  | .mod, x, .constU64 32 => .binOp .bitAnd x (.constU64 31)
-  | .mod, x, .constU64 64 => .binOp .bitAnd x (.constU64 63)
+  | .mod, x, .constU64 c =>
+    match pow2ShiftLog2 c with
+    | some _ => .binOp .bitAnd x (.constU64 (c - 1))
+    | none => .binOp .mod x (.constU64 c)
 
-  -- Bitwise identities & idempotence
-  | .bitXor, x, .constU64 0 => x
-  | .bitXor, .constU64 0, x => x
+  -- Bitwise & shift identities & idempotence
+  | .bitXor, x, .constU64 0 | .bitXor, .constU64 0, x => x
   | .bitXor, x, y => if x == y then .constU64 0 else .binOp .bitXor x y
-  | .bitOr,  x, .constU64 0 => x
-  | .bitOr,  .constU64 0, x => x
+  | .bitOr,  x, .constU64 0 | .bitOr,  .constU64 0, x => x
   | .bitOr,  x, y => if x == y then x else .binOp .bitOr x y
-  | .bitAnd, _, .constU64 0 => .constU64 0
-  | .bitAnd, .constU64 0, _ => .constU64 0
+  | .bitAnd, _, .constU64 0 | .bitAnd, .constU64 0, _ => .constU64 0
   | .bitAnd, x, y => if x == y then x else .binOp .bitAnd x y
-
-  -- Shift identities
-  | .shl, x, .constU64 0 => x
-  | .shr, x, .constU64 0 => x
+  | .shl, x, .constU64 0 | .shr, x, .constU64 0 => x
 
   -- Reflexive comparisons
   | .eq, x, y => if x == y then .constBool true else .binOp .eq x y
@@ -359,7 +344,7 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
       nonPoison := sa.nonPoison && sb.nonPoison && sd.nonPoison
       noUB := sa.noUB && sb.noUB && sd.noUB && !divZero
     }
-  | .storageLoad mapVar slotVar =>
+  | .storageLoad mapVar slotVar | .sarrayGet mapVar slotVar _ | .rawLoad mapVar slotVar _ =>
     let slotSv := st.lookupVar slotVar
     let elemExpr := st.readBufSym mapVar slotSv.expr
     st.bindVar dst { expr := elemExpr, nonPoison := slotSv.nonPoison, noUB := slotSv.noUB }
@@ -367,40 +352,22 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
     let root := st.resolveBuf mapVar
     let slotSv := st.lookupVar slotVar
     let valSv := st.lookupVar valVar
-    let st1 := st.writeBufSym root slotSv.expr valSv.expr false
-    let st2 := st1.aliasBuf dst root
-    st2.bindVar dst {
-      expr := .symVar root
-      nonPoison := slotSv.nonPoison && valSv.nonPoison
-      noUB := slotSv.noUB && valSv.noUB
-    }
+    let st1 := (st.writeBufSym root slotSv.expr valSv.expr false).aliasBuf dst root
+    st1.bindVar dst { expr := .symVar root, nonPoison := slotSv.nonPoison && valSv.nonPoison, noUB := slotSv.noUB && valSv.noUB }
   | .mkTuple fields =>
     let svs := fields.map st.lookupVar
-    let allNoUB := svs.all (·.noUB)
-    let allNonPoison := svs.all (·.nonPoison)
-    st.bindVar dst {
-      expr := .tuple (svs.map (·.expr))
-      nonPoison := allNonPoison
-      noUB := allNoUB
-    }
+    st.bindVar dst { expr := .tuple (svs.map (·.expr)), nonPoison := svs.all (·.nonPoison), noUB := svs.all (·.noUB) }
   | .projTuple tupleVar idx =>
     let tv := st.lookupVar tupleVar
     match tv.expr with
     | .tuple fs =>
       match fs[idx]? with
-      | some fExpr =>
-        st.bindVar dst { expr := fExpr, nonPoison := tv.nonPoison, noUB := tv.noUB }
-      | none =>
-        st.bindVar dst { expr := .unit, nonPoison := false, noUB := false }
-    | _ =>
-      st.bindVar dst { expr := .symVar dst, nonPoison := tv.nonPoison, noUB := tv.noUB }
+      | some fExpr => st.bindVar dst { expr := fExpr, nonPoison := tv.nonPoison, noUB := tv.noUB }
+      | none => st.bindVar dst { expr := .unit, nonPoison := false, noUB := false }
+    | _ => st.bindVar dst { expr := .symVar dst, nonPoison := tv.nonPoison, noUB := tv.noUB }
   | .allocCtor tag objFields scalarFields =>
     let svs := (objFields ++ scalarFields).map st.lookupVar
-    st.bindVar dst {
-      expr := .tuple (.constU64 tag.toUInt64 :: svs.map (·.expr))
-      nonPoison := svs.all (·.nonPoison)
-      noUB := svs.all (·.noUB)
-    }
+    st.bindVar dst { expr := .tuple (.constU64 tag.toUInt64 :: svs.map (·.expr)), nonPoison := svs.all (·.nonPoison), noUB := svs.all (·.noUB) }
   | .ctorGetObj ctorVar idx | .ctorGetScalar ctorVar idx _ =>
     let cv := st.lookupVar ctorVar
     match cv.expr with
@@ -410,49 +377,28 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
       | none => st.bindVar dst { expr := .unit, nonPoison := false, noUB := false }
     | _ => st.bindVar dst { expr := .symVar dst, nonPoison := cv.nonPoison, noUB := cv.noUB }
   | .isExclusive objVar =>
-    let excl := st.isBufExclusive objVar
-    st.bindVar dst { expr := .constBool excl, nonPoison := true, noUB := true }
+    st.bindVar dst { expr := .constBool (st.isBufExclusive objVar), nonPoison := true, noUB := true }
   | .sarrayLen arrVar =>
     let root := st.resolveBuf arrVar
     st.bindVar dst { expr := .symVar (9000 + root), nonPoison := true, noUB := true }
   | .sarrayDataPtr arrVar _elemTy =>
     let root := st.resolveBuf arrVar
     let exclOk := st.isBufExclusive root
-    let st1 := st.aliasBuf dst root
-    st1.bindVar dst { expr := .symVar root, nonPoison := true, noUB := exclOk }
+    (st.aliasBuf dst root).bindVar dst { expr := .symVar root, nonPoison := true, noUB := exclOk }
   | .sarrayEnsureExclusive arrVar _elemTy =>
     let root := st.resolveBuf arrVar
-    let st1 := (st.markExclusive root).aliasBuf dst root
-    st1.bindVar dst { expr := .symVar root, nonPoison := true, noUB := true }
-  | .sarrayGet arrVar idxVar _elemTy =>
-    let idxSv := st.lookupVar idxVar
-    let elemExpr := st.readBufSym arrVar idxSv.expr
-    st.bindVar dst { expr := elemExpr, nonPoison := idxSv.nonPoison, noUB := idxSv.noUB }
+    ((st.markExclusive root).aliasBuf dst root).bindVar dst { expr := .symVar root, nonPoison := true, noUB := true }
   | .sarraySet arrVar idxVar valVar _elemTy =>
     let root := st.resolveBuf arrVar
     let idxSv := st.lookupVar idxVar
     let valSv := st.lookupVar valVar
-    let st1 := st.markExclusive root
-    let st2 := st1.writeBufSym root idxSv.expr valSv.expr true
-    let st3 := st2.aliasBuf dst root
-    st3.bindVar dst {
-      expr := .symVar root
-      nonPoison := idxSv.nonPoison && valSv.nonPoison
-      noUB := idxSv.noUB && valSv.noUB
-    }
-  | .rawLoad ptrVar idxVar _elemTy =>
-    let idxSv := st.lookupVar idxVar
-    let elemExpr := st.readBufSym ptrVar idxSv.expr
-    st.bindVar dst { expr := elemExpr, nonPoison := idxSv.nonPoison, noUB := idxSv.noUB }
+    let st3 := ((st.markExclusive root).writeBufSym root idxSv.expr valSv.expr true).aliasBuf dst root
+    st3.bindVar dst { expr := .symVar root, nonPoison := idxSv.nonPoison && valSv.nonPoison, noUB := idxSv.noUB && valSv.noUB }
   | .boxScalar valVar _ | .unboxScalar valVar _ =>
     st.bindVar dst (st.lookupVar valVar)
   | .call _ args _ _ =>
     let svs := args.map st.lookupVar
-    st.bindVar dst {
-      expr := .symVar dst
-      nonPoison := svs.all (·.nonPoison)
-      noUB := svs.all (·.noUB)
-    }
+    st.bindVar dst { expr := .symVar dst, nonPoison := svs.all (·.nonPoison), noUB := svs.all (·.noUB) }
 
 /-- Summary produced by symbolic execution of an `LNIRDecl`. -/
 structure SymExecSummary where
@@ -598,30 +544,16 @@ def mkSampleParamVal (seed : UInt64) (paramIdx : Nat) (ty : LNIRType) (st : Heap
     (.storageMapId mapId, { st with nextId := mapId, storageMaps := mapBuf :: st.storageMaps })
   | .sarray _ =>
     let bufId := st.nextId + 1
-    let elems : List UInt64 := (List.range 16).map (fun i =>
-      let (er, _) := splitMix64Next (r + i.toUInt64)
-      (er % 64) + 1)
-    let buf : ArrayBuffer := {
-      id := bufId
-      exclusive := (r % 2 == 0)
-      data := elems.toArray
-    }
+    let elems := (List.range 16).map (fun i => ((splitMix64Next (r + i.toUInt64)).1 % 64) + 1)
+    let buf : ArrayBuffer := { id := bufId, exclusive := (r % 2 == 0), data := elems.toArray }
     (.sarrayId bufId, { st with buffers := buf :: st.buffers, nextId := bufId })
   | .rawPtr _ =>
     let bufId := st.nextId + 1
-    let elems : List UInt64 := (List.range 16).map (fun i =>
-      let (er, _) := splitMix64Next (r + i.toUInt64)
-      (er % 64) + 1)
-    let buf : ArrayBuffer := {
-      id := bufId
-      exclusive := true
-      data := elems.toArray
-    }
+    let elems := (List.range 16).map (fun i => ((splitMix64Next (r + i.toUInt64)).1 % 64) + 1)
+    let buf : ArrayBuffer := { id := bufId, exclusive := true, data := elems.toArray }
     (.rawPtrId bufId, { st with buffers := buf :: st.buffers, nextId := bufId })
   | .tuple fs =>
-    let vals := fs.mapIdx (fun idx _ =>
-      let (tr, _) := splitMix64Next (r + idx.toUInt64 * 17)
-      Val.u64 ((tr % 16) + 1))
+    let vals := fs.mapIdx (fun idx _ => Val.u64 (((splitMix64Next (r + idx.toUInt64 * 17)).1 % 16) + 1))
     (.tuple vals, st)
   | .unit => (.unit, st)
   | _ => (.u64 smallU64, st)

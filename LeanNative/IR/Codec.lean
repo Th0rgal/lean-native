@@ -21,252 +21,118 @@ Provides:
    `LNIRModule.fromJson?`) serialization and deserialization for `LNIRModule`.
 -/
 
-/-- 7. `evm_erc20_transfer_u256`: 256-bit EVM/Verity ERC-20 storage transfer kernel.
-    Takes `(mapVar : .storageMap, senderSlot : .u256, receiverSlot : .u256, amount : .u256)`,
-    loads `senderBal := storageLoad mapVar senderSlot`,
-    computes `newSenderBal := binOp .subChecked256 senderBal amount`,
-    stores `storageStore mapVar senderSlot newSenderBal`,
-    loads `recvBal := storageLoad mapVar receiverSlot`,
-    computes `newRecvBal := binOp .addChecked256 recvBal amount`,
-    stores `storageStore mapVar receiverSlot newRecvBal`,
-    and returns `newRecvBal`. -/
-def evmErc20TransferU256Decl : LNIRDecl := {
-  name      := "evm_erc20_transfer_u256"
-  params    := [
-    { id := 0, name := "mapVar", ty := .storageMap, borrow := false },
-    { id := 1, name := "senderSlot", ty := .u256, borrow := false },
-    { id := 2, name := "receiverSlot", ty := .u256, borrow := false },
-    { id := 3, name := "amount", ty := .u256, borrow := false }
-  ]
-  retTy     := .u256
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 4 .u256 (.storageLoad 0 1) (
-      .letBind 5 .u256 (.scalar (.binOp .subChecked256 (.var 4) (.var 3))) (
-        .letBind 6 .storageMap (.storageStore 0 1 5) (
-          .letBind 7 .u256 (.storageLoad 6 2) (
-            .letBind 8 .u256 (.scalar (.binOp .addChecked256 (.var 7) (.var 3))) (
-              .letBind 9 .storageMap (.storageStore 6 2 8) (
-                .ret 8
-              )
-            )
-          )
-        )
-      )
-    )
+private def mkBenchDecl (name : String) (params : List (VarId × String × LNIRType × Bool))
+    (retTy : LNIRType) (isGpuCand : Bool) (body : LNIRCode) : LNIRDecl := {
+  name, retTy, isGpuCand, body, assurance := .verifiedKernelProof
+  params := params.map fun (id, n, ty, b) => { id, name := n, ty, borrow := b }
 }
 
-/-- 8. `evm_muldiv_wad_u256`: 256-bit EVM/Verity full-precision WAD fixed-point kernel.
-    Takes `(a : .u256, b : .u256, wad : .u256)`,
-    computes `down := mulDivDown a b wad`,
-    `up := mulDivUp a b wad`,
-    `lz := unaryOp .clz256 down`,
-    `diff := binOp .sub up down`,
-    and returns `binOp .add down (binOp .add diff lz)`. -/
-def evmMuldivWadU256Decl : LNIRDecl := {
-  name      := "evm_muldiv_wad_u256"
-  params    := [
-    { id := 0, name := "a", ty := .u256, borrow := false },
-    { id := 1, name := "b", ty := .u256, borrow := false },
-    { id := 2, name := "wad", ty := .u256, borrow := false }
-  ]
-  retTy     := .u256
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 3 .u256 (.mulDivDown 0 1 2) (
-      .letBind 4 .u256 (.mulDivUp 0 1 2) (
-        .letBind 5 .u256 (.scalar (.unaryOp .clz256 (.var 3))) (
-          .letBind 6 .u256 (.scalar (.binOp .sub (.var 4) (.var 3))) (
-            .letBind 7 .u256 (.scalar (.binOp .add (.var 3) (.binOp .add (.var 6) (.var 5)))) (
-              .ret 7
-            )
-          )
-        )
-      )
-    )
-}
+/-- 7. `evm_erc20_transfer_u256`: 256-bit EVM/Verity ERC-20 storage transfer kernel. -/
+def evmErc20TransferU256Decl : LNIRDecl :=
+  mkBenchDecl "evm_erc20_transfer_u256"
+    [(0, "mapVar", .storageMap, false), (1, "senderSlot", .u256, false),
+     (2, "receiverSlot", .u256, false), (3, "amount", .u256, false)]
+    .u256 true <|
+    .letBind 4 .u256 (.storageLoad 0 1) <|
+    .letBind 5 .u256 (.scalar (.binOp .subChecked256 (.var 4) (.var 3))) <|
+    .letBind 6 .storageMap (.storageStore 0 1 5) <|
+    .letBind 7 .u256 (.storageLoad 6 2) <|
+    .letBind 8 .u256 (.scalar (.binOp .addChecked256 (.var 7) (.var 3))) <|
+    .letBind 9 .storageMap (.storageStore 6 2 8) (.ret 8)
+
+/-- 8. `evm_muldiv_wad_u256`: 256-bit EVM/Verity full-precision WAD fixed-point kernel. -/
+def evmMuldivWadU256Decl : LNIRDecl :=
+  mkBenchDecl "evm_muldiv_wad_u256"
+    [(0, "a", .u256, false), (1, "b", .u256, false), (2, "wad", .u256, false)]
+    .u256 true <|
+    .letBind 3 .u256 (.mulDivDown 0 1 2) <|
+    .letBind 4 .u256 (.mulDivUp 0 1 2) <|
+    .letBind 5 .u256 (.scalar (.unaryOp .clz256 (.var 3))) <|
+    .letBind 6 .u256 (.scalar (.binOp .sub (.var 4) (.var 3))) <|
+    .letBind 7 .u256 (.scalar (.binOp .add (.var 3) (.binOp .add (.var 6) (.var 5)))) (.ret 7)
 
 /-- Valid propositional property for FastCheck: checks `a + b == b + a` on `.u256`. -/
-def evmAddCommPropDecl : LNIRDecl := {
-  name      := "evm_add_comm_prop"
-  params    := [
-    { id := 0, name := "a", ty := .u256, borrow := false },
-    { id := 1, name := "b", ty := .u256, borrow := false }
-  ]
-  retTy     := .i1
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 2 .u256 (.scalar (.binOp .add (.var 0) (.var 1))) (
-      .letBind 3 .u256 (.scalar (.binOp .add (.var 1) (.var 0))) (
-        .letBind 4 .i1 (.scalar (.binOp .eq (.var 2) (.var 3))) (
-          .ret 4
-        )
-      )
-    )
-}
+def evmAddCommPropDecl : LNIRDecl :=
+  mkBenchDecl "evm_add_comm_prop" [(0, "a", .u256, false), (1, "b", .u256, false)] .i1 true <|
+    .letBind 2 .u256 (.scalar (.binOp .add (.var 0) (.var 1))) <|
+    .letBind 3 .u256 (.scalar (.binOp .add (.var 1) (.var 0))) <|
+    .letBind 4 .i1 (.scalar (.binOp .eq (.var 2) (.var 3))) (.ret 4)
 
 /-- Buggy propositional property with an equality precondition `x0 == x1 + 42` in an `ite` guard
-    and a conclusion `x0 < 1000000` that fails for large `x1`.
-    Demonstrates that equality constraint propagation (`x0 := x1 + 42`) immediately finds a
-    certified counterexample whereas naive rejection sampling without constraint propagation
-    suffers a Vacuous Pass (`satisfiedPreconditionsCount == 0`). -/
-def evmConstrainedBuggyPropDecl : LNIRDecl := {
-  name      := "evm_constrained_buggy_prop"
-  params    := [
-    { id := 0, name := "x0", ty := .i64, borrow := false },
-    { id := 1, name := "x1", ty := .i64, borrow := false }
-  ]
-  retTy     := .i1
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 2 .i1 (.scalar (.binOp .eq (.var 0) (.binOp .add (.var 1) (.constU64 42)))) (
-      .ite 2
-        (.letBind 3 .i1 (.scalar (.binOp .lt (.var 0) (.constU64 1000000))) (.ret 3))
-        (.letBind 4 .i1 (.scalar (.constBool true)) (.ret 4))
-    )
-}
+    and a conclusion `x0 < 1000000` that fails for large `x1`. -/
+def evmConstrainedBuggyPropDecl : LNIRDecl :=
+  mkBenchDecl "evm_constrained_buggy_prop" [(0, "x0", .i64, false), (1, "x1", .i64, false)] .i1 true <|
+    .letBind 2 .i1 (.scalar (.binOp .eq (.var 0) (.binOp .add (.var 1) (.constU64 42)))) <|
+    .ite 2
+      (.letBind 3 .i1 (.scalar (.binOp .lt (.var 0) (.constU64 1000000))) (.ret 3))
+      (.letBind 4 .i1 (.scalar (.constBool true)) (.ret 4))
 
 /-- Propositional FastCheck sample module containing `evm_add_comm_prop` and `evm_constrained_buggy_prop`. -/
 def mkFastCheckSampleModule : LNIRModule := {
   moduleName := "LeanNative.FastCheck.Sample"
-  decls      := [
-    evmAddCommPropDecl,
-    evmConstrainedBuggyPropDecl
-  ]
+  decls      := [evmAddCommPropDecl, evmConstrainedBuggyPropDecl]
 }
 
 namespace Codec
 
 /-- 1. `collatz_steps`: Scalar loop with strength-reduction (`x * 2`, `x / 2`, `x + 0`, `x * 1`) opportunities. -/
-def collatzStepsDecl : LNIRDecl := {
-  name      := "collatz_steps"
-  params    := [
-    { id := 0, name := "n", ty := .i64, borrow := false },
-    { id := 1, name := "steps", ty := .i64, borrow := false }
-  ]
-  retTy     := .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := false
-  body      :=
-    .letBind 2 .i64 (.scalar (.constU64 0)) (
-      .seqFor 3 2 1 4 0 .i64
-        (.letBind 5 .i64 (.scalar (.binOp .mul (.var 4) (.constU64 2)))
-          (.letBind 6 .i64 (.scalar (.binOp .add (.var 5) (.var 4)))
-            (.letBind 7 .i64 (.scalar (.binOp .add (.var 6) (.constU64 1)))
-              (.letBind 8 .i64 (.scalar (.binOp .div (.var 7) (.constU64 2)))
-                (.letBind 9 .i64 (.scalar (.binOp .add (.var 8) (.constU64 0)))
-                  (.ret 9))))))
-        (.ret 4)
-    )
-}
+def collatzStepsDecl : LNIRDecl :=
+  mkBenchDecl "collatz_steps" [(0, "n", .i64, false), (1, "steps", .i64, false)] .i64 false <|
+    .letBind 2 .i64 (.scalar (.constU64 0)) <|
+    .seqFor 3 2 1 4 0 .i64
+      (.letBind 5 .i64 (.scalar (.binOp .mul (.var 4) (.constU64 2)))
+        (.letBind 6 .i64 (.scalar (.binOp .add (.var 5) (.var 4)))
+          (.letBind 7 .i64 (.scalar (.binOp .add (.var 6) (.constU64 1)))
+            (.letBind 8 .i64 (.scalar (.binOp .div (.var 7) (.constU64 2)))
+              (.letBind 9 .i64 (.scalar (.binOp .add (.var 8) (.constU64 0))) (.ret 9))))))
+      (.ret 4)
 
 /-- 2. `tuple_accum_sum`: Loop constructing intermediate 2-tuples `mkTuple` and projecting fields (`UnboxTupleSROA`). -/
-def tupleAccumSumDecl : LNIRDecl := {
-  name      := "tuple_accum_sum"
-  params    := [
-    { id := 0, name := "n", ty := .i64, borrow := false },
-    { id := 1, name := "seed", ty := .i64, borrow := false }
-  ]
-  retTy     := .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := false
-  body      :=
-    .letBind 2 .i64 (.scalar (.constU64 0)) (
-      .seqFor 3 2 0 4 1 .i64
-        (.letBind 5 .i64 (.scalar (.binOp .add (.var 4) (.var 3)))
-          (.letBind 6 .i64 (.scalar (.binOp .mul (.var 3) (.constU64 2)))
-            (.letBind 7 (.tuple [.i64, .i64]) (.mkTuple [5, 6])
-              (.letBind 8 .i64 (.projTuple 7 0)
-                (.letBind 9 .i64 (.projTuple 7 1)
-                  (.letBind 10 .i64 (.scalar (.binOp .add (.var 8) (.var 9)))
-                    (.ret 10)))))))
-        (.ret 4)
-    )
-}
+def tupleAccumSumDecl : LNIRDecl :=
+  mkBenchDecl "tuple_accum_sum" [(0, "n", .i64, false), (1, "seed", .i64, false)] .i64 false <|
+    .letBind 2 .i64 (.scalar (.constU64 0)) <|
+    .seqFor 3 2 0 4 1 .i64
+      (.letBind 5 .i64 (.scalar (.binOp .add (.var 4) (.var 3)))
+        (.letBind 6 .i64 (.scalar (.binOp .mul (.var 3) (.constU64 2)))
+          (.letBind 7 (.tuple [.i64, .i64]) (.mkTuple [5, 6])
+            (.letBind 8 .i64 (.projTuple 7 0)
+              (.letBind 9 .i64 (.projTuple 7 1)
+                (.letBind 10 .i64 (.scalar (.binOp .add (.var 8) (.var 9))) (.ret 10)))))))
+      (.ret 4)
 
 /-- 3. `sarray_scale_bias`: In-place scalar array loop with `sarrayEnsureExclusive` inside the loop body (`HoistExclusivity`). -/
-def sarrayScaleBiasDecl : LNIRDecl := {
-  name      := "sarray_scale_bias"
-  params    := [
-    { id := 0, name := "arr", ty := .sarray .i64, borrow := false },
-    { id := 1, name := "scale", ty := .i64, borrow := false },
-    { id := 2, name := "bias", ty := .i64, borrow := false }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 3 .i64 (.scalar (.constU64 0)) (
-      .letBind 4 .i64 (.sarrayLen 0) (
-        .seqFor 5 3 4 6 0 (.sarray .i64)
-          (.letBind 7 (.sarray .i64) (.sarrayEnsureExclusive 6 .i64)
-            (.letBind 8 .i64 (.sarrayGet 7 5 .i64)
-              (.letBind 9 .i64 (.scalar (.fma (.var 8) (.var 1) (.var 2)))
-                (.letBind 10 (.sarray .i64) (.sarraySet 7 5 9 .i64)
-                  (.ret 10)))))
-          (.ret 6)
-      )
-    )
-}
+def sarrayScaleBiasDecl : LNIRDecl :=
+  mkBenchDecl "sarray_scale_bias"
+    [(0, "arr", .sarray .i64, false), (1, "scale", .i64, false), (2, "bias", .i64, false)]
+    (.sarray .i64) true <|
+    .letBind 3 .i64 (.scalar (.constU64 0)) <|
+    .letBind 4 .i64 (.sarrayLen 0) <|
+    .seqFor 5 3 4 6 0 (.sarray .i64)
+      (.letBind 7 (.sarray .i64) (.sarrayEnsureExclusive 6 .i64)
+        (.letBind 8 .i64 (.sarrayGet 7 5 .i64)
+          (.letBind 9 .i64 (.scalar (.fma (.var 8) (.var 1) (.var 2)))
+            (.letBind 10 (.sarray .i64) (.sarraySet 7 5 9 .i64) (.ret 10)))))
+      (.ret 6)
 
 /-- 4. `dot_product_u64`: Data-parallel dot product / reduction over contiguous arrays with redundant RC pair. -/
-def dotProductU64Decl : LNIRDecl := {
-  name      := "dot_product_u64"
-  params    := [
-    { id := 0, name := "xs", ty := .sarray .i64, borrow := false },
-    { id := 1, name := "ys", ty := .sarray .i64, borrow := false }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .incRef 0 1 (
-      .letBind 2 .i64 (.sarrayLen 0) (
-        .parFor 3 2 [0, 1] .i64 .dotProduct (
-          .decRef 0 1 (.ret 3)
-        )
-      )
-    )
-}
+def dotProductU64Decl : LNIRDecl :=
+  mkBenchDecl "dot_product_u64"
+    [(0, "xs", .sarray .i64, false), (1, "ys", .sarray .i64, false)] (.sarray .i64) true <|
+    .incRef 0 1 (.letBind 2 .i64 (.sarrayLen 0) (.parFor 3 2 [0, 1] .i64 .dotProduct (.decRef 0 1 (.ret 3))))
 
 /-- 5. `saxpy_kernel`: Data-parallel `alpha * x[i] + y[i]` kernel eligible for both CPU SIMD and GPU MLIR/PTX offload. -/
-def saxpyKernelDecl : LNIRDecl := {
-  name      := "saxpy_kernel"
-  params    := [
-    { id := 0, name := "xs", ty := .sarray .i64, borrow := true },
-    { id := 1, name := "ys", ty := .sarray .i64, borrow := true }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 2 .i64 (.sarrayLen 0) (
-      .parFor 3 2 [0, 1] .i64 (.saxpy 4) (.ret 3)
-    )
-}
+def saxpyKernelDecl : LNIRDecl :=
+  mkBenchDecl "saxpy_kernel"
+    [(0, "xs", .sarray .i64, true), (1, "ys", .sarray .i64, true)] (.sarray .i64) true <|
+    .letBind 2 .i64 (.sarrayLen 0) (.parFor 3 2 [0, 1] .i64 (.saxpy 4) (.ret 3))
 
 /-- 6. `matmul_tiled_u64`: Dense numerical matrix kernel eligible for GPU PTX and hybrid CPU/GPU dispatch. -/
-def matmulTiledU64Decl : LNIRDecl := {
-  name      := "matmul_tiled_u64"
-  params    := [
-    { id := 0, name := "matA", ty := .sarray .i64, borrow := true },
-    { id := 1, name := "matB", ty := .sarray .i64, borrow := true },
-    { id := 2, name := "matC", ty := .sarray .i64, borrow := true }
-  ]
-  retTy     := .sarray .i64
-  assurance := .verifiedKernelProof
-  isGpuCand := true
-  body      :=
-    .letBind 3 .i64 (.sarrayLen 0) (
-      .parFor 4 3 [0, 1, 2] .i64
-        (.customScalar 10 [0, 1, 2] (.fma (.var 0) (.var 1) (.var 2)))
-        (.ret 4)
-    )
-}
+def matmulTiledU64Decl : LNIRDecl :=
+  mkBenchDecl "matmul_tiled_u64"
+    [(0, "matA", .sarray .i64, true), (1, "matB", .sarray .i64, true), (2, "matC", .sarray .i64, true)]
+    (.sarray .i64) true <|
+    .letBind 3 .i64 (.sarrayLen 0)
+      (.parFor 4 3 [0, 1, 2] .i64 (.customScalar 10 [0, 1, 2] (.fma (.var 0) (.var 1) (.var 2))) (.ret 4))
 
 /-- Construct the canonical 8-kernel benchmark `LNIRModule` (6 core + 2 EVM/Verity 256-bit kernels). -/
 def mkCanonicalBenchmarkModule : LNIRModule := {
@@ -359,37 +225,26 @@ private def decodeU256Tokens : List String → Option (UInt256 × List String)
     some (⟨l0, l1, h0, h1⟩, rest)
   | _ => none
 
-private def encodeAssurance (a : AssuranceLevel) : String :=
-  match a with
-  | .verifiedKernelProof  => "A_L3"
-  | .translationValidated => "A_L2"
-  | .unverifiedFallback   => "A_L1"
+private def assuranceTable : List (AssuranceLevel × String) :=
+  [(.verifiedKernelProof, "A_L3"), (.translationValidated, "A_L2"), (.unverifiedFallback, "A_L1")]
 
-private def decodeAssurance : String → Option AssuranceLevel
-  | "A_L3" => some .verifiedKernelProof
-  | "A_L2" => some .translationValidated
-  | "A_L1" => some .unverifiedFallback
-  | _      => none
+private def encodeAssurance (a : AssuranceLevel) : String :=
+  (assuranceTable.find? (fun p => p.1 == a)).map Prod.snd |>.getD "A_L1"
+
+private def decodeAssurance (s : String) : Option AssuranceLevel :=
+  (assuranceTable.find? (fun p => p.2 == s)).map Prod.fst
+
+private def atomicTypeTable : List (LNIRType × String) :=
+  [ (.i1, "T_i1"), (.i8, "T_i8"), (.i16, "T_i16"), (.i32, "T_i32"), (.i64, "T_i64")
+  , (.usize, "T_usize"), (.u256, "T_u256"), (.i256, "T_i256"), (.f32, "T_f32"), (.f64, "T_f64")
+  , (.objPtr, "T_objPtr"), (.taggedPtr, "T_taggedPtr"), (.storageMap, "T_storageMap"), (.unit, "T_unit") ]
 
 mutual
   private def encodeTypeTokens : LNIRType → List String
-    | .i1          => ["T_i1"]
-    | .i8          => ["T_i8"]
-    | .i16         => ["T_i16"]
-    | .i32         => ["T_i32"]
-    | .i64         => ["T_i64"]
-    | .usize       => ["T_usize"]
-    | .u256        => ["T_u256"]
-    | .i256        => ["T_i256"]
-    | .f32         => ["T_f32"]
-    | .f64         => ["T_f64"]
-    | .objPtr      => ["T_objPtr"]
-    | .taggedPtr   => ["T_taggedPtr"]
-    | .tuple fs    => "T_tuple" :: encodeNat fs.length :: encodeTypeListTokens fs
-    | .sarray e    => "T_sarray" :: encodeTypeTokens e
-    | .rawPtr e    => "T_rawPtr" :: encodeTypeTokens e
-    | .storageMap  => ["T_storageMap"]
-    | .unit        => ["T_unit"]
+    | .tuple fs   => "T_tuple" :: encodeNat fs.length :: encodeTypeListTokens fs
+    | .sarray e   => "T_sarray" :: encodeTypeTokens e
+    | .rawPtr e   => "T_rawPtr" :: encodeTypeTokens e
+    | ty          => [(atomicTypeTable.find? (fun p => p.1 == ty)).map Prod.snd |>.getD "T_unit"]
 
   private def encodeTypeListTokens : List LNIRType → List String
     | [] => []
@@ -399,38 +254,21 @@ end
 mutual
   private def decodeTypeTokens (fuel : Nat) (toks : List String) : Option (LNIRType × List String) :=
     match fuel, toks with
-    | 0, _ => none
-    | _, [] => none
+    | 0, _ | _, [] => none
     | f + 1, tag :: rest =>
-      match tag with
-      | "T_i1"         => some (.i1, rest)
-      | "T_i8"         => some (.i8, rest)
-      | "T_i16"        => some (.i16, rest)
-      | "T_i32"        => some (.i32, rest)
-      | "T_i64"        => some (.i64, rest)
-      | "T_usize"      => some (.usize, rest)
-      | "T_u256"       => some (.u256, rest)
-      | "T_i256"       => some (.i256, rest)
-      | "T_f32"        => some (.f32, rest)
-      | "T_f64"        => some (.f64, rest)
-      | "T_objPtr"     => some (.objPtr, rest)
-      | "T_taggedPtr"  => some (.taggedPtr, rest)
-      | "T_storageMap" => some (.storageMap, rest)
-      | "T_unit"       => some (.unit, rest)
-      | "T_sarray"     => do
-        let (elem, rest1) ← decodeTypeTokens f rest
-        some (.sarray elem, rest1)
-      | "T_rawPtr"     => do
-        let (elem, rest1) ← decodeTypeTokens f rest
-        some (.rawPtr elem, rest1)
-      | "T_tuple"      =>
-        match rest with
-        | countTok :: rest1 => do
-          let count ← decodeNat countTok
-          let (fs, rest2) ← decodeTypeListTokens f count rest1
-          some (.tuple fs, rest2)
-        | [] => none
-      | _ => none
+      match atomicTypeTable.find? (fun p => p.2 == tag) with
+      | some (ty, _) => some (ty, rest)
+      | none =>
+        match tag with
+        | "T_sarray" => do let (elem, r1) ← decodeTypeTokens f rest; some (.sarray elem, r1)
+        | "T_rawPtr" => do let (elem, r1) ← decodeTypeTokens f rest; some (.rawPtr elem, r1)
+        | "T_tuple"  =>
+          match rest with
+          | countTok :: r1 => do
+            let (fs, r2) ← decodeTypeListTokens f (← decodeNat countTok) r1
+            some (.tuple fs, r2)
+          | [] => none
+        | _ => none
 
   private def decodeTypeListTokens (fuel : Nat) (count : Nat) (toks : List String) :
       Option (List LNIRType × List String) :=
@@ -438,60 +276,31 @@ mutual
     | _, 0 => some ([], toks)
     | 0, _ + 1 => none
     | f + 1, c + 1 => do
-      let (t, rest1) ← decodeTypeTokens f toks
-      let (ts, rest2) ← decodeTypeListTokens f c rest1
-      some (t :: ts, rest2)
+      let (t, r1) ← decodeTypeTokens f toks
+      let (ts, r2) ← decodeTypeListTokens f c r1
+      some (t :: ts, r2)
 end
 
-private def encodeBinOp : BinOp → String
-  | .add           => "B_add"
-  | .sub           => "B_sub"
-  | .mul           => "B_mul"
-  | .div           => "B_div"
-  | .mod           => "B_mod"
-  | .bitAnd        => "B_bitAnd"
-  | .bitOr         => "B_bitOr"
-  | .bitXor        => "B_bitXor"
-  | .shl           => "B_shl"
-  | .shr           => "B_shr"
-  | .sar           => "B_sar"
-  | .eq            => "B_eq"
-  | .lt            => "B_lt"
-  | .le            => "B_le"
-  | .addChecked256 => "B_addChecked256"
-  | .subChecked256 => "B_subChecked256"
-  | .mulChecked256 => "B_mulChecked256"
+private def binOpTable : List (BinOp × String) :=
+  [ (.add, "B_add"), (.sub, "B_sub"), (.mul, "B_mul"), (.div, "B_div"), (.mod, "B_mod")
+  , (.bitAnd, "B_bitAnd"), (.bitOr, "B_bitOr"), (.bitXor, "B_bitXor")
+  , (.shl, "B_shl"), (.shr, "B_shr"), (.sar, "B_sar"), (.eq, "B_eq"), (.lt, "B_lt"), (.le, "B_le")
+  , (.addChecked256, "B_addChecked256"), (.subChecked256, "B_subChecked256"), (.mulChecked256, "B_mulChecked256") ]
 
-private def decodeBinOp : String → Option BinOp
-  | "B_add"           => some .add
-  | "B_sub"           => some .sub
-  | "B_mul"           => some .mul
-  | "B_div"           => some .div
-  | "B_mod"           => some .mod
-  | "B_bitAnd"        => some .bitAnd
-  | "B_bitOr"         => some .bitOr
-  | "B_bitXor"        => some .bitXor
-  | "B_shl"           => some .shl
-  | "B_shr"           => some .shr
-  | "B_sar"           => some .sar
-  | "B_eq"            => some .eq
-  | "B_lt"            => some .lt
-  | "B_le"            => some .le
-  | "B_addChecked256" => some .addChecked256
-  | "B_subChecked256" => some .subChecked256
-  | "B_mulChecked256" => some .mulChecked256
-  | _                 => none
+private def encodeBinOp (op : BinOp) : String :=
+  (binOpTable.find? (fun p => p.1 == op)).map Prod.snd |>.getD "B_add"
 
-private def encodeUnaryOp : UnaryOp → String
-  | .not    => "U_not"
-  | .neg    => "U_neg"
-  | .clz256 => "U_clz256"
+private def decodeBinOp (s : String) : Option BinOp :=
+  (binOpTable.find? (fun p => p.2 == s)).map Prod.fst
 
-private def decodeUnaryOp : String → Option UnaryOp
-  | "U_not"    => some .not
-  | "U_neg"    => some .neg
-  | "U_clz256" => some .clz256
-  | _          => none
+private def unaryOpTable : List (UnaryOp × String) :=
+  [(.not, "U_not"), (.neg, "U_neg"), (.clz256, "U_clz256")]
+
+private def encodeUnaryOp (op : UnaryOp) : String :=
+  (unaryOpTable.find? (fun p => p.1 == op)).map Prod.snd |>.getD "U_not"
+
+private def decodeUnaryOp (s : String) : Option UnaryOp :=
+  (unaryOpTable.find? (fun p => p.2 == s)).map Prod.fst
 
 private def encodeScalarTokens : ScalarExpr → List String
   | .constU64 v       => ["S_u64", encodeU64 v]
@@ -632,96 +441,49 @@ private def encodeExprTokens : LNIRExpr → List String
 
 private def decodeExprTokens (fuel : Nat) (toks : List String) : Option (LNIRExpr × List String) :=
   match toks with
-  | "E_scalar" :: rest => do
-    let (se, rest1) ← decodeScalarTokens fuel rest
-    some (.scalar se, rest1)
-  | "E_u256" :: rest => do
-    let (w, rest1) ← decodeU256Tokens rest
-    some (.constU256 w, rest1)
+  | "E_scalar" :: rest => do let (se, r1) ← decodeScalarTokens fuel rest; some (.scalar se, r1)
+  | "E_u256" :: rest => do let (w, r1) ← decodeU256Tokens rest; some (.constU256 w, r1)
   | "E_mdd" :: aT :: bT :: dT :: rest => do
-    let a ← decodeNat aT
-    let b ← decodeNat bT
-    let d ← decodeNat dT
-    some (.mulDivDown a b d, rest)
+    some (.mulDivDown (← decodeNat aT) (← decodeNat bT) (← decodeNat dT), rest)
   | "E_mdu" :: aT :: bT :: dT :: rest => do
-    let a ← decodeNat aT
-    let b ← decodeNat bT
-    let d ← decodeNat dT
-    some (.mulDivUp a b d, rest)
-  | "E_sload" :: mT :: sT :: rest => do
-    let m ← decodeNat mT
-    let s ← decodeNat sT
-    some (.storageLoad m s, rest)
+    some (.mulDivUp (← decodeNat aT) (← decodeNat bT) (← decodeNat dT), rest)
+  | "E_sload" :: mT :: sT :: rest => do some (.storageLoad (← decodeNat mT) (← decodeNat sT), rest)
   | "E_sstore" :: mT :: sT :: vT :: rest => do
-    let m ← decodeNat mT
-    let s ← decodeNat sT
-    let v ← decodeNat vT
-    some (.storageStore m s v, rest)
-  | "E_mktup" :: rest => do
-    let (fs, rest1) ← decodeNatListTokens rest
-    some (.mkTuple fs, rest1)
+    some (.storageStore (← decodeNat mT) (← decodeNat sT) (← decodeNat vT), rest)
+  | "E_mktup" :: rest => do let (fs, r1) ← decodeNatListTokens rest; some (.mkTuple fs, r1)
   | "E_projtup" :: tvT :: idxT :: rest => do
-    let tv ← decodeNat tvT
-    let idx ← decodeNat idxT
-    some (.projTuple tv idx, rest)
+    some (.projTuple (← decodeNat tvT) (← decodeNat idxT), rest)
   | "E_ctor" :: tagT :: rest => do
     let tag ← decodeNat tagT
-    let (objs, rest1) ← decodeNatListTokens rest
-    let (scals, rest2) ← decodeNatListTokens rest1
-    some (.allocCtor tag objs scals, rest2)
+    let (objs, r1) ← decodeNatListTokens rest
+    let (scals, r2) ← decodeNatListTokens r1
+    some (.allocCtor tag objs scals, r2)
   | "E_cgeto" :: cvT :: idxT :: rest => do
-    let cv ← decodeNat cvT
-    let idx ← decodeNat idxT
-    some (.ctorGetObj cv idx, rest)
+    some (.ctorGetObj (← decodeNat cvT) (← decodeNat idxT), rest)
   | "E_cgets" :: cvT :: idxT :: rest => do
-    let cv ← decodeNat cvT
-    let idx ← decodeNat idxT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.ctorGetScalar cv idx ty, rest1)
-  | "E_isexcl" :: ovT :: rest => do
-    let ov ← decodeNat ovT
-    some (.isExclusive ov, rest)
-  | "E_salen" :: avT :: rest => do
-    let av ← decodeNat avT
-    some (.sarrayLen av, rest)
+    let (ty, r1) ← decodeTypeTokens fuel rest
+    some (.ctorGetScalar (← decodeNat cvT) (← decodeNat idxT) ty, r1)
+  | "E_isexcl" :: ovT :: rest => do some (.isExclusive (← decodeNat ovT), rest)
+  | "E_salen" :: avT :: rest => do some (.sarrayLen (← decodeNat avT), rest)
   | "E_sadptr" :: avT :: rest => do
-    let av ← decodeNat avT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.sarrayDataPtr av ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest; some (.sarrayDataPtr (← decodeNat avT) ty, r1)
   | "E_saexcl" :: avT :: rest => do
-    let av ← decodeNat avT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.sarrayEnsureExclusive av ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest; some (.sarrayEnsureExclusive (← decodeNat avT) ty, r1)
   | "E_saget" :: avT :: ivT :: rest => do
-    let av ← decodeNat avT
-    let iv ← decodeNat ivT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.sarrayGet av iv ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest; some (.sarrayGet (← decodeNat avT) (← decodeNat ivT) ty, r1)
   | "E_saset" :: avT :: ivT :: vvT :: rest => do
-    let av ← decodeNat avT
-    let iv ← decodeNat ivT
-    let vv ← decodeNat vvT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.sarraySet av iv vv ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest
+    some (.sarraySet (← decodeNat avT) (← decodeNat ivT) (← decodeNat vvT) ty, r1)
   | "E_rload" :: pvT :: ivT :: rest => do
-    let pv ← decodeNat pvT
-    let iv ← decodeNat ivT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.rawLoad pv iv ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest; some (.rawLoad (← decodeNat pvT) (← decodeNat ivT) ty, r1)
   | "E_box" :: vvT :: rest => do
-    let vv ← decodeNat vvT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.boxScalar vv ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest; some (.boxScalar (← decodeNat vvT) ty, r1)
   | "E_unbox" :: bvT :: rest => do
-    let bv ← decodeNat bvT
-    let (ty, rest1) ← decodeTypeTokens fuel rest
-    some (.unboxScalar bv ty, rest1)
+    let (ty, r1) ← decodeTypeTokens fuel rest; some (.unboxScalar (← decodeNat bvT) ty, r1)
   | "E_call" :: fnHex :: extT :: rest => do
-    let fn ← hexDecodeString fnHex
-    let isExt ← decodeBool extT
-    let (args, rest1) ← decodeNatListTokens rest
-    let (rty, rest2) ← decodeTypeTokens fuel rest1
-    some (.call fn args rty isExt, rest2)
+    let (args, r1) ← decodeNatListTokens rest
+    let (rty, r2) ← decodeTypeTokens fuel r1
+    some (.call (← hexDecodeString fnHex) args rty (← decodeBool extT), r2)
   | _ => none
 
 private def encodeCodeTokens : LNIRCode → List String
@@ -729,12 +491,9 @@ private def encodeCodeTokens : LNIRCode → List String
     "C_let" :: encodeNat dst :: encodeTypeTokens ty ++ encodeExprTokens val ++ encodeCodeTokens k
   | .rawStore pv iv vv ty k =>
     "C_rstore" :: encodeNat pv :: encodeNat iv :: encodeNat vv :: encodeTypeTokens ty ++ encodeCodeTokens k
-  | .incRef ov cnt k =>
-    "C_inc" :: encodeNat ov :: encodeNat cnt :: encodeCodeTokens k
-  | .decRef ov cnt k =>
-    "C_dec" :: encodeNat ov :: encodeNat cnt :: encodeCodeTokens k
-  | .ite cv t e =>
-    "C_ite" :: encodeNat cv :: encodeCodeTokens t ++ encodeCodeTokens e
+  | .incRef ov cnt k => "C_inc" :: encodeNat ov :: encodeNat cnt :: encodeCodeTokens k
+  | .decRef ov cnt k => "C_dec" :: encodeNat ov :: encodeNat cnt :: encodeCodeTokens k
+  | .ite cv t e => "C_ite" :: encodeNat cv :: encodeCodeTokens t ++ encodeCodeTokens e
   | .seqFor iv lv hv av ai aty step k =>
     "C_seq" :: encodeNat iv :: encodeNat lv :: encodeNat hv :: encodeNat av :: encodeNat ai ::
       encodeTypeTokens aty ++ encodeCodeTokens step ++ encodeCodeTokens k
@@ -746,86 +505,40 @@ private def encodeCodeTokens : LNIRCode → List String
 
 private def decodeCodeTokens (fuel : Nat) (toks : List String) : Option (LNIRCode × List String) :=
   match fuel, toks with
-  | 0, _ => none
-  | _, [] => none
+  | 0, _ | _, [] => none
   | f + 1, tag :: rest =>
-    match tag with
-    | "C_let" =>
-      match rest with
-      | dstT :: rest1 => do
-        let dst ← decodeNat dstT
-        let (ty, rest2) ← decodeTypeTokens f rest1
-        let (val, rest3) ← decodeExprTokens f rest2
-        let (k, rest4) ← decodeCodeTokens f rest3
-        some (.letBind dst ty val k, rest4)
-      | [] => none
-    | "C_rstore" =>
-      match rest with
-      | pvT :: ivT :: vvT :: rest1 => do
-        let pv ← decodeNat pvT
-        let iv ← decodeNat ivT
-        let vv ← decodeNat vvT
-        let (ty, rest2) ← decodeTypeTokens f rest1
-        let (k, rest3) ← decodeCodeTokens f rest2
-        some (.rawStore pv iv vv ty k, rest3)
-      | _ => none
-    | "C_inc" =>
-      match rest with
-      | ovT :: cntT :: rest1 => do
-        let ov ← decodeNat ovT
-        let cnt ← decodeNat cntT
-        let (k, rest2) ← decodeCodeTokens f rest1
-        some (.incRef ov cnt k, rest2)
-      | _ => none
-    | "C_dec" =>
-      match rest with
-      | ovT :: cntT :: rest1 => do
-        let ov ← decodeNat ovT
-        let cnt ← decodeNat cntT
-        let (k, rest2) ← decodeCodeTokens f rest1
-        some (.decRef ov cnt k, rest2)
-      | _ => none
-    | "C_ite" =>
-      match rest with
-      | cvT :: rest1 => do
-        let cv ← decodeNat cvT
-        let (t, rest2) ← decodeCodeTokens f rest1
-        let (e, rest3) ← decodeCodeTokens f rest2
-        some (.ite cv t e, rest3)
-      | [] => none
-    | "C_seq" =>
-      match rest with
-      | ivT :: lvT :: hvT :: avT :: aiT :: rest1 => do
-        let iv ← decodeNat ivT
-        let lv ← decodeNat lvT
-        let hv ← decodeNat hvT
-        let av ← decodeNat avT
-        let ai ← decodeNat aiT
-        let (aty, rest2) ← decodeTypeTokens f rest1
-        let (step, rest3) ← decodeCodeTokens f rest2
-        let (k, rest4) ← decodeCodeTokens f rest3
-        some (.seqFor iv lv hv av ai aty step k, rest4)
-      | _ => none
-    | "C_par" =>
-      match rest with
-      | ovT :: lvT :: rest1 => do
-        let ov ← decodeNat ovT
-        let lv ← decodeNat lvT
-        let (ins, rest2) ← decodeNatListTokens rest1
-        let (ety, rest3) ← decodeTypeTokens f rest2
-        let (kern, rest4) ← decodeKernelTokens f rest3
-        let (k, rest5) ← decodeCodeTokens f rest4
-        some (.parFor ov lv ins ety kern k, rest5)
-      | _ => none
-    | "C_ret" =>
-      match rest with
-      | vT :: rest1 => do
-        let v ← decodeNat vT
-        some (.ret v, rest1)
-      | [] => none
-    | "C_unreach" =>
-      some (.unreachable, rest)
-    | _ => none
+    match tag, rest with
+    | "C_let", dstT :: r1 => do
+      let (ty, r2) ← decodeTypeTokens f r1
+      let (val, r3) ← decodeExprTokens f r2
+      let (k, r4) ← decodeCodeTokens f r3
+      some (.letBind (← decodeNat dstT) ty val k, r4)
+    | "C_rstore", pvT :: ivT :: vvT :: r1 => do
+      let (ty, r2) ← decodeTypeTokens f r1
+      let (k, r3) ← decodeCodeTokens f r2
+      some (.rawStore (← decodeNat pvT) (← decodeNat ivT) (← decodeNat vvT) ty k, r3)
+    | "C_inc", ovT :: cntT :: r1 => do
+      let (k, r2) ← decodeCodeTokens f r1; some (.incRef (← decodeNat ovT) (← decodeNat cntT) k, r2)
+    | "C_dec", ovT :: cntT :: r1 => do
+      let (k, r2) ← decodeCodeTokens f r1; some (.decRef (← decodeNat ovT) (← decodeNat cntT) k, r2)
+    | "C_ite", cvT :: r1 => do
+      let (t, r2) ← decodeCodeTokens f r1
+      let (e, r3) ← decodeCodeTokens f r2
+      some (.ite (← decodeNat cvT) t e, r3)
+    | "C_seq", ivT :: lvT :: hvT :: avT :: aiT :: r1 => do
+      let (aty, r2) ← decodeTypeTokens f r1
+      let (step, r3) ← decodeCodeTokens f r2
+      let (k, r4) ← decodeCodeTokens f r3
+      some (.seqFor (← decodeNat ivT) (← decodeNat lvT) (← decodeNat hvT) (← decodeNat avT) (← decodeNat aiT) aty step k, r4)
+    | "C_par", ovT :: lvT :: r1 => do
+      let (ins, r2) ← decodeNatListTokens r1
+      let (ety, r3) ← decodeTypeTokens f r2
+      let (kern, r4) ← decodeKernelTokens f r3
+      let (k, r5) ← decodeCodeTokens f r4
+      some (.parFor (← decodeNat ovT) (← decodeNat lvT) ins ety kern k, r5)
+    | "C_ret", vT :: r1 => do some (.ret (← decodeNat vT), r1)
+    | "C_unreach", _ => some (.unreachable, rest)
+    | _, _ => none
 
 private def encodeParamTokens (p : LNIRParam) : List String :=
   encodeNat p.id :: hexEncodeString p.name :: encodeBool p.borrow :: encodeTypeTokens p.ty

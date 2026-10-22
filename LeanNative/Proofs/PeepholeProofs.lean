@@ -25,100 +25,48 @@ theorem uint64_zero_or (a : UInt64) : (0 : UInt64) ||| a = a := UInt64.zero_or
 
 theorem uint64_mul_two (a : UInt64) : a * (2 : UInt64) = a <<< (1 : UInt64) := by
   cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 2#64 = bv <<< 1; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
-
 theorem uint64_mul_four (a : UInt64) : a * (4 : UInt64) = a <<< (2 : UInt64) := by
   cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 4#64 = bv <<< 2; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
-
 theorem uint64_mul_eight (a : UInt64) : a * (8 : UInt64) = a <<< (3 : UInt64) := by
   cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 8#64 = bv <<< 3; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
-
 theorem uint64_mul_sixteen (a : UInt64) : a * (16 : UInt64) = a <<< (4 : UInt64) := by
   cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 16#64 = bv <<< 4; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
-
 theorem uint64_mul_thirtytwo (a : UInt64) : a * (32 : UInt64) = a <<< (5 : UInt64) := by
   cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv * 32#64 = bv <<< 5; rw [BitVec.shiftLeft_eq_mul_twoPow]; rfl)
-
-theorem uint64_two_mul (a : UInt64) : (2 : UInt64) * a = a <<< (1 : UInt64) := by
-  rw [UInt64.mul_comm, uint64_mul_two]
-
-theorem uint64_four_mul (a : UInt64) : (4 : UInt64) * a = a <<< (2 : UInt64) := by
-  rw [UInt64.mul_comm, uint64_mul_four]
-
-theorem uint64_eight_mul (a : UInt64) : (8 : UInt64) * a = a <<< (3 : UInt64) := by
-  rw [UInt64.mul_comm, uint64_mul_eight]
-
+theorem uint64_two_mul (a : UInt64) : (2 : UInt64) * a = a <<< (1 : UInt64) := by rw [UInt64.mul_comm, uint64_mul_two]
+theorem uint64_four_mul (a : UInt64) : (4 : UInt64) * a = a <<< (2 : UInt64) := by rw [UInt64.mul_comm, uint64_mul_four]
+theorem uint64_eight_mul (a : UInt64) : (8 : UInt64) * a = a <<< (3 : UInt64) := by rw [UInt64.mul_comm, uint64_mul_eight]
 theorem uint64_div_two (a : UInt64) : a / (2 : UInt64) = a >>> (1 : UInt64) := by
   cases a with | ofBitVec bv => rcases bv with ⟨n, _⟩; exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by change n / 2 = n >>> 1; rw [Nat.shiftRight_eq_div_pow]))
-
 theorem uint64_div_four (a : UInt64) : a / (4 : UInt64) = a >>> (2 : UInt64) := by
   cases a with | ofBitVec bv => rcases bv with ⟨n, _⟩; exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by change n / 4 = n >>> 2; rw [Nat.shiftRight_eq_div_pow]))
-
 theorem uint64_div_eight (a : UInt64) : a / (8 : UInt64) = a >>> (3 : UInt64) := by
   cases a with | ofBitVec bv => rcases bv with ⟨n, _⟩; exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by change n / 8 = n >>> 3; rw [Nat.shiftRight_eq_div_pow]))
-
 theorem uint64_add_self_shl_one (a : UInt64) : a + a = a <<< (1 : UInt64) := by
   rw [← uint64_mul_two]; cases a with | ofBitVec bv => exact congrArg UInt64.ofBitVec (by change bv + bv = bv * 2#64; rw [BitVec.mul_two])
-
-theorem uint64_add_assoc_const (a c1 c2 : UInt64) : (a + c1) + c2 = a + (c1 + c2) :=
-  UInt64.add_assoc a c1 c2
-
+theorem uint64_add_assoc_const (a c1 c2 : UInt64) : (a + c1) + c2 = a + (c1 + c2) := UInt64.add_assoc a c1 c2
 theorem uint64_and_mask_coalesce (a m1 m2 : UInt64) : (a &&& m1) &&& m2 = a &&& (m1 &&& m2) := by
   cases a; cases m1; cases m2; exact congrArg UInt64.ofBitVec (BitVec.and_assoc ..)
-
 theorem uint64_or_mask_coalesce (a m1 m2 : UInt64) : (a ||| m1) ||| m2 = a ||| (m1 ||| m2) := by
   cases a; cases m1; cases m2; exact congrArg UInt64.ofBitVec (BitVec.or_assoc ..)
-
 theorem uint64_xor_mask_coalesce (a m1 m2 : UInt64) : (a ^^^ m1) ^^^ m2 = a ^^^ (m1 ^^^ m2) := by
   cases a; cases m1; cases m2; exact congrArg UInt64.ofBitVec (BitVec.xor_assoc ..)
-
 theorem uint64_mul_add_distrib_const (a b c : UInt64) : a * b + a * c = a * (b + c) := by
   cases a; cases b; cases c; exact congrArg UInt64.ofBitVec BitVec.mul_add.symm
 
 /-! ## Semantic Lemmas for `evalBinOp` -/
 
-@[simp]
-theorem evalBinOp_add_zero (v : Val) : evalBinOp .add v (.u64 0) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_zero_add (v : Val) : evalBinOp .add (.u64 0) v = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_sub_zero (v : Val) : evalBinOp .sub v (.u64 0) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_mul_one (v : Val) : evalBinOp .mul v (.u64 1) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_one_mul (v : Val) : evalBinOp .mul (.u64 1) v = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_xor_zero (v : Val) : evalBinOp .bitXor v (.u64 0) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_zero_xor (v : Val) : evalBinOp .bitXor (.u64 0) v = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_or_zero (v : Val) : evalBinOp .bitOr v (.u64 0) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_zero_or (v : Val) : evalBinOp .bitOr (.u64 0) v = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-
-@[simp]
-theorem evalBinOp_and_self (v : Val) : evalBinOp .bitAnd v v = .ok v := by
-  unfold evalBinOp; cases v <;> simp [Val.beq_self]
-
-@[simp]
-theorem evalBinOp_or_self (v : Val) : evalBinOp .bitOr v v = .ok v := by
-  unfold evalBinOp; cases v <;> simp [Val.beq_self]
+@[simp] theorem evalBinOp_add_zero (v : Val) : evalBinOp .add v (.u64 0) = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_zero_add (v : Val) : evalBinOp .add (.u64 0) v = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_sub_zero (v : Val) : evalBinOp .sub v (.u64 0) = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_mul_one (v : Val) : evalBinOp .mul v (.u64 1) = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_one_mul (v : Val) : evalBinOp .mul (.u64 1) v = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_xor_zero (v : Val) : evalBinOp .bitXor v (.u64 0) = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_zero_xor (v : Val) : evalBinOp .bitXor (.u64 0) v = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_or_zero (v : Val) : evalBinOp .bitOr v (.u64 0) = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_zero_or (v : Val) : evalBinOp .bitOr (.u64 0) v = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_and_self (v : Val) : evalBinOp .bitAnd v v = .ok v := by unfold evalBinOp; cases v <;> simp [Val.beq_self]
+@[simp] theorem evalBinOp_or_self (v : Val) : evalBinOp .bitOr v v = .ok v := by unfold evalBinOp; cases v <;> simp [Val.beq_self]
 
 theorem evalBinOp_mul_two (v : Val) : evalBinOp .mul v (.u64 2) = evalBinOp .shl v (.u64 1) := by
   unfold evalBinOp; cases v with | u64 _ => simp [uint64_mul_two] | _ => rfl
@@ -310,24 +258,18 @@ theorem rewriteScalarPeephole_sound (e : ScalarExpr) :
     ScalarExprEquiv e (rewriteScalarPeephole e) := by
   intro env
   induction e with
-  | constU64 _ => rfl
-  | constBool _ => rfl
-  | var _ => rfl
+  | constU64 _ | constBool _ | var _ => rfl
   | binOp op lhs rhs ihl ihr =>
-    simp only [rewriteScalarPeephole]
-    rw [← rewriteScalarPeepholeStep_sound (.binOp op (rewriteScalarPeephole lhs) (rewriteScalarPeephole rhs)) env]
+    rw [rewriteScalarPeephole, ← rewriteScalarPeepholeStep_sound _ env]
     simp only [evalScalarExpr, ← ihl, ← ihr]
   | unaryOp op arg iha =>
-    simp only [rewriteScalarPeephole]
-    rw [← rewriteScalarPeepholeStep_sound (.unaryOp op (rewriteScalarPeephole arg)) env]
+    rw [rewriteScalarPeephole, ← rewriteScalarPeepholeStep_sound _ env]
     simp only [evalScalarExpr, ← iha]
   | select cond thenVal elseVal ihc iht ihe =>
-    simp only [rewriteScalarPeephole]
-    rw [← rewriteScalarPeepholeStep_sound (.select (rewriteScalarPeephole cond) (rewriteScalarPeephole thenVal) (rewriteScalarPeephole elseVal)) env]
+    rw [rewriteScalarPeephole, ← rewriteScalarPeepholeStep_sound _ env]
     simp only [evalScalarExpr, ← ihc, ← iht, ← ihe]
   | fma a b c iha ihb ihc =>
-    simp only [rewriteScalarPeephole]
-    rw [← rewriteScalarPeepholeStep_sound (.fma (rewriteScalarPeephole a) (rewriteScalarPeephole b) (rewriteScalarPeephole c)) env]
+    rw [rewriteScalarPeephole, ← rewriteScalarPeepholeStep_sound _ env]
     simp only [evalScalarExpr, ← iha, ← ihb, ← ihc]
 
 /-- Machine-checked soundness theorem for `rewriteLNIRExpr`:
@@ -335,22 +277,14 @@ theorem rewriteScalarPeephole_sound (e : ScalarExpr) :
 theorem rewriteLNIRExpr_sound (e : LNIRExpr) :
     ExprRefines e (rewriteLNIRExpr e) := by
   cases e with
-  | scalar se =>
-    simp only [rewriteLNIRExpr]
-    exact ExprRefines.of_scalar_equiv (rewriteScalarPeephole_sound se)
-  | constU256 _ | mulDivDown _ _ _ | mulDivUp _ _ _ | storageLoad _ _ | storageStore _ _ _
-  | mkTuple _ | projTuple _ _ | allocCtor _ _ _ | ctorGetObj _ _ | ctorGetScalar _ _ _
-  | isExclusive _ | sarrayLen _ | sarrayDataPtr _ _ | sarrayEnsureExclusive _ _
-  | sarrayGet _ _ _ | sarraySet _ _ _ _ | rawLoad _ _ _ | boxScalar _ _
-  | unboxScalar _ _ | call _ _ _ _ =>
-    exact ExprRefines.refl _
+  | scalar se => exact ExprRefines.of_scalar_equiv (rewriteScalarPeephole_sound se)
+  | _ => exact ExprRefines.refl _
 
 /-- Equality form of `rewriteLNIRExpr_sound` (`evalExpr_optimizeExpr_eq`). -/
 theorem evalExpr_optimizeExpr_eq (env : VarEnv) (st : HeapState) (e : LNIRExpr) :
     evalExpr env st (rewriteLNIRExpr e) = evalExpr env st e := by
   cases e with
-  | scalar se =>
-    simp only [rewriteLNIRExpr, evalExpr, ← rewriteScalarPeephole_sound se env]
+  | scalar se => simp only [rewriteLNIRExpr, evalExpr, ← rewriteScalarPeephole_sound se env]
   | _ => rfl
 
 /-- Recursive verified code-level peephole optimizer on `LNIRCode`.
@@ -434,21 +368,10 @@ theorem rewriteCodePeephole_refines (c : LNIRCode) :
 
 /-! ## 256-Bit (`UInt256` / `EVMWord`) & EVM Storage Map Soundness Theorems -/
 
-theorem evalBinOp_u256_and_self (w : UInt256) :
-    evalBinOp .bitAnd (.u256 w) (.u256 w) = .ok (.u256 w) := by
-  unfold evalBinOp; simp
-
-theorem evalBinOp_u256_or_self (w : UInt256) :
-    evalBinOp .bitOr (.u256 w) (.u256 w) = .ok (.u256 w) := by
-  unfold evalBinOp; simp
-
-theorem evalBinOp_u256_xor_zero (w : UInt256) :
-    evalBinOp .bitXor (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w) := by
-  unfold evalBinOp; simp
-
-theorem evalBinOp_u256_or_zero (w : UInt256) :
-    evalBinOp .bitOr (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w) := by
-  unfold evalBinOp; simp
+theorem evalBinOp_u256_and_self (w : UInt256) : evalBinOp .bitAnd (.u256 w) (.u256 w) = .ok (.u256 w) := by unfold evalBinOp; simp
+theorem evalBinOp_u256_or_self (w : UInt256) : evalBinOp .bitOr (.u256 w) (.u256 w) = .ok (.u256 w) := by unfold evalBinOp; simp
+theorem evalBinOp_u256_xor_zero (w : UInt256) : evalBinOp .bitXor (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w) := by unfold evalBinOp; simp
+theorem evalBinOp_u256_or_zero (w : UInt256) : evalBinOp .bitOr (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w) := by unfold evalBinOp; simp
 
 /-- EVM `SLOAD` after `SSTORE` to the same 256-bit slot returns the stored `UInt256` value (`storageStore_load_same_sound`). -/
 theorem storageStore_load_same_sound (env : VarEnv) (st : HeapState)
@@ -460,8 +383,7 @@ theorem storageStore_load_same_sound (env : VarEnv) (st : HeapState)
      | .ok (_, st1) => evalExpr env st1 (.storageLoad mapVar slotVar)
      | .error err => .error err) =
     .ok (.u256 val, st.storageStore mapId slot val) := by
-  unfold evalExpr
-  simp [Val.toU256?, hmap, hslot, hval]
+  unfold evalExpr; simp [Val.toU256?, hmap, hslot, hval]
 
 /-- EVM `SLOAD` after `SSTORE` to a distinct 256-bit slot preserves the prior slot value (`storageStore_load_ne_sound`). -/
 theorem storageStore_load_ne_sound (env : VarEnv) (st : HeapState)
@@ -481,26 +403,17 @@ theorem storageStore_load_ne_sound (env : VarEnv) (st : HeapState)
 /-! ## Verified Binary Constant Folding (`rewriteConstFoldBinOp`) -/
 
 theorem uint64_and_63_mod_64 (b : UInt64) : (b &&& 63).mod 64 = b.mod 64 := by
-  cases b with
-  | ofBitVec bv =>
-    rcases bv with ⟨n, hn⟩
-    apply congrArg UInt64.ofBitVec
-    apply BitVec.eq_of_toNat_eq
-    change (n &&& (2 ^ 6 - 1)) % 64 = n % 64
-    rw [Nat.and_two_pow_sub_one_eq_mod n 6]
-    exact Nat.mod_mod n 64
+  cases b with | ofBitVec bv =>
+    rcases bv with ⟨n, _⟩
+    exact congrArg UInt64.ofBitVec (BitVec.eq_of_toNat_eq (by
+      change (n &&& (2 ^ 6 - 1)) % 64 = n % 64
+      rw [Nat.and_two_pow_sub_one_eq_mod n 6, Nat.mod_mod]))
 
-@[simp]
-theorem uint64_shiftLeft_and_63 (a b : UInt64) : a <<< (b &&& 63) = a <<< b := by
-  change UInt64.shiftLeft a (b &&& 63) = UInt64.shiftLeft a b
-  unfold UInt64.shiftLeft
-  rw [uint64_and_63_mod_64]
+@[simp] theorem uint64_shiftLeft_and_63 (a b : UInt64) : a <<< (b &&& 63) = a <<< b := by
+  change UInt64.shiftLeft a (b &&& 63) = UInt64.shiftLeft a b; unfold UInt64.shiftLeft; rw [uint64_and_63_mod_64]
 
-@[simp]
-theorem uint64_shiftRight_and_63 (a b : UInt64) : a >>> (b &&& 63) = a >>> b := by
-  change UInt64.shiftRight a (b &&& 63) = UInt64.shiftRight a b
-  unfold UInt64.shiftRight
-  rw [uint64_and_63_mod_64]
+@[simp] theorem uint64_shiftRight_and_63 (a b : UInt64) : a >>> (b &&& 63) = a >>> b := by
+  change UInt64.shiftRight a (b &&& 63) = UInt64.shiftRight a b; unfold UInt64.shiftRight; rw [uint64_and_63_mod_64]
 
 /-- Verified binary constant folding on `UInt64` scalar literals. -/
 def rewriteConstFoldBinOp (op : BinOp) (a b : UInt64) : ScalarExpr :=
@@ -556,101 +469,75 @@ theorem rewriteScalarVerified_sound (e : ScalarExpr) :
 
 theorem evalScalarExpr_add_self_u64 (env : VarEnv) (x : ScalarExpr) (a : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 a)) :
-    evalScalarExpr env (.binOp .add x x) =
-    evalScalarExpr env (.binOp .shl x (.constU64 1)) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_add_self_shl_one a)
+    evalScalarExpr env (.binOp .add x x) = evalScalarExpr env (.binOp .shl x (.constU64 1)) := by
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_add_self_shl_one a)
 
 theorem evalScalarExpr_add_assoc_const_u64 (env : VarEnv) (x : ScalarExpr) (a c1 c2 : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 a)) :
     evalScalarExpr env (.binOp .add (.binOp .add x (.constU64 c1)) (.constU64 c2)) =
     evalScalarExpr env (.binOp .add x (.constU64 (c1 + c2))) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_add_assoc_const a c1 c2)
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_add_assoc_const a c1 c2)
 
 theorem evalScalarExpr_and_mask_coalesce_u64 (env : VarEnv) (x : ScalarExpr) (a m1 m2 : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 a)) :
     evalScalarExpr env (.binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2)) =
     evalScalarExpr env (.binOp .bitAnd x (.constU64 (m1 &&& m2))) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_and_mask_coalesce a m1 m2)
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_and_mask_coalesce a m1 m2)
 
 theorem evalScalarExpr_or_mask_coalesce_u64 (env : VarEnv) (x : ScalarExpr) (a m1 m2 : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 a)) :
     evalScalarExpr env (.binOp .bitOr (.binOp .bitOr x (.constU64 m1)) (.constU64 m2)) =
     evalScalarExpr env (.binOp .bitOr x (.constU64 (m1 ||| m2))) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_or_mask_coalesce a m1 m2)
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_or_mask_coalesce a m1 m2)
 
 theorem evalScalarExpr_xor_mask_coalesce_u64 (env : VarEnv) (x : ScalarExpr) (a m1 m2 : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 a)) :
     evalScalarExpr env (.binOp .bitXor (.binOp .bitXor x (.constU64 m1)) (.constU64 m2)) =
     evalScalarExpr env (.binOp .bitXor x (.constU64 (m1 ^^^ m2))) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun v => Except.ok (Val.u64 v)) (uint64_xor_mask_coalesce a m1 m2)
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_xor_mask_coalesce a m1 m2)
 
 theorem evalScalarExpr_mul_add_distrib_const_u64 (env : VarEnv) (x : ScalarExpr) (v a b : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 v)) :
     evalScalarExpr env (.binOp .add (.binOp .mul x (.constU64 a)) (.binOp .mul x (.constU64 b))) =
     evalScalarExpr env (.binOp .mul x (.constU64 (a + b))) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun r => Except.ok (Val.u64 r)) (uint64_mul_add_distrib_const v a b)
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_mul_add_distrib_const v a b)
 
 theorem bitvec64_allOnes_getLsbD (j : Nat) (hj : j < 64) :
     (0xffffffffffffffff#64).getLsbD j = true := by
   have h1 : (0xffffffffffffffff#64) = BitVec.allOnes 64 := rfl
-  rw [h1, BitVec.getLsbD_allOnes]
-  exact decide_eq_true hj
+  rw [h1, BitVec.getLsbD_allOnes]; exact decide_eq_true hj
 
 theorem bitvec64_shr_shl_mask_collapse (bvx : BitVec 64) (s : Nat) :
     (bvx >>> s) <<< s = bvx &&& ((0xffffffffffffffff#64) <<< s) := by
-  apply BitVec.eq_of_getLsbD_eq
-  intro i hi
+  apply BitVec.eq_of_getLsbD_eq; intro i hi
   rw [BitVec.getLsbD_shiftLeft, BitVec.getLsbD_ushiftRight, BitVec.getLsbD_and, BitVec.getLsbD_shiftLeft]
   by_cases hlt : i < s
   · simp [hi, hlt]
-  · have hge : s ≤ i := Nat.le_of_not_lt hlt
-    have hadd : s + (i - s) = i := Nat.add_sub_of_le hge
-    have hsub_lt : i - s < 64 := Nat.lt_of_le_of_lt (Nat.sub_le i s) hi
-    have hall : (0xffffffffffffffff#64).getLsbD (i - s) = true := bitvec64_allOnes_getLsbD (i - s) hsub_lt
-    simp [hi, hlt, hadd, hall]
+  · simp [hi, hlt, Nat.add_sub_of_le (Nat.le_of_not_lt hlt),
+      bitvec64_allOnes_getLsbD (i - s) (Nat.lt_of_le_of_lt (Nat.sub_le i s) hi)]
 
 theorem uint64_shr_shl_mask_collapse (x k : UInt64) :
     (x >>> k) <<< k = x &&& (0xffffffffffffffff <<< k) := by
-  cases x with | ofBitVec bvx =>
-  cases k with | ofBitVec bvk =>
-    apply congrArg UInt64.ofBitVec
-    exact bitvec64_shr_shl_mask_collapse bvx (bvk % 64#64).toNat
+  cases x with | ofBitVec bvx => cases k with | ofBitVec bvk =>
+    exact congrArg UInt64.ofBitVec (bitvec64_shr_shl_mask_collapse bvx (bvk % 64#64).toNat)
 
 theorem evalScalarExpr_shr_shl_mask_collapse_u64 (env : VarEnv) (x : ScalarExpr) (v k : UInt64)
     (hx : evalScalarExpr env x = .ok (.u64 v)) :
     evalScalarExpr env (.binOp .shl (.binOp .shr x (.constU64 k)) (.constU64 k)) =
     evalScalarExpr env (.binOp .bitAnd x (.constU64 (0xffffffffffffffff <<< k))) := by
-  simp only [evalScalarExpr]
-  rw [hx]
-  exact congrArg (fun r => Except.ok (Val.u64 r)) (uint64_shr_shl_mask_collapse v k)
+  simp only [evalScalarExpr, hx]; exact congrArg (Except.ok ∘ Val.u64) (uint64_shr_shl_mask_collapse v k)
 
 theorem evalScalarExpr_fma_fusion_u64 (env : VarEnv) (a b c : ScalarExpr) (va vb vc : UInt64)
     (ha : evalScalarExpr env a = .ok (.u64 va))
     (hb : evalScalarExpr env b = .ok (.u64 vb))
     (hc : evalScalarExpr env c = .ok (.u64 vc)) :
-    evalScalarExpr env (.binOp .add (.binOp .mul a b) c) =
-    evalScalarExpr env (.fma a b c) := by
-  simp only [evalScalarExpr]
-  rw [ha, hb, hc]
+    evalScalarExpr env (.binOp .add (.binOp .mul a b) c) = evalScalarExpr env (.fma a b c) := by
+  simp only [evalScalarExpr, ha, hb, hc]
 
 theorem uint64_rotl_comm_or (x k : UInt64) :
     (x <<< k) ||| (x >>> (64 - k)) = (x >>> (64 - k)) ||| (x <<< k) := by
-  cases x with | ofBitVec bvx =>
-  cases k with | ofBitVec bvk =>
-    apply congrArg UInt64.ofBitVec
-    exact BitVec.or_comm _ _
+  cases x with | ofBitVec bvx => cases k with | ofBitVec bvk =>
+    exact congrArg UInt64.ofBitVec (BitVec.or_comm _ _)
 
 namespace PeepholeProofs
   abbrev rewriteScalarPeephole_sound := @LeanNative.Proofs.rewriteScalarPeephole_sound
