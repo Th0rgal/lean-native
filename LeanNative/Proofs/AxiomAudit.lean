@@ -168,6 +168,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.gpu_memory_headroom_gate_sound
   , ``LeanNative.Spec.gpu_oom_falls_back_to_cpu_simd
   , ``LeanNative.Spec.matryoshka_incremental_prefix_eq_full_eval
+  , ``LeanNative.Spec.sarray_restrict_simd_gate_sound
+  , ``LeanNative.Spec.sarray_escaping_closure_rejects_restrict_simd
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

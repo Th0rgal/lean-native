@@ -441,28 +441,19 @@ theorem dotNat_le_of_pointwise_le (u v x : List Nat)
     (h : ∀ j, j < u.length → u.getD j 0 ≤ v.getD j 0) :
     dotNat u x ≤ dotNat v x := by
   induction u generalizing v x with
-  | nil =>
-    rw [dotNat_nil_left]
-    exact Nat.zero_le _
+  | nil => rw [dotNat_nil_left]; exact Nat.zero_le _
   | cons a as ih =>
     cases x with
-    | nil =>
-      rw [dotNat_nil_right, dotNat_nil_right]
-      exact Nat.le_refl 0
+    | nil => rw [dotNat_nil_right, dotNat_nil_right]; exact Nat.le_refl 0
     | cons x0 xs =>
       have h0 : a ≤ v.getD 0 0 := h 0 (Nat.zero_lt_succ _)
       cases v with
       | nil =>
-        have ha : a = 0 := Nat.eq_zero_of_le_zero h0
-        have ih_nil : dotNat as xs ≤ 0 := by
-          simpa [dotNat_nil_left] using ih [] xs (fun j hj => h (j + 1) (Nat.succ_lt_succ hj))
-        simp [dotNat_cons, dotNat_nil_left, ha, Nat.eq_zero_of_le_zero ih_nil]
+        have ih_nil : dotNat as xs ≤ 0 := by simpa [dotNat_nil_left] using ih [] xs (fun j hj => h (j + 1) (Nat.succ_lt_succ hj))
+        simp [dotNat_cons, dotNat_nil_left, Nat.eq_zero_of_le_zero h0, Nat.eq_zero_of_le_zero ih_nil]
       | cons b bs =>
         rw [dotNat_cons, dotNat_cons]
-        have h_head : a * x0 ≤ b * x0 := Nat.mul_le_mul_right x0 h0
-        have h_tail : dotNat as xs ≤ dotNat bs xs :=
-          ih bs xs (fun j hj => h (j + 1) (Nat.succ_lt_succ hj))
-        exact Nat.add_le_add h_head h_tail
+        exact Nat.add_le_add (Nat.mul_le_mul_right x0 h0) (ih bs xs (fun j hj => h (j + 1) (Nat.succ_lt_succ hj)))
 
 def weightedColVec (weights : List Nat) (matrix : List (List Nat)) : Nat → Nat → List Nat
   | 0, _ => []
@@ -475,8 +466,7 @@ private theorem weightedColVec_zero_weights (matrix : List (List Nat)) (len colI
   | succ len ih =>
     cases x with
     | nil => exact dotNat_nil_right _
-    | cons x0 xs =>
-      simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
+    | cons _ xs => simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
 
 private theorem weightedColVec_zero_matrix (weights : List Nat) (len colIdx : Nat) (x : List Nat) :
     dotNat (weightedColVec weights [] len colIdx) x = 0 := by
@@ -485,8 +475,7 @@ private theorem weightedColVec_zero_matrix (weights : List Nat) (len colIdx : Na
   | succ len ih =>
     cases x with
     | nil => exact dotNat_nil_right _
-    | cons x0 xs =>
-      cases weights <;> simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
+    | cons _ xs => cases weights <;> simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
 
 private theorem weightedColVec_dot_split (w : Nat) (ws : List Nat) (row : List Nat) (rows : List (List Nat))
     (colIdx : Nat) (x : List Nat) :
@@ -722,6 +711,38 @@ theorem matryoshka_incremental_prefix_eq_full_eval (ctx : MatryoshkaPrefixAccum)
     evalMatryoshkaPrefixIncremental ctx = evalMatryoshkaPrefixFull ctx ∧
     ctx.sqPrev ≤ (evalMatryoshkaPrefixIncremental ctx).1 := by
   simp [evalMatryoshkaPrefixIncremental, evalMatryoshkaPrefixFull]
+
+/-- Preheader `SArray` `__restrict__` SIMD vectorization gate (`LeanNative.IR.Bridge` / `ln_c_opt`):
+    requires exclusive ownership (`isExclusive = true`), zero escaping closures (`escapesInBody = false`),
+    and positive trip count (`0 < tripCount`). -/
+structure SArrayRestrictSimdInput where
+  isExclusive   : Bool
+  escapesInBody : Bool
+  tripCount     : Nat
+  deriving Repr, DecidableEq, BEq
+
+def canEmitRestrictSimd (inp : SArrayRestrictSimdInput) : Bool :=
+  inp.isExclusive && !inp.escapesInBody && decide (0 < inp.tripCount)
+
+theorem sarray_restrict_simd_gate_sound (inp : SArrayRestrictSimdInput) :
+    canEmitRestrictSimd inp = true ↔
+      (inp.isExclusive = true ∧ inp.escapesInBody = false ∧ 0 < inp.tripCount) := by
+  simp [canEmitRestrictSimd, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+def sarrayRestrictSimdMetaSpec : MetaGateSpec SArrayRestrictSimdInput
+    (fun inp => inp.isExclusive = true ∧ inp.escapesInBody = false ∧ 0 < inp.tripCount) where
+  gate := canEmitRestrictSimd
+  sound := fun inp => (sarray_restrict_simd_gate_sound inp).mp
+  complete := fun inp => (sarray_restrict_simd_gate_sound inp).mpr
+  posWitness := ⟨true, false, 64⟩
+  negWitness := ⟨true, true, 64⟩
+  nonVacuous := rfl
+  tight := rfl
+
+theorem sarray_escaping_closure_rejects_restrict_simd (inp : SArrayRestrictSimdInput)
+    (h_esc : inp.escapesInBody = true) :
+    canEmitRestrictSimd inp = false :=
+  sarrayRestrictSimdMetaSpec.rejects_unsafe inp (by simp [h_esc])
 
 end LeanNative.Spec
 

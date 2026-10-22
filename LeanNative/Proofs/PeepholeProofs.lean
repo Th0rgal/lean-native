@@ -325,19 +325,8 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
   | decRef objVar count k ih =>
     intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel env st
   | ite condVar thenBranch elseBranch iht ihe =>
-    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
-    cases env condVar with | none => rfl | some cval =>
-      cases cval with
-      | bool b => cases b with | true => exact iht fuel env st | false => exact ihe fuel env st
-      | u64 n =>
-        simp only; by_cases hn : (n != 0) = true
-        · rw [ite_eq_left hn, ite_eq_left hn]; exact iht fuel env st
-        · rw [ite_eq_right hn, ite_eq_right hn]; exact ihe fuel env st
-      | u256 w =>
-        simp only; by_cases hw : (w != UInt256.zero) = true
-        · rw [ite_eq_left hw, ite_eq_left hw]; exact iht fuel env st
-        · rw [ite_eq_right hw, ite_eq_right hw]; exact ihe fuel env st
-      | _ => rfl
+    intro fuel env st
+    simp only [rewriteCodePeephole, evalCode, iht fuel env st, ihe fuel env st]
   | seqFor idxVar loVar hiVar accVar accInit accTy stepBody k ihs ihk =>
     intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
     have hstep : (fun stepEnv stepSt => evalCode fuel stepEnv stepSt (rewriteCodePeephole stepBody)) =

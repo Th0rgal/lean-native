@@ -176,16 +176,12 @@ theorem applyWritesUnopt_eq_hoistedLoop (st : HeapState) (bufId : Nat) (writes :
   induction writes generalizing st with
   | nil =>
     rcases hfind with ⟨buf, hbuf⟩
-    simp only [applyWritesUnopt, applyWritesHoistedLoop]
     exact ensureExclusive_of_exclusive st bufId buf hbuf hexcl
   | cons w rest ih =>
-    rcases w with ⟨idx, val⟩
-    rcases hfind with ⟨buf, hbuf⟩
-    simp only [applyWritesUnopt, applyWritesHoistedLoop]
-    rw [ensureExclusive_of_exclusive st bufId buf hbuf hexcl]
-    simp only
+    rcases w, hfind with ⟨⟨idx, val⟩, ⟨buf, hbuf⟩⟩
+    simp only [applyWritesUnopt, applyWritesHoistedLoop, ensureExclusive_of_exclusive st bufId buf hbuf hexcl]
     cases hw : st.writeElemExclusive bufId idx val with
-    | error err => rfl
+    | error _ => rfl
     | ok st2 =>
       rcases writeElemExclusive_preserves st st2 bufId idx val hexcl hw with ⟨hexcl2, hfind2⟩
       exact ih st2 hexcl2 hfind2
@@ -196,18 +192,15 @@ theorem applyWritesUnopt_eq_hoistedLoop (st : HeapState) (bufId : Nat) (writes :
 theorem hoistExclusivity_sound (st : HeapState) (bufId : Nat) (writes : List (Nat × UInt64)) :
     applyWritesUnopt st bufId writes = applyWritesHoisted st bufId writes := by
   cases writes with
-  | nil =>
-    simp only [applyWritesUnopt, applyWritesHoisted, applyWritesHoistedLoop]
-    cases st.ensureExclusive bufId <;> rfl
+  | nil => simp only [applyWritesUnopt, applyWritesHoisted, applyWritesHoistedLoop]; cases st.ensureExclusive bufId <;> rfl
   | cons w rest =>
     rcases w with ⟨idx, val⟩
     simp only [applyWritesUnopt, applyWritesHoisted, applyWritesHoistedLoop]
     cases hens : st.ensureExclusive bufId with
-    | error err => rfl
+    | error _ => rfl
     | ok st1 =>
-      simp only
-      cases hw : st1.writeElemExclusive bufId idx val with
-      | error err => rfl
+      simp only; cases hw : st1.writeElemExclusive bufId idx val with
+      | error _ => rfl
       | ok st2 =>
         rcases ensureExclusive_post st st1 bufId hens with ⟨hexcl1, _⟩
         rcases writeElemExclusive_preserves st1 st2 bufId idx val hexcl1 hw with ⟨hexcl2, hfind2⟩
@@ -336,14 +329,8 @@ theorem unboxTupleDeadElim_refines
       (.letBind dst dstTy (.scalar (.var v0)) (.ret dst)) := by
   intro fuel env st v st' hsrc
   simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
-  cases hv0 : env v0 with
-  | none => simp only [hv0] at hsrc; contradiction
-  | some val0 =>
-    cases hv1 : env v1 with
-    | none => simp only [hv0, hv1] at hsrc; contradiction
-    | some val1 =>
-      simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self] at hsrc ⊢
-      exact hsrc
+  cases hv0 : env v0 <;> cases hv1 : env v1 <;>
+    simp only [hv0, hv1, evalScalarExpr, VarEnv.bind_self] at hsrc ⊢ <;> first | contradiction | exact hsrc
 
 /-- Nested 2-Level Tuple SROA Dead-Allocation Elimination (`unboxNestedTupleDeadElim_refines`):
     eliminating both an inner tuple `tInner := mkTuple [v1, v2]` and an outer tuple
@@ -360,21 +347,12 @@ theorem unboxNestedTupleDeadElim_refines
       (.letBind dst dstTy (.scalar (.var v1)) (.ret dst)) := by
   intro fuel env st v st' hsrc
   simp only [evalCode, evalExpr, evalVarList] at hsrc ⊢
-  cases hv1 : env v1 with
-  | none => simp only [hv1] at hsrc; contradiction
-  | some val1 =>
-    cases hv2 : env v2 with
-    | none => simp only [hv1, hv2] at hsrc; contradiction
-    | some val2 =>
-      have hv0_bind : (env.bind tInner (.tuple [val1, val2])) v0 = env v0 := by
-        have hsym : (v0 == tInner) = false := by rw [ Bool.beq_comm ]; exact hne0
-        exact VarEnv.bind_ne env tInner v0 _ hsym
-      simp only [hv1, hv2, hv0_bind, VarEnv.bind_self] at hsrc ⊢
-      cases hv0 : env v0 with
-      | none => simp only [hv0] at hsrc; contradiction
-      | some val0 =>
-        simp only [hv0, hv1, evalScalarExpr] at hsrc ⊢
-        exact hsrc
+  cases hv1 : env v1 <;> cases hv2 : env v2 <;> try (simp only [hv1, hv2] at hsrc; contradiction)
+  rename_i val1 val2
+  have hv0_bind : (env.bind tInner (.tuple [val1, val2])) v0 = env v0 :=
+    VarEnv.bind_ne env tInner v0 _ (by rw [Bool.beq_comm]; exact hne0)
+  cases hv0 : env v0 <;> simp only [hv0, hv1, hv2, hv0_bind, VarEnv.bind_self, evalScalarExpr] at hsrc ⊢ <;>
+    first | contradiction | exact hsrc
 
 theorem varEnv_bind_idem (env : VarEnv) (x : VarId) (v : Val) :
     (env.bind x v).bind x v = env.bind x v := by
