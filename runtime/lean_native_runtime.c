@@ -557,20 +557,20 @@ void lean_native_trm_matryoshka_ref_int8(
     size_t d_hidden,
     size_t steps
 ) {
-    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 || d_model == 0 || d_model > 64 || d_hidden == 0 || d_hidden > 128) {
+    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 || d_model == 0 || d_model > 128 || d_hidden == 0 || d_hidden > 256) {
         return;
     }
-    int32_t z[64];
-    int32_t y[64];
-    int32_t h_norm[64];
-    uint8_t act_u8[128];
+    int32_t z[128];
+    int32_t y[128];
+    int32_t h_norm[128];
+    uint8_t act_u8[256];
     for (size_t i = 0; i < d_model; ++i) {
         z[i] = (int32_t)x0_q8[i];
         y[i] = (int32_t)x0_q8[i];
     }
     for (size_t s = 0; s < steps; ++s) {
         uint32_t sum_sq = 0u;
-        int32_t h_in[64];
+        int32_t h_in[128];
         for (size_t i = 0; i < d_model; ++i) {
             /* MUDD alpha0=13/20, alpha1=7/20 */
             h_in[i] = (13 * z[i] + 7 * (int32_t)x0_q8[i]) / 20;
@@ -628,20 +628,20 @@ void lean_native_trm_matryoshka_cpu_int8(
     size_t d_hidden,
     size_t steps
 ) {
-    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 || d_model == 0 || d_model > 64 || d_hidden == 0 || d_hidden > 128) {
+    if (!out_cost_q16 || !x0_q8 || !w1_q8 || !w2_q8 || !w_cost_q8 || d_model == 0 || d_model > 128 || d_hidden == 0 || d_hidden > 256) {
         return;
     }
-    int32_t z[64];
-    int32_t y[64];
-    int32_t h_norm[64];
-    uint8_t act_u8[128];
+    int32_t z[128];
+    int32_t y[128];
+    int32_t h_norm[128];
+    uint8_t act_u8[256];
     for (size_t i = 0; i < d_model; ++i) {
         z[i] = (int32_t)x0_q8[i];
         y[i] = (int32_t)x0_q8[i];
     }
     for (size_t s = 0; s < steps; ++s) {
         uint32_t sum_sq = 0u;
-        int32_t h_in[64];
+        int32_t h_in[128];
         for (size_t i = 0; i < d_model; ++i) {
             h_in[i] = (13 * z[i] + 7 * (int32_t)x0_q8[i]) / 20;
             sum_sq += (uint32_t)(h_in[i] * h_in[i]);
@@ -702,26 +702,27 @@ void lean_native_trm_matryoshka_cpu_int8(
 }
 
 int lean_native_trm_matryoshka_parity_selftest(void) {
-    int8_t x0[64];
-    int8_t w1[64 * 128];
-    int8_t w2[128 * 64];
-    int8_t w_cost[64 * 4];
-    for (size_t i = 0; i < 64; ++i) {
+    int8_t x0[128];
+    int8_t w1[128 * 256];
+    int8_t w2[256 * 128];
+    int8_t w_cost[128 * 4];
+    for (size_t i = 0; i < 128; ++i) {
         x0[i] = (int8_t)((int32_t)((i * 37u + 11u) % 97u) - 48);
     }
-    for (size_t i = 0; i < 64 * 128; ++i) {
+    for (size_t i = 0; i < 128 * 256; ++i) {
         w1[i] = (int8_t)((int32_t)((i * 53u + 19u) % 89u) - 44);
         w2[i] = (int8_t)((int32_t)((i * 71u + 23u) % 83u) - 41);
     }
-    for (size_t i = 0; i < 64 * 4; ++i) {
+    for (size_t i = 0; i < 128 * 4; ++i) {
         w_cost[i] = (int8_t)((int32_t)((i * 29u + 7u) % 67u) - 33);
     }
-    const size_t slices[3][3] = {
-        {16u, 32u, 1u},  /* S_0: stage0_l1 */
-        {32u, 64u, 4u},  /* S_1: cpu_l2_int8 */
-        {64u, 128u, 4u}  /* S_3: spark_gb10_nvfp4 / tpu_v6e_bf16 */
+    const size_t slices[4][3] = {
+        {16u, 32u, 1u},   /* S_0: stage0_l1 */
+        {32u, 64u, 4u},   /* S_1: cpu_l2_int8 */
+        {64u, 128u, 4u},  /* S_3: spark_gb10_nvfp4 / tpu_v6e_bf16 */
+        {128u, 256u, 4u}  /* S_4: tpu_v6e_s4_bf16 (Trillium 256x256 MXU) */
     };
-    for (size_t s = 0; s < 3; ++s) {
+    for (size_t s = 0; s < 4; ++s) {
         int32_t ref_out[4] = {0, 0, 0, 0};
         int32_t simd_out[4] = {0, 0, 0, 0};
         lean_native_trm_matryoshka_ref_int8(ref_out, x0, w1, w2, w_cost, slices[s][0], slices[s][1], slices[s][2]);

@@ -414,12 +414,15 @@ def runTest7 : Bool × UInt64 :=
   let s1Vec := trmStepSliceSum 32 64 true
   let s3Ref := trmStepSliceSum 64 128 false
   let s3Vec := trmStepSliceSum 64 128 true
-  -- Verify cache footprint budgets: S_0(16x32)=1344B <= 32KB, S_1(32x64)=4736B <= 512KB, S_3(64x128)=17664B <= 32KB
+  let s4Ref := trmStepSliceSum 128 256 false
+  let s4Vec := trmStepSliceSum 128 256 true
+  -- Verify cache footprint budgets: S_0(16x32)=1344B <= 32KB, S_1(32x64)=4736B <= 512KB, S_3(64x128)=17664B <= 32KB, S_4(128x256)=68096B <= 16MB Trillium VMEM
   let s0Bytes : UInt64 := 16 * 32 + 32 * 16 + 320
   let s1Bytes : UInt64 := 32 * 64 + 64 * 32 + 640
   let s3Bytes : UInt64 := 64 * 128 + 128 * 64 + 1280
-  let ok := s0Ref == s0Vec && s1Ref == s1Vec && s3Ref == s3Vec &&
-            s0Bytes <= 32768 && s1Bytes <= 524288 && s3Bytes <= 32768
+  let s4Bytes : UInt64 := 128 * 256 + 256 * 128 + 2560
+  let ok := s0Ref == s0Vec && s1Ref == s1Vec && s3Ref == s3Vec && s4Ref == s4Vec &&
+            s0Bytes <= 32768 && s1Bytes <= 524288 && s3Bytes <= 32768 && s4Bytes <= 16777216
   let h := fnvMixU64 (fnvMixU64 (fnvMixU64 14695981039346656037 s0Ref) s1Ref) s3Ref
   (ok, h)
 

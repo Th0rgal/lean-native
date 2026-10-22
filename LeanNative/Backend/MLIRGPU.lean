@@ -542,7 +542,7 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
   let tensorTy := s!"tensor<262144x{shloElem}>"
   let mkVpu (params : String) (retVar : String) (body : List String) : String :=
     String.intercalate "\n" ([
-      s!"  func.func @{fnName}({params}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{"
+      s!"  func.func @{fnName}({params}) -> {tensorTy} attributes \{tpu.unit = \"vpu_trillium\", tpu.vmem_block = 2048 : i64} \{"
     ] ++ body ++ [s!"    return {retVar} : {tensorTy}", "  }"])
   match kernel with
   | .mapScaleAdd scale bias =>
@@ -568,7 +568,7 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
     ]
   | .dotProduct =>
     String.intercalate "\n" [
-      s!"  func.func @{fnName}(%lhs: {tensorTy}, %rhs: {tensorTy}) -> tensor<{shloElem}> attributes \{tpu.unit = \"mxu_128x128\"} \{",
+      s!"  func.func @{fnName}(%lhs: {tensorTy}, %rhs: {tensorTy}) -> tensor<{shloElem}> attributes \{tpu.unit = \"mxu_256x256\"} \{",
       s!"    %dot = stablehlo.dot_general %lhs, %rhs, contracting_dims = [0] x [0] : ({tensorTy}, {tensorTy}) -> tensor<{shloElem}>",
       s!"    return %dot : tensor<{shloElem}>",
       "  }"
@@ -591,33 +591,33 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
       s!"    %xored = stablehlo.xor %sum, %diff : {tensorTy}"
     ]
 
-/-- Lower `LNIRModule` declarations and parallel regions to a Google Cloud TPU v5e StableHLO
-    module (`module @lean_native_tpu_v5e_stablehlo`), targeting the TPU v5e `128x128` MXU systolic
-    array (`stablehlo.dot_general`) and `128x8` VPU vector lanes (`stablehlo.add`, `stablehlo.multiply`,
-    `stablehlo.subtract`, `stablehlo.xor`, `stablehlo.and`, `stablehlo.or`, `stablehlo.shift_left`,
-    `stablehlo.shift_right_logical`, `stablehlo.compare`, `stablehlo.select`) including 256-bit
-    4-limb `tensor<262144x4xui64>` EVM/Verity batch kernels. -/
+/-- Lower `LNIRModule` declarations and parallel regions to a Google Cloud TPU v6e (Trillium) StableHLO
+    module (`module @lean_native_tpu_v6e_stablehlo`), targeting the TPU v6e `256x256` MXU systolic
+    array (`stablehlo.dot_general`) and Trillium VPU vector lanes with 1D `vmem` block `2048`
+    (`stablehlo.add`, `stablehlo.multiply`, `stablehlo.subtract`, `stablehlo.xor`, `stablehlo.and`,
+    `stablehlo.or`, `stablehlo.shift_left`, `stablehlo.shift_right_logical`, `stablehlo.compare`,
+    `stablehlo.select`) including 256-bit 4-limb `tensor<262144x4xui64>` EVM/Verity batch kernels. -/
 def emitStableHLOModule (m : LNIRModule) : String :=
   let header := String.intercalate "\n" [
-    s!"// LeanNative Google Cloud TPU v5e StableHLO Module: {m.moduleName}",
-    "// Target: Google Cloud TPU v5e (128x128 MXU systolic array + 128x8 VPU vector lanes, 16 GB HBM)",
-    "module @lean_native_tpu_v5e_stablehlo attributes {mhlo.num_replicas = 1 : i32, mhlo.num_partitions = 1 : i32, tpu.target = \"tpu_v5e\"} {"
+    s!"// LeanNative Google Cloud TPU v6e (Trillium) StableHLO Module: {m.moduleName}",
+    "// Target: Google Cloud TPU v6e (Trillium 256x256 MXU systolic array + Trillium VPU, 32 GB HBM)",
+    "module @lean_native_tpu_v6e_stablehlo attributes {mhlo.num_replicas = 1 : i32, mhlo.num_partitions = 1 : i32, tpu.target = \"tpu_v6e\", tpu.mxu_block_2d = \"256x256\", tpu.vmem_block_1d = 2048 : i64} {"
   ]
   let builtinFuncs := [
-    emitStableHLODeclFunc "lean_native_tpu_v5e_map_scale_add" .i64 (.mapScaleAdd 3 7),
-    emitStableHLODeclFunc "lean_native_tpu_v5e_zip_add" .i64 .zipAdd,
-    emitStableHLODeclFunc "lean_native_tpu_v5e_zip_mul" .i64 .zipMul,
-    emitStableHLODeclFunc "lean_native_tpu_v5e_saxpy" .i64 (.saxpy 5),
-    emitStableHLODeclFunc "lean_native_tpu_v5e_dot_product" .i64 .dotProduct,
-    emitStableHLODeclFunc "lean_native_tpu_v5e_stencil1d" .i64 (.stencil1D3Pt 1 2 1),
+    emitStableHLODeclFunc "lean_native_tpu_v6e_map_scale_add" .i64 (.mapScaleAdd 3 7),
+    emitStableHLODeclFunc "lean_native_tpu_v6e_zip_add" .i64 .zipAdd,
+    emitStableHLODeclFunc "lean_native_tpu_v6e_zip_mul" .i64 .zipMul,
+    emitStableHLODeclFunc "lean_native_tpu_v6e_saxpy" .i64 (.saxpy 5),
+    emitStableHLODeclFunc "lean_native_tpu_v6e_dot_product" .i64 .dotProduct,
+    emitStableHLODeclFunc "lean_native_tpu_v6e_stencil1d" .i64 (.stencil1D3Pt 1 2 1),
     String.intercalate "\n" [
-      "  func.func @lean_native_tpu_v5e_matmul_mxu_128x128(%lhs: tensor<128x128xbf16>, %rhs: tensor<128x128xbf16>) -> tensor<128x128xf32> attributes {tpu.unit = \"mxu_128x128\"} {",
-      "    %res = stablehlo.dot_general %lhs, %rhs, contracting_dims = [1] x [0] : (tensor<128x128xbf16>, tensor<128x128xbf16>) -> tensor<128x128xf32>",
-      "    return %res : tensor<128x128xf32>",
+      "  func.func @lean_native_tpu_v6e_matmul_mxu_256x256(%lhs: tensor<256x256xbf16>, %rhs: tensor<256x256xbf16>) -> tensor<256x256xf32> attributes {tpu.unit = \"mxu_256x256\", tpu.mxu_block_2d = \"256x256\"} {",
+      "    %res = stablehlo.dot_general %lhs, %rhs, contracting_dims = [1] x [0] : (tensor<256x256xbf16>, tensor<256x256xbf16>) -> tensor<256x256xf32>",
+      "    return %res : tensor<256x256xf32>",
       "  }"
     ],
     String.intercalate "\n" [
-      "  func.func @lean_native_tpu_v5e_evm_u256_batch(%a: tensor<262144x4xui64>, %b: tensor<262144x4xui64>) -> tensor<262144x4xui64> attributes {tpu.unit = \"vpu_128x8\", tpu.u256_limbs = 4 : i32} {",
+      "  func.func @lean_native_tpu_v6e_evm_u256_batch(%a: tensor<262144x4xui64>, %b: tensor<262144x4xui64>) -> tensor<262144x4xui64> attributes {tpu.unit = \"vpu_trillium\", tpu.vmem_block = 2048 : i64, tpu.u256_limbs = 4 : i32} {",
       "    %c1 = stablehlo.constant dense<1> : tensor<262144x4xui64>",
       "    %c63 = stablehlo.constant dense<63> : tensor<262144x4xui64>",
       "    %sum_raw = stablehlo.add %a, %b : tensor<262144x4xui64>",
@@ -646,6 +646,21 @@ def emitStableHLOModule (m : LNIRModule) : String :=
       "    %out = stablehlo.add %z, %delta : tensor<64x64xbf16>",
       "    return %out : tensor<64x64xbf16>",
       "  }"
+    ],
+    String.intercalate "\n" [
+      "  func.func @lean_native_tpu_v6e_speculate_forest_s4(%z: tensor<256x128xbf16>, %w1: tensor<128x256xbf16>, %w2: tensor<256x128xbf16>, %w_prem: tensor<128x1024xbf16>, %w_tac: tensor<128x8xbf16>) -> (tensor<256x128xbf16>, tensor<256x1024xf32>, tensor<256x8xf32>) attributes {tpu.unit = \"mxu_256x256\", tpu.trm_slice = \"tpu_v6e_s4_bf16\"} {",
+      "    %pre = stablehlo.dot_general %z, %w1, contracting_dims = [1] x [0] : (tensor<256x128xbf16>, tensor<128x256xbf16>) -> tensor<256x256xbf16>",
+      "    %zero = stablehlo.constant dense<0.0> : tensor<256x256xbf16>",
+      "    %cap16 = stablehlo.constant dense<16.0> : tensor<256x256xbf16>",
+      "    %pos = stablehlo.maximum %pre, %zero : tensor<256x256xbf16>",
+      "    %sq = stablehlo.multiply %pos, %pos : tensor<256x256xbf16>",
+      "    %act = stablehlo.minimum %sq, %cap16 : tensor<256x256xbf16>",
+      "    %delta = stablehlo.dot_general %act, %w2, contracting_dims = [1] x [0] : (tensor<256x256xbf16>, tensor<256x128xbf16>) -> tensor<256x128xbf16>",
+      "    %z_next = stablehlo.add %z, %delta : tensor<256x128xbf16>",
+      "    %prem_logits = stablehlo.dot_general %z_next, %w_prem, contracting_dims = [1] x [0] : (tensor<256x128xbf16>, tensor<128x1024xbf16>) -> tensor<256x1024xf32>",
+      "    %tac_logits = stablehlo.dot_general %z_next, %w_tac, contracting_dims = [1] x [0] : (tensor<256x128xbf16>, tensor<128x8xbf16>) -> tensor<256x8xf32>",
+      "    return %z_next, %prem_logits, %tac_logits : tensor<256x128xbf16>, tensor<256x1024xf32>, tensor<256x8xf32>",
+      "  }"
     ]
   ]
   let declFuncs := m.decls.foldl (fun acc d =>
@@ -662,36 +677,47 @@ def emitStableHLOModule (m : LNIRModule) : String :=
   let footer := "}"
   String.intercalate "\n\n" ([header] ++ builtinFuncs ++ declFuncs ++ [footer]) ++ "\n"
 
-/-- Emit a ready-to-execute Python/JAX Pallas & `@jax.jit` module targeting Google Cloud TPU v5e
-    (`vmem` block spec `(1024,)` for 1D VPU kernels, `(128, 128)` for MXU `matmul_tiled`, and
-    vectorized 4-limb `uint64[N, 4]` carry-chained 256-bit SplitMix64 counterexample search
-    `tpu_v5e_fastcheck_u256_batch(seed, n_samples)`). -/
+/-- Emit a ready-to-execute Python/JAX Pallas & `@jax.jit` module targeting Google Cloud TPU v6e (Trillium)
+    (`vmem` block spec `(2048,)` for 1D VPU kernels, `(256, 256)` for Trillium MXU `matmul_tiled`,
+    2D `vmap(Goals=256, Samples=65536)` 256-bit SplitMix64 counterexample search, and fused `S_4`
+    (`d=128, h=256`) forest speculation `tpu_v6e_speculate_forest`). -/
 def emitTPUPallasModule (m : LNIRModule) : String :=
   let declNames := m.decls.map (fun d => s!"\"{d.name}\"")
   let declListStr := "[" ++ String.intercalate ", " declNames ++ "]"
   String.intercalate "\n" [
     "#!/usr/bin/env python3",
-    s!"\"\"\"Auto-generated Google Cloud TPU v5e JAX Pallas & XLA Module for {m.moduleName}.\"\"\"",
+    s!"\"\"\"Auto-generated Google Cloud TPU v6e (Trillium) JAX Pallas & XLA Module for {m.moduleName}.\"\"\"",
     "from __future__ import annotations\nimport jax\nimport jax.numpy as jnp\nfrom jax.experimental import pallas as pl\n",
-    s!"TPU_TARGET = \"google_cloud_tpu_v5e\"\nVMEM_BLOCK_1D = (1024,)\nMXU_BLOCK_2D = (128, 128)\nMODULE_DECLS = {declListStr}\n",
+    s!"TPU_TARGET = \"google_cloud_tpu_v6e\"\nVMEM_BLOCK_1D = (2048,)\nMXU_BLOCK_2D = (256, 256)\nMODULE_DECLS = {declListStr}\n",
     "def _pallas_saxpy_vpu_kernel(x_ref, y_ref, out_ref):\n    out_ref[:] = jnp.uint64(5) * x_ref[:] + y_ref[:]\n",
-    "@jax.jit\ndef tpu_v5e_saxpy_u64(x: jax.Array, y: jax.Array) -> jax.Array:\n    \"\"\"1D VPU kernel on TPU v5e with VMEM BlockSpec (1024,).\"\"\"",
-    "    if jax.default_backend() == \"tpu\":\n        grid = (x.shape[0] // 1024,)",
+    "@jax.jit\ndef tpu_v6e_saxpy_u64(x: jax.Array, y: jax.Array) -> jax.Array:\n    \"\"\"1D VPU kernel on TPU v6e (Trillium) with VMEM BlockSpec (2048,).\"\"\"",
+    "    if jax.default_backend() == \"tpu\":\n        grid = (x.shape[0] // 2048,)",
     "        return pl.pallas_call(\n            _pallas_saxpy_vpu_kernel,\n            out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),\n            grid=grid,",
     "            in_specs=[pl.BlockSpec(VMEM_BLOCK_1D, lambda i: (i,)), pl.BlockSpec(VMEM_BLOCK_1D, lambda i: (i,))],\n            out_specs=pl.BlockSpec(VMEM_BLOCK_1D, lambda i: (i,)),\n        )(x, y)",
     "    return jnp.uint64(5) * x + y\n",
-    "@jax.jit\ndef tpu_v5e_dot_reduce_u64(x: jax.Array, y: jax.Array) -> jax.Array:\n    \"\"\"Vectorized VPU + reduction on TPU v5e.\"\"\"\n    return jnp.sum(x * y)\n",
-    "@jax.jit\ndef tpu_v5e_matmul_tiled_mxu(a: jax.Array, b: jax.Array) -> jax.Array:\n    \"\"\"128x128 MXU systolic array matrix multiplication on Google Cloud TPU v5e.\"\"\"\n    return jnp.matmul(a.astype(jnp.bfloat16), b.astype(jnp.bfloat16), preferred_element_type=jnp.float32)\n",
-    "@jax.jit\ndef tpu_v5e_evm_u256_batch(a_limbs: jax.Array, b_limbs: jax.Array) -> jax.Array:\n    \"\"\"Vectorized 4-limb uint64[N, 4] carry-chained 256-bit EVM arithmetic on TPU v5e VPU.\"\"\"",
+    "tpu_v5e_saxpy_u64 = tpu_v6e_saxpy_u64\n",
+    "@jax.jit\ndef tpu_v6e_dot_reduce_u64(x: jax.Array, y: jax.Array) -> jax.Array:\n    \"\"\"Vectorized VPU + reduction on TPU v6e.\"\"\"\n    return jnp.sum(x * y)\n",
+    "tpu_v5e_dot_reduce_u64 = tpu_v6e_dot_reduce_u64\n",
+    "@jax.jit\ndef tpu_v6e_matmul_tiled_mxu(a: jax.Array, b: jax.Array) -> jax.Array:\n    \"\"\"256x256 MXU systolic array matrix multiplication on Google Cloud TPU v6e (Trillium).\"\"\"\n    return jnp.matmul(a.astype(jnp.bfloat16), b.astype(jnp.bfloat16), preferred_element_type=jnp.float32)\n",
+    "tpu_v5e_matmul_tiled_mxu = tpu_v6e_matmul_tiled_mxu\n",
+    "@jax.jit\ndef tpu_v6e_evm_u256_batch(a_limbs: jax.Array, b_limbs: jax.Array) -> jax.Array:\n    \"\"\"Vectorized 4-limb uint64[N, 4] carry-chained 256-bit EVM arithmetic on TPU v6e VPU.\"\"\"",
     "    s0 = a_limbs[:, 0] + b_limbs[:, 0]\n    c0 = (s0 < a_limbs[:, 0]).astype(jnp.uint64)",
     "    s1_raw = a_limbs[:, 1] + b_limbs[:, 1]\n    s1 = s1_raw + c0\n    c1 = ((s1_raw < a_limbs[:, 1]) | (s1 < s1_raw)).astype(jnp.uint64)",
     "    s2_raw = a_limbs[:, 2] + b_limbs[:, 2]\n    s2 = s2_raw + c1\n    c2 = ((s2_raw < a_limbs[:, 2]) | (s2 < s2_raw)).astype(jnp.uint64)",
     "    s3 = a_limbs[:, 3] + b_limbs[:, 3] + c2\n    return jnp.stack([s0, s1, s2, s3], axis=1)\n",
-    "@jax.jit\ndef tpu_v5e_fastcheck_u256_batch(seed: jnp.uint64, n_samples: int = 65536) -> dict:\n    \"\"\"Vectorized 256-bit SplitMix64 counterexample search with equality precondition propagation.\"\"\"",
+    "tpu_v5e_evm_u256_batch = tpu_v6e_evm_u256_batch\n",
+    "@jax.jit\ndef tpu_v6e_fastcheck_u256_batch(seed: jnp.uint64, n_samples: int = 65536) -> dict:\n    \"\"\"Vectorized 256-bit SplitMix64 counterexample search with equality precondition propagation.\"\"\"",
     "    idx = jnp.arange(n_samples, dtype=jnp.uint64)\n    z = seed + idx * jnp.uint64(0x9E3779B97F4A7C15)",
     "    z = (z ^ (z >> jnp.uint64(30))) * jnp.uint64(0xBF58476D1CE4E5B9)\n    z = (z ^ (z >> jnp.uint64(27))) * jnp.uint64(0x94D049BB133111EB)",
     "    x1 = z ^ (z >> jnp.uint64(31))\n    x0 = x1 + jnp.uint64(42)\n    violated = (x1 >= jnp.uint64(1000000)) & (x0 < jnp.uint64(1000000))",
-    "    return {\"any_cex\": jnp.any(violated), \"count\": jnp.sum(violated.astype(jnp.uint32))}\n"
+    "    return {\"any_cex\": jnp.any(violated), \"count\": jnp.sum(violated.astype(jnp.uint32))}\n",
+    "tpu_v5e_fastcheck_u256_batch = tpu_v6e_fastcheck_u256_batch\n",
+    "@jax.jit\ndef tpu_v6e_speculate_forest_s4(z: jax.Array, w1: jax.Array, w2: jax.Array, w_prem: jax.Array, w_tac: jax.Array) -> dict:\n    \"\"\"Fused 256x256 MXU S_4 (d=128, h=256) ClippedReLU^2 + Premise (1024) + Tactic (8) forest speculation.\"\"\"",
+    "    pre = jnp.matmul(z.astype(jnp.bfloat16), w1.astype(jnp.bfloat16))\n    act = jnp.minimum(jnp.square(jnp.maximum(pre, jnp.bfloat16(0.0))), jnp.bfloat16(16.0))",
+    "    z_next = z.astype(jnp.bfloat16) + jnp.matmul(act, w2.astype(jnp.bfloat16))",
+    "    prem_logits = jnp.matmul(z_next, w_prem.astype(jnp.bfloat16), preferred_element_type=jnp.float32)",
+    "    tac_logits = jnp.matmul(z_next, w_tac.astype(jnp.bfloat16), preferred_element_type=jnp.float32)",
+    "    return {\"z_next\": z_next, \"premise_logits\": prem_logits, \"tactic_logits\": tac_logits}\n"
   ]
 
 end LeanNative.Backend.MLIRGPU

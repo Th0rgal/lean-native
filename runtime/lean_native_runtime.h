@@ -407,7 +407,7 @@ void lean_native_trm_matryoshka_cpu_int8(
 /**
  * Runs a deterministic bit-for-bit parity self-test between `lean_native_trm_matryoshka_ref_int8`
  * and `lean_native_trm_matryoshka_cpu_int8` across Matryoshka slices `S_0 (16x32)`, `S_1 (32x64)`,
- * and `S_3 (64x128)`. Returns 1 if all slices match bit-for-bit, 0 otherwise.
+ * `S_3 (64x128)`, and `S_4 (128x256, Trillium TPU v6e)`. Returns 1 if all slices match bit-for-bit, 0 otherwise.
  */
 int lean_native_trm_matryoshka_parity_selftest(void);
 
