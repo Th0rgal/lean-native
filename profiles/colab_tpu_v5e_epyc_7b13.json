@@ -7,8 +7,25 @@
   "hardware_metadata": {
     "host_os": "linux",
     "host_arch": "x86_64",
+    "cpu_arch": "zen3-avx2",
     "cpu_model": "AMD EPYC 7B13",
-    "gpu_model": "Google Cloud TPU v5e (ct5lp-hightpu / MLIR-XLA)"
+    "gpu_model": "Google Cloud TPU v5e (ct5lp-hightpu / MLIR-XLA)",
+    "l1d_bytes": 32768,
+    "l2_bytes": 524288,
+    "slc_bytes": 33554432,
+    "unified_memory": false
+  },
+  "cache_trm_tier": {
+    "slice_id": "cpu_l2_int8",
+    "d_model": 32,
+    "d_hidden": 64,
+    "ngram_buckets": 8192,
+    "table_d": 8,
+    "default_h_cycles": 2,
+    "default_l_cycles": 2,
+    "max_footprint_bytes": 98304,
+    "inference_path": "tpu_vmem_bf16",
+    "batch_gpu_path": "tpu_xla_stablehlo_bf16"
   },
   "add_sub_cost": 1,
   "bitwise_cost": 1,
@@ -32,7 +49,7 @@
       "fma_ns": 0.6226,
       "select_ns": 0.9321
     },
-    "payload_digest_blake2b256": "ca2c7f1f867d389e7c066a1e42ff8f0320a88633b96108c5ba223c7d94cedba1",
+    "payload_digest_blake2b256": "905436d18b7139a0a3ddb62df6275622c88eb6473690f4e90cbcdcdb3732069c",
     "calibrated_at_utc": "2026-10-20T09:26:16Z"
   }
 }

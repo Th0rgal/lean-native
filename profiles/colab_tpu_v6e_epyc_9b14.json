@@ -7,8 +7,25 @@
   "hardware_metadata": {
     "host_os": "linux",
     "host_arch": "x86_64",
+    "cpu_arch": "zen4-avx512",
     "cpu_model": "AMD EPYC 9B14",
-    "gpu_model": "Google Cloud TPU v6e (Trillium v6 lite / MLIR-XLA)"
+    "gpu_model": "Google Cloud TPU v6e (Trillium v6 lite / MLIR-XLA)",
+    "l1d_bytes": 32768,
+    "l2_bytes": 1048576,
+    "slc_bytes": 33554432,
+    "unified_memory": false
+  },
+  "cache_trm_tier": {
+    "slice_id": "cpu_l2_int8",
+    "d_model": 32,
+    "d_hidden": 64,
+    "ngram_buckets": 8192,
+    "table_d": 8,
+    "default_h_cycles": 2,
+    "default_l_cycles": 2,
+    "max_footprint_bytes": 98304,
+    "inference_path": "tpu_vmem_bf16",
+    "batch_gpu_path": "tpu_xla_stablehlo_bf16"
   },
   "add_sub_cost": 1,
   "bitwise_cost": 1,
@@ -32,7 +49,7 @@
       "fma_ns": 0.6164,
       "select_ns": 0.9272
     },
-    "payload_digest_blake2b256": "4354b85e1a518260eec1b46e5441cb6615432e103421a35b81641cc19b8b2e1f",
+    "payload_digest_blake2b256": "ba0ae84c5c5d88703cdd2eab78fabb26075c5d1403fa56392dc0f2255b207e73",
     "calibrated_at_utc": "2026-10-21T07:54:33Z"
   }
 }
