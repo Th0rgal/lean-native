@@ -283,6 +283,25 @@ def verify_single_profile(path: Path) -> tuple[bool, str]:
     if data["target"] not in ("x86_64", "arm64", "cuda_ptx", "apple_metal", "tpu_xla"):
         return False, f"{path.name}: invalid target '{data['target']}'"
 
+    hw_meta = data.get("hardware_metadata", {})
+    if data["profile_id"] in ("apple_silicon_m2_metal", "apple_silicon_m3_metal"):
+        if hw_meta.get("host_os") != "darwin" or not str(hw_meta.get("cpu_arch", "")).startswith("apple-m"):
+            return False, f"{path.name}: Apple Silicon profile must declare host_os='darwin' and cpu_arch='apple-m*'"
+        if hw_meta.get("l1d_bytes", 0) < 131072 or hw_meta.get("l2_bytes", 0) < 8388608:
+            return False, f"{path.name}: Apple Silicon profile missing valid P-core L1d/L2 cache hierarchy"
+
+    trm_tier = data.get("cache_trm_tier")
+    if trm_tier is not None:
+        d_m = int(trm_tier.get("d_model", 0))
+        d_h = int(trm_tier.get("d_hidden", 0))
+        b_n = int(trm_tier.get("ngram_buckets", 0))
+        t_d = int(trm_tier.get("table_d", 0))
+        max_fp = int(trm_tier.get("max_footprint_bytes", 0))
+        table_bytes = (b_n * t_d) // 2 if "nvfp4" in str(trm_tier.get("inference_path", "")) else b_n * t_d
+        core_bytes = (d_m * d_h) + d_m * 64 if "nvfp4" in str(trm_tier.get("inference_path", "")) else d_m * d_h * 2 + d_m * 64
+        if table_bytes + core_bytes > max_fp:
+            return False, f"{path.name}: cache_trm_tier footprint ({table_bytes + core_bytes} B) exceeds max_footprint_bytes ({max_fp} B)"
+
     expected_digest = compute_payload_digest(data)
     actual_digest = data.get("calibration_receipt", {}).get("payload_digest_blake2b256", "")
     if expected_digest != actual_digest:

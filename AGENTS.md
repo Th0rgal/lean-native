@@ -44,3 +44,16 @@ Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lea
 - **Operational Semantics & Proofs**: [`LeanNative/Semantics/`](LeanNative/Semantics/), [`LeanNative/Proofs/AxiomAudit.lean`](LeanNative/Proofs/AxiomAudit.lean)
 - **Multi-Target Backends**: [`LeanNative/Backend/FastCheck.lean`](LeanNative/Backend/FastCheck.lean), [`LeanNative/Backend/Hybrid.lean`](LeanNative/Backend/Hybrid.lean), [`LeanNative/Backend/MLIRGPU.lean`](LeanNative/Backend/MLIRGPU.lean)
 - **CI & Federated Worker Entrypoints**: [`scripts/ci_verify.sh`](scripts/ci_verify.sh), [`scripts/colab_gpu_worker.py`](scripts/colab_gpu_worker.py)
+
+---
+
+## 4. Optimization Objectives & Resource Envelopes (`ObjectiveReceipt`)
+
+Autonomous research on `lean-native` separates **Layer 1 (Formal Admissibility)** from **Layer 2 (Lexicographic Empirical Fitness)**:
+
+1. **Layer 1 — Hard Formal Gate (`Spec.lean`, `G(x) = true`)**:
+   - `untrusted_opt_plugin_tv_gate_sound` (`SymbolicTV` / `CodeRefines` + 64-state checksum equivalence), `opt_pipeline_chain_refines`, `0 sorryAx`, `0 vacuous` specs (`turbo-lean --json audit-spec LeanNative/Spec.lean`).
+2. **Layer 2 — Lexicographic Objective (`J_native`)**:
+   - **Primary**: Maximize compiled execution speedup geomean ($\text{Geomean}(\text{Speedup}_{\text{exec}})$, Mann-Whitney $p < 0.05$).
+   - **Secondary**: Minimize compilation latency ($\text{ms}$) and emitted binary/kernel footprint.
+   - **Resource Envelope**: `spills == 0`, `registers <= profile.max_regs`, `cache_trm_tier <= max_footprint_bytes`, `ΔLOC <= 0`.

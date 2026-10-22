@@ -7,8 +7,25 @@
   "hardware_metadata": {
     "host_os": "linux",
     "host_arch": "aarch64",
-    "cpu_model": "aarch64",
-    "gpu_model": "NVIDIA GB10"
+    "cpu_arch": "grace-blackwell-gb10",
+    "cpu_model": "ARM Cortex-X925 / Cortex-A725 (Grace Blackwell GB10)",
+    "gpu_model": "NVIDIA GB10 (Blackwell sm_121)",
+    "l1d_bytes": 65536,
+    "l2_bytes": 2097152,
+    "slc_bytes": 33554432,
+    "unified_memory": true
+  },
+  "cache_trm_tier": {
+    "slice_id": "spark_gb10_nvfp4",
+    "d_model": 64,
+    "d_hidden": 128,
+    "ngram_buckets": 16384,
+    "table_d": 8,
+    "default_h_cycles": 2,
+    "default_l_cycles": 2,
+    "max_footprint_bytes": 131072,
+    "inference_path": "gpu_cuda_nvfp4_sm121",
+    "batch_gpu_path": "cuda_ptx_nvfp4_tensor_core"
   },
   "add_sub_cost": 1,
   "bitwise_cost": 1,
@@ -32,7 +49,7 @@
       "fma_ns": 0.5143,
       "select_ns": 1.0327
     },
-    "payload_digest_blake2b256": "6120832354b3d0eeb6f30ff41648f590f188ff58364de3963ac6243556a6e61a",
+    "payload_digest_blake2b256": "4d95b4da9613060a15ed1f948c0d4e1512aadbf2f9a9f2aed4f5efc85de54e37",
     "calibrated_at_utc": "2026-10-20T06:38:46Z"
   }
 }

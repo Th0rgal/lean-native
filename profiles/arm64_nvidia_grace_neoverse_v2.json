@@ -7,8 +7,24 @@
   "hardware_metadata": {
     "host_os": "linux",
     "host_arch": "aarch64",
-    "cpu_model": "aarch64",
-    "gpu_model": "NVIDIA GB10"
+    "cpu_arch": "neoverse-v2",
+    "cpu_model": "ARM Neoverse-V2 / Cortex-X925",
+    "gpu_model": "NVIDIA GB10",
+    "l1d_bytes": 65536,
+    "l2_bytes": 2097152,
+    "slc_bytes": 16777216,
+    "unified_memory": true
+  },
+  "cache_trm_tier": {
+    "slice_id": "stage0_l1",
+    "d_model": 16,
+    "d_hidden": 32,
+    "ngram_buckets": 4096,
+    "table_d": 4,
+    "default_h_cycles": 1,
+    "default_l_cycles": 1,
+    "max_footprint_bytes": 24576,
+    "inference_path": "cpu_neon_fp16_accelerate"
   },
   "add_sub_cost": 1,
   "bitwise_cost": 1,
@@ -32,7 +48,7 @@
       "fma_ns": 0.5193,
       "select_ns": 1.0465
     },
-    "payload_digest_blake2b256": "cf8f9e2e1bdbfcfb369030afadd6baf822efb504a40fcc43ed7a74ec16272213",
+    "payload_digest_blake2b256": "07b9c4fd2c1e85d6fed351843d9d6438648ce17f4a4b2ebb698176c95527a1c7",
     "calibrated_at_utc": "2026-10-20T06:38:46Z"
   }
 }

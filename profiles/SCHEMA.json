@@ -44,6 +44,36 @@
     "min_gpu_elements": { "type": "integer", "minimum": 256, "maximum": 16777216 },
     "gpu_block_threads": { "type": "integer", "enum": [64, 128, 256, 512, 1024] },
     "matmul_tile_dim": { "type": "integer", "enum": [8, 16, 32] },
+    "hardware_metadata": {
+      "type": "object",
+      "properties": {
+        "host_os": { "type": "string" },
+        "host_arch": { "type": "string" },
+        "cpu_arch": { "type": "string" },
+        "cpu_model": { "type": "string" },
+        "gpu_model": { "type": "string" },
+        "l1d_bytes": { "type": "integer", "minimum": 16384 },
+        "l2_bytes": { "type": "integer", "minimum": 131072 },
+        "slc_bytes": { "type": "integer", "minimum": 0 },
+        "unified_memory": { "type": "boolean" }
+      }
+    },
+    "cache_trm_tier": {
+      "type": "object",
+      "required": ["slice_id", "d_model", "d_hidden", "ngram_buckets", "table_d", "max_footprint_bytes", "inference_path"],
+      "properties": {
+        "slice_id": { "type": "string", "enum": ["stage0_l1", "cpu_l2_int8", "m2_neon_fp16", "spark_gb10_nvfp4"] },
+        "d_model": { "type": "integer", "enum": [16, 32, 48, 64] },
+        "d_hidden": { "type": "integer", "enum": [32, 64, 96, 128] },
+        "ngram_buckets": { "type": "integer", "enum": [4096, 8192, 16384] },
+        "table_d": { "type": "integer", "enum": [4, 8, 16] },
+        "default_h_cycles": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "default_l_cycles": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "max_footprint_bytes": { "type": "integer", "minimum": 8192, "maximum": 4194304 },
+        "inference_path": { "type": "string", "enum": ["cpu_avx2_int8", "cpu_neon_fp16_accelerate", "gpu_cuda_nvfp4_sm121", "tpu_vmem_bf16"] },
+        "batch_gpu_path": { "type": "string" }
+      }
+    },
     "calibration_receipt": { "type": "object" }
   }
 }

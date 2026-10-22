@@ -2,13 +2,30 @@
   "schema_version": "lean-native-hardware-profile-v1",
   "profile_id": "apple_silicon_m3_metal",
   "target": "apple_metal",
-  "llvm_target_cpu": "neoverse-v2",
-  "sm_arch": "sm_121",
+  "llvm_target_cpu": "apple-m3",
+  "sm_arch": "metal_3_1",
   "hardware_metadata": {
-    "host_os": "linux",
-    "host_arch": "aarch64",
-    "cpu_model": "aarch64",
-    "gpu_model": "NVIDIA GB10"
+    "host_os": "darwin",
+    "host_arch": "arm64",
+    "cpu_arch": "apple-m3",
+    "cpu_model": "Apple M3 (P-core / E-core)",
+    "gpu_model": "Apple M3 10-Core Metal 3 GPU (Dynamic Caching / Unified Memory)",
+    "l1d_bytes": 131072,
+    "l2_bytes": 16777216,
+    "slc_bytes": 8388608,
+    "unified_memory": true
+  },
+  "cache_trm_tier": {
+    "slice_id": "m2_neon_fp16",
+    "d_model": 32,
+    "d_hidden": 64,
+    "ngram_buckets": 8192,
+    "table_d": 8,
+    "default_h_cycles": 2,
+    "default_l_cycles": 2,
+    "max_footprint_bytes": 98304,
+    "inference_path": "cpu_neon_fp16_accelerate",
+    "batch_gpu_path": "apple_metal_simdgroup_fp16"
   },
   "add_sub_cost": 1,
   "bitwise_cost": 1,
@@ -32,7 +49,7 @@
       "fma_ns": 0.5121,
       "select_ns": 1.0256
     },
-    "payload_digest_blake2b256": "c94f8299216be7147438ca8363603a0ebf215d9f399cf9d535b04ea745add636",
+    "payload_digest_blake2b256": "cc472bea78f46d061b95da949bf31d6a6779acc2b7fb8e0bcec3cd61fb3fa819",
     "calibrated_at_utc": "2026-10-20T06:38:47Z"
   }
 }
