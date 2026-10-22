@@ -667,8 +667,8 @@ def subSliceView (s : ByteSliceView) (subOff subLen : Nat) : ByteSliceView :=
 theorem subSliceView_valid (s : ByteSliceView) (subOff subLen : Nat)
     (h_parent : isValidByteSlice s = true) (h_sub : subOff + subLen ≤ s.len) :
     isValidByteSlice (subSliceView s subOff subLen) = true := by
-  simp [isValidByteSlice, subSliceView] at h_parent ⊢
-  omega
+  have hp : s.offset + s.len ≤ s.backingLen := of_decide_eq_true h_parent
+  exact decide_eq_true (by dsimp [subSliceView]; omega)
 
 /-- Grace-Blackwell `cuMemGetInfo` pre-flight memory headroom gate. -/
 structure GpuMemoryHeadroomInput where

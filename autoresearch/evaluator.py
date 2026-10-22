@@ -168,7 +168,7 @@ def run_stage2_formal_and_axiom_audit(candidate: Dict[str, Any]) -> Dict[str, An
 
     shard_spec = {
         "name": theorem_name,
-        "toolchain": str(candidate.get("toolchain", "leanprover/lean4:v4.31.0")),
+        "toolchain": str(candidate.get("toolchain", "leanprover/lean4:v4.35.0")),
         "prefix_env_hash": str(candidate.get("prefix_env_hash", "a1b2c3d4" * 8)),
         "stmt_hash": str(candidate.get("stmt_hash", "e5f60718" * 8)),
         "proof_hash": str(candidate.get("proof_hash", "99aabbcc" * 8)),

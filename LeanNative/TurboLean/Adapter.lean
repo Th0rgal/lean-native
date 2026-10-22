@@ -338,7 +338,7 @@ end TurboLeanConfig
     Uses domain separator `"theorem-shard-v1:"`. -/
 structure TheoremShardSpec where
   name          : String
-  toolchain     : String := "leanprover/lean4:v4.31.0"
+  toolchain     : String := "leanprover/lean4:v4.35.0"
   prefixEnvHash : String
   stmtHash      : String
   proofHash     : String
@@ -356,7 +356,7 @@ def computeShardKey (toolchain prefixEnvHash stmtHash proofHash : String) : Stri
   blake3Hex preimage
 
 /-- Construct a `TheoremShardSpec` and automatically populate `shardKey`. -/
-def create (name : String) (toolchain : String := "leanprover/lean4:v4.31.0")
+def create (name : String) (toolchain : String := "leanprover/lean4:v4.35.0")
     (prefixEnvHash stmtHash proofHash : String)
     (shardSource : String := "") (interfaceHash : String := "") : TheoremShardSpec :=
   let key := computeShardKey toolchain prefixEnvHash stmtHash proofHash
@@ -921,7 +921,7 @@ def runAdapterSelfTest (receiptPath : System.FilePath := "/tmp/lean_native_test_
   let domHash ← computeBlake3DomainHash "turbo-lean-domain" "payload"
   if domHash.length != 64 then return false
   let shard := TheoremShardSpec.create
-    "LeanNative.Proofs.mul_two_eq_shl_one" "leanprover/lean4:v4.31.0"
+    "LeanNative.Proofs.mul_two_eq_shl_one" "leanprover/lean4:v4.35.0"
     "1111111111111111" "2222222222222222" "3333333333333333"
     "theorem mul_two_eq_shl_one (x : UInt64) : x * 2 = x <<< 1 := by decide" "4444444444444444"
   let shardRes ← checkShardWithFallback cfg shard

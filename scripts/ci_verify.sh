@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export PATH="$ROOT_DIR/../turbo-lean/target/release:/var/lib/sandboxed-node/caches/elan/bin:$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
+export PATH="$ROOT_DIR/../turbo-lean/target/release:/var/lib/sandboxed-node/caches/elan/bin:$HOME/.cargo/bin:/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0/bin:/var/lib/sandboxed-node/.elan/toolchains/leanprover--lean4---v4.35.0/bin:$HOME/.elan/bin:/usr/lib/llvm-18/bin:/usr/local/cuda/bin:$PATH"
 
 BASE_REF="HEAD"
 for arg in "$@"; do
@@ -77,7 +77,9 @@ fi
 echo "[5/5] Running Gate 5: Orthogonal Native Test Suite & Showcase Examples..."
 $FULL_BIN build-exe tests/test_runner.lean -o /tmp/ln_ci_test_runner
 /tmp/ln_ci_test_runner
-clang -O3 -Iruntime -x c - -o /tmp/ln_ci_trm_parity runtime/lean_native_runtime.c << 'EOF'
+CC_BIN="gcc"
+command -v gcc >/dev/null 2>&1 || CC_BIN="/usr/bin/clang"
+$CC_BIN -O3 -Iruntime -x c - -o /tmp/ln_ci_trm_parity runtime/lean_native_runtime.c << 'EOF'
 #include "lean_native_runtime.h"
 #include <stdio.h>
 int main(void) {

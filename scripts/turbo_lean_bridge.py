@@ -193,7 +193,7 @@ def main() -> int:
         print(json.dumps({"domain": THEOREM_SHARD_DOMAIN, "shard_key": compute_shard_key(tc, peh, sh, ph, args.hash_engine)}, indent=2)); return 0
     if args.check_shard:
         spec = json.loads(Path(args.check_shard).read_text()) if os.path.isfile(args.check_shard) else json.loads(args.check_shard)
-        res = check_shard_with_fallback(str(spec.get("name", "anon")), str(spec.get("toolchain", "leanprover/lean4:v4.31.0")), str(spec.get("prefixEnvHash", spec.get("prefix_env_hash", ""))), str(spec.get("stmtHash", spec.get("stmt_hash", ""))), str(spec.get("proofHash", spec.get("proof_hash", ""))), str(spec.get("shardSource", spec.get("shard_source", ""))), str(spec.get("interfaceHash", spec.get("interface_hash", ""))))
+        res = check_shard_with_fallback(str(spec.get("name", "anon")), str(spec.get("toolchain", "leanprover/lean4:v4.35.0")), str(spec.get("prefixEnvHash", spec.get("prefix_env_hash", ""))), str(spec.get("stmtHash", spec.get("stmt_hash", ""))), str(spec.get("proofHash", spec.get("proof_hash", ""))), str(spec.get("shardSource", spec.get("shard_source", ""))), str(spec.get("interfaceHash", spec.get("interface_hash", ""))))
         print(json.dumps(res, indent=2)); return 0 if res["ok"] else 1
     if args.fast_check_rewrite:
         lhs_s, rhs_s = (args.fast_check_rewrite.split("->", 1) if "->" in args.fast_check_rewrite else args.fast_check_rewrite.split("==", 1))

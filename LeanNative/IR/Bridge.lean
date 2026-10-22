@@ -662,7 +662,7 @@ def normalizeAndInlineLocalDefs (m : LNIRModule) : LNIRModule :=
     )
     { m with decls := decls' }
 
-/-- Resolve the Lean 4.31 sysroot path reliably even when `lean` is not on `PATH`. -/
+/-- Resolve the Lean 4.35 sysroot path reliably even when `lean` is not on `PATH`. -/
 def resolveLeanSysroot : IO System.FilePath := do
   if let some envRoot ← IO.getEnv "LEAN_SYSROOT" then
     if !envRoot.isEmpty then
@@ -670,7 +670,7 @@ def resolveLeanSysroot : IO System.FilePath := do
   try
     Lean.findSysroot
   catch _ =>
-    return System.FilePath.mk "/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
+    return System.FilePath.mk "/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"
 
 /-- Run `Lean.Elab.runFrontend` on `filePath` and execute `act` inside `CoreM`. -/
 def withElaboratedFrontend {α : Type} (filePath : String) (modName : Lean.Name) (act : Lean.CoreM α) : IO α := do

@@ -48,8 +48,8 @@ BENCH_LINE_RE = re.compile(
 
 def find_local_lean_toolchain() -> Path:
     candidates = [
-        Path("/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"),
-        Path.home() / ".elan" / "toolchains" / "leanprover--lean4---v4.31.0",
+        Path("/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"),
+        Path.home() / ".elan" / "toolchains" / "leanprover--lean4---v4.35.0",
     ]
     for c in candidates:
         if (c / "bin" / "lean").is_file():
@@ -57,7 +57,7 @@ def find_local_lean_toolchain() -> Path:
     lean_bin = shutil.which("lean")
     if lean_bin:
         return Path(lean_bin).resolve().parent.parent
-    raise RuntimeError("Could not locate Lean 4 v4.31.0 toolchain on local host")
+    raise RuntimeError("Could not locate Lean 4 v4.35.0 toolchain on local host")
 
 
 def get_ssh_config_path() -> Optional[str]:
@@ -245,8 +245,8 @@ def run_local_spark_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[st
         remote_script = f"""
 set -e
 cd {remote_dir}
-LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
-if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="$HOME/.elan/toolchains/leanprover--lean4---v4.31.0"; fi
+LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"
+if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="$HOME/.elan/toolchains/leanprover--lean4---v4.35.0"; fi
 RUSTC_BIN=$(which rustc 2>/dev/null || echo "$HOME/.cargo/bin/rustc")
 if [ ! -x "$RUSTC_BIN" ]; then RUSTC_BIN="/var/lib/sandboxed-node/.cargo/bin/rustc"; fi
 NVCC=$(which nvcc || echo /usr/local/cuda-13.0/bin/nvcc)
@@ -358,8 +358,8 @@ def run_remote_ashur_benchmarks(manifest: Dict[str, Any], trials: int) -> Dict[s
     remote_script = f"""
 set -e
 cd {remote_dir}
-LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.31.0"
-if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="/opt/actions-runner/verity-medium-1/.elan/toolchains/leanprover--lean4---v4.31.0"; fi
+LEAN_ROOT="/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"
+if [ ! -x "$LEAN_ROOT/bin/lean" ]; then LEAN_ROOT="/opt/actions-runner/verity-medium-1/.elan/toolchains/leanprover--lean4---v4.35.0"; fi
 RUSTC_BIN=$(which rustc 2>/dev/null || echo "/var/lib/sandboxed-node/f0193f28-1b1b-422e-ae57-3d1be9b1d42f/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc")
 if [ ! -x "$RUSTC_BIN" ]; then RUSTC_BIN="$HOME/.cargo/bin/rustc"; fi
 t0=$(date +%s%3N); "$LEAN_ROOT/bin/lean" -c bench_suite.c bench_suite.lean && "$LEAN_ROOT/bin/leanc" -O3 bench_suite.c -o bench_official_lean4; echo "COMPILE_MS official_lean4 $(($(date +%s%3N) - t0))"
