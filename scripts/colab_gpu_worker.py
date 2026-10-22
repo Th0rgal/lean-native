@@ -1211,6 +1211,12 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
         else:
             self._send_json(404, {"ok": False, "error": f"unknown endpoint {self.path}"})
 
+    def _send_local_job(self, res: Dict[str, Any], ttl: int) -> None:
+        out = dict(res)
+        out.setdefault("delegated_to_peer", None)
+        out.setdefault("remaining_ttl", ttl)
+        self._send_json(200, out)
+
     def do_POST(self) -> None:
         if not self._check_auth():
             return
@@ -1240,13 +1246,8 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
 
         if self.path == "/v1/compute":
             self._send_json(200, run_unified_v1_compute(req))
-
         elif self.path == "/verify-ptx":
-            res = NODE_STATE.run_hardware_job(lambda: _verify_ptx_local(req))
-            res.setdefault("delegated_to_peer", None)
-            res.setdefault("remaining_ttl", ttl)
-            self._send_json(200, res)
-
+            self._send_local_job(NODE_STATE.run_hardware_job(lambda: _verify_ptx_local(req)), ttl)
         elif self.path == "/tune-profile":
             profile_id = req.get("profile_id", "colab_gpu_auto")
             target = req.get("target", "cuda_ptx")
@@ -1282,31 +1283,14 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
             finally:
                 if os.path.exists(out_path):
                     os.unlink(out_path)
-
         elif self.path == "/run-tpu-bench":
-            res = NODE_STATE.run_hardware_job(lambda: run_local_tpu_xla_bench(req))
-            res.setdefault("delegated_to_peer", None)
-            res.setdefault("remaining_ttl", ttl)
-            self._send_json(200, res)
-
+            self._send_local_job(NODE_STATE.run_hardware_job(lambda: run_local_tpu_xla_bench(req)), ttl)
         elif self.path == "/run-tpu-fastcheck":
-            res = dict(run_local_tpu_fastcheck(req))
-            res.setdefault("delegated_to_peer", None)
-            res.setdefault("remaining_ttl", ttl)
-            self._send_json(200, res)
-
+            self._send_local_job(run_local_tpu_fastcheck(req), ttl)
         elif self.path == "/run-tpu-batch-fastcheck":
-            res = dict(run_local_tpu_batch_fastcheck(req))
-            res.setdefault("delegated_to_peer", None)
-            res.setdefault("remaining_ttl", ttl)
-            self._send_json(200, res)
-
+            self._send_local_job(run_local_tpu_batch_fastcheck(req), ttl)
         elif self.path == "/train-tactic-model":
-            res = NODE_STATE.run_hardware_job(lambda: run_local_tactic_model_training(req))
-            res.setdefault("delegated_to_peer", None)
-            res.setdefault("remaining_ttl", ttl)
-            self._send_json(200, res)
-
+            self._send_local_job(NODE_STATE.run_hardware_job(lambda: run_local_tactic_model_training(req)), ttl)
         elif self.path == "/run-cuda-bench":
             cuda_src = req.get("cuda_src", "")
             nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
@@ -1579,24 +1563,19 @@ def main() -> int:
         server.serve_forever()
         return 0
 
+    def _cli_json(res: Dict[str, Any], check_ok: bool = False) -> int:
+        print(json.dumps(res, indent=2))
+        return (0 if res.get("ok") else 1) if check_ok else 0
+
     if not args.api_url or not args.token:
         if args.run_tpu_bench:
-            print(json.dumps(run_local_tpu_xla_bench({}), indent=2))
-            return 0
+            return _cli_json(run_local_tpu_xla_bench({}))
         if args.run_tpu_fastcheck:
-            print(
-                json.dumps(
-                    run_local_tpu_fastcheck({"decl_name": args.decl_name, "stmt_src": args.stmt_src}),
-                    indent=2,
-                )
-            )
-            return 0
+            return _cli_json(run_local_tpu_fastcheck({"decl_name": args.decl_name, "stmt_src": args.stmt_src}))
         if args.run_tpu_batch_fastcheck:
-            print(json.dumps(run_local_tpu_batch_fastcheck({}), indent=2))
-            return 0
+            return _cli_json(run_local_tpu_batch_fastcheck({}))
         if args.train_tactic_model:
-            print(json.dumps(run_local_tactic_model_training({}), indent=2))
-            return 0
+            return _cli_json(run_local_tactic_model_training({}))
         print(
             "Error: set LEAN_NATIVE_COLAB_API_URL and LEAN_NATIVE_COLAB_TOKEN (or pass --api-url / --token)",
             file=sys.stderr,
@@ -1604,74 +1583,77 @@ def main() -> int:
         return 1
 
     if args.status:
-        res = client_request(args.api_url, args.token, "GET", "/status")
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("ok") else 1
+        return _cli_json(client_request(args.api_url, args.token, "GET", "/status"), True)
 
     if args.run_tpu_bench:
-        res = client_request(
-            args.api_url,
-            args.token,
-            "POST",
-            "/run-tpu-bench",
-            {"n_elements": 262144, "matmul_dim": 128, "ttl": args.ttl, "project_id": args.project_id},
+        return _cli_json(
+            client_request(
+                args.api_url,
+                args.token,
+                "POST",
+                "/run-tpu-bench",
+                {"n_elements": 262144, "matmul_dim": 128, "ttl": args.ttl, "project_id": args.project_id},
+            ),
+            True,
         )
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("ok") else 1
 
     if args.run_tpu_fastcheck:
-        res = client_request(
-            args.api_url,
-            args.token,
-            "POST",
-            "/run-tpu-fastcheck",
-            {
-                "samples": 65536,
-                "decl_name": args.decl_name,
-                "stmt_src": args.stmt_src,
-                "ttl": args.ttl,
-                "project_id": args.project_id,
-            },
+        return _cli_json(
+            client_request(
+                args.api_url,
+                args.token,
+                "POST",
+                "/run-tpu-fastcheck",
+                {
+                    "samples": 65536,
+                    "decl_name": args.decl_name,
+                    "stmt_src": args.stmt_src,
+                    "ttl": args.ttl,
+                    "project_id": args.project_id,
+                },
+            ),
+            True,
         )
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("ok") else 1
 
     if args.run_tpu_batch_fastcheck:
-        res = client_request(
-            args.api_url,
-            args.token,
-            "POST",
-            "/run-tpu-batch-fastcheck",
-            {"samples": 65536, "ttl": args.ttl, "project_id": args.project_id},
+        return _cli_json(
+            client_request(
+                args.api_url,
+                args.token,
+                "POST",
+                "/run-tpu-batch-fastcheck",
+                {"samples": 65536, "ttl": args.ttl, "project_id": args.project_id},
+            ),
+            True,
         )
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("ok") else 1
 
     if args.train_tactic_model:
-        res = client_request(
-            args.api_url,
-            args.token,
-            "POST",
-            "/train-tactic-model",
-            {"arch": "recursive_modded_nanogpt_trm", "steps": 64, "ttl": args.ttl, "project_id": args.project_id},
+        return _cli_json(
+            client_request(
+                args.api_url,
+                args.token,
+                "POST",
+                "/train-tactic-model",
+                {"arch": "recursive_modded_nanogpt_trm", "steps": 64, "ttl": args.ttl, "project_id": args.project_id},
+            ),
+            True,
         )
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("ok") else 1
 
     if args.verify_ptx:
         raw = Path(args.verify_ptx).read_text()
         if "#define" in raw or "EMBEDDED_PTX_MODULE" in raw:
             strings = re.findall(r'"([^"]*)"', raw)
             raw = "".join(s.encode("utf-8").decode("unicode_escape") for s in strings)
-        res = client_request(
-            args.api_url,
-            args.token,
-            "POST",
-            "/verify-ptx",
-            {"ptx": raw, "ttl": args.ttl, "project_id": args.project_id},
+        return _cli_json(
+            client_request(
+                args.api_url,
+                args.token,
+                "POST",
+                "/verify-ptx",
+                {"ptx": raw, "ttl": args.ttl, "project_id": args.project_id},
+            ),
+            True,
         )
-        print(json.dumps(res, indent=2))
-        return 0 if res.get("ok") else 1
 
     if args.tune_profile:
         res = client_request(
@@ -1684,20 +1666,18 @@ def main() -> int:
         if res.get("ok") and res.get("profile"):
             prof = res["profile"]
             hw_meta = prof.get("hardware_metadata", {})
-            if "EPYC 9B14" in hw_meta.get("cpu_model", "") or hw_meta.get("gpu_model") == "v6e-1":
-                hw_meta["gpu_model"] = "Google Cloud TPU v6e (Trillium v6 lite / MLIR-XLA)"
-                prof["hardware_metadata"] = hw_meta
-                prof["sm_arch"] = "tpu_v6e"
+            cpu_model = hw_meta.get("cpu_model", "")
+            gpu_model = hw_meta.get("gpu_model", "")
+            tpu_info = None
+            if "EPYC 9B14" in cpu_model or gpu_model == "v6e-1":
+                tpu_info = ("Google Cloud TPU v6e (Trillium v6 lite / MLIR-XLA)", "tpu_v6e")
+            elif "EPYC 7B13" in cpu_model and gpu_model == "none":
+                tpu_info = ("Google Cloud TPU v5e (ct5lp-hightpu / MLIR-XLA)", "tpu_v5e")
+            if tpu_info is not None:
                 from tune_hardware_profile import compute_payload_digest
 
-                prof["calibration_receipt"]["payload_digest_blake2b256"] = compute_payload_digest(prof)
-            elif "EPYC 7B13" in hw_meta.get("cpu_model", "") and hw_meta.get("gpu_model") == "none":
-                hw_meta["gpu_model"] = "Google Cloud TPU v5e (ct5lp-hightpu / MLIR-XLA)"
+                hw_meta["gpu_model"], prof["sm_arch"] = tpu_info
                 prof["hardware_metadata"] = hw_meta
-                prof["sm_arch"] = "tpu_v5e"
-                # Recompute BLAKE2b-256 calibration receipt digest after enriching TPU metadata
-                from tune_hardware_profile import compute_payload_digest
-
                 prof["calibration_receipt"]["payload_digest_blake2b256"] = compute_payload_digest(prof)
             Path(args.tune_profile).write_text(json.dumps(prof, indent=2) + "\n")
             print(f"[PASS] Saved remote Colab hardware profile to {args.tune_profile}")

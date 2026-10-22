@@ -68,6 +68,17 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
     ) -> List[float]:
         return list(raw_dict.get(backend, {}).get(bench_id, fallback))
 
+    def arch_pair(
+        a_base: Dict[str, List[float]],
+        a_cand: Dict[str, List[float]],
+        x_base: Dict[str, List[float]],
+        x_cand: Dict[str, List[float]],
+    ) -> Dict[str, Any]:
+        return {
+            "aarch64": {"host": "spark-de79", "baseline": a_base, "candidate": a_cand},
+            "x86_64": {"host": "ashur", "baseline": x_base, "candidate": x_cand},
+        }
+
     return [
         # 1. REJECTED at Stage 1 (Unsound overflow-ignoring division cancellation)
         {
@@ -102,38 +113,32 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "CodeRefines c (rewriteCodePeephole c) := by exact evalCode_rewriteCodePeephole_eq"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "collatz_steps": get_samples(
-                            spark_raw, "official_lean4", "collatz_steps",
-                            [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                        )
-                    },
-                    "candidate": {
-                        "collatz_steps": get_samples(
-                            spark_raw, "lean_native_cpu", "collatz_steps",
-                            [290.1, 289.4, 290.8, 289.7, 290.2, 289.9, 290.5],
-                        )
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "collatz_steps": get_samples(
+                        spark_raw, "official_lean4", "collatz_steps",
+                        [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
+                    )
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "collatz_steps": get_samples(
-                            ashur_raw, "official_lean4", "collatz_steps",
-                            [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                        )
-                    },
-                    "candidate": {
-                        "collatz_steps": get_samples(
-                            ashur_raw, "lean_native_cpu", "collatz_steps",
-                            [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4],
-                        )
-                    },
+                {
+                    "collatz_steps": get_samples(
+                        spark_raw, "lean_native_cpu", "collatz_steps",
+                        [290.1, 289.4, 290.8, 289.7, 290.2, 289.9, 290.5],
+                    )
                 },
-            },
+                {
+                    "collatz_steps": get_samples(
+                        ashur_raw, "official_lean4", "collatz_steps",
+                        [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
+                    )
+                },
+                {
+                    "collatz_steps": get_samples(
+                        ashur_raw, "lean_native_cpu", "collatz_steps",
+                        [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4],
+                    )
+                },
+            ),
         },
         # 3. REJECTED at Stage 1 (Unsound right-shift distributivity over addition)
         {
@@ -168,38 +173,32 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "CodeRefines (letBind t (mkTuple [a, b]) (letBind x (projTuple t 0) k)) (letBind x (.var a) k)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "tuple_accum_sum": get_samples(
-                            spark_raw, "official_lean4", "tuple_accum_sum",
-                            [962.6, 960.4, 964.1, 961.8, 963.2, 959.9, 962.0],
-                        )
-                    },
-                    "candidate": {
-                        "tuple_accum_sum": get_samples(
-                            spark_raw, "lean_native_cpu", "tuple_accum_sum",
-                            [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31],
-                        )
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "tuple_accum_sum": get_samples(
+                        spark_raw, "official_lean4", "tuple_accum_sum",
+                        [962.6, 960.4, 964.1, 961.8, 963.2, 959.9, 962.0],
+                    )
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "tuple_accum_sum": get_samples(
-                            ashur_raw, "official_lean4", "tuple_accum_sum",
-                            [1120.5, 1118.9, 1122.1, 1119.4, 1121.0, 1120.2, 1119.8],
-                        )
-                    },
-                    "candidate": {
-                        "tuple_accum_sum": get_samples(
-                            ashur_raw, "lean_native_cpu", "tuple_accum_sum",
-                            [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81],
-                        )
-                    },
+                {
+                    "tuple_accum_sum": get_samples(
+                        spark_raw, "lean_native_cpu", "tuple_accum_sum",
+                        [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31],
+                    )
                 },
-            },
+                {
+                    "tuple_accum_sum": get_samples(
+                        ashur_raw, "official_lean4", "tuple_accum_sum",
+                        [1120.5, 1118.9, 1122.1, 1119.4, 1121.0, 1120.2, 1119.8],
+                    )
+                },
+                {
+                    "tuple_accum_sum": get_samples(
+                        ashur_raw, "lean_native_cpu", "tuple_accum_sum",
+                        [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81],
+                    )
+                },
+            ),
         },
         # 5. REJECTED at Stage 2 (Axiom Audit Rejection due to `sorryAx` in proof obligation)
         {
@@ -238,38 +237,32 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "(letBind b1 (sarrayEnsureExclusive b0) (letBind b2 (.var b1) k))"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "sarray_scale_bias": get_samples(
-                            spark_raw, "official_lean4", "sarray_scale_bias",
-                            [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
-                        )
-                    },
-                    "candidate": {
-                        "sarray_scale_bias": get_samples(
-                            spark_raw, "lean_native_cpu", "sarray_scale_bias",
-                            [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
-                        )
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "sarray_scale_bias": get_samples(
+                        spark_raw, "official_lean4", "sarray_scale_bias",
+                        [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
+                    )
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "sarray_scale_bias": get_samples(
-                            ashur_raw, "official_lean4", "sarray_scale_bias",
-                            [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
-                        )
-                    },
-                    "candidate": {
-                        "sarray_scale_bias": get_samples(
-                            ashur_raw, "lean_native_cpu", "sarray_scale_bias",
-                            [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
-                        )
-                    },
+                {
+                    "sarray_scale_bias": get_samples(
+                        spark_raw, "lean_native_cpu", "sarray_scale_bias",
+                        [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
+                    )
                 },
-            },
+                {
+                    "sarray_scale_bias": get_samples(
+                        ashur_raw, "official_lean4", "sarray_scale_bias",
+                        [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
+                    )
+                },
+                {
+                    "sarray_scale_bias": get_samples(
+                        ashur_raw, "lean_native_cpu", "sarray_scale_bias",
+                        [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
+                    )
+                },
+            ),
         },
         # 7. REJECTED at Stage 3 (Over-wide 128x128 tile size causing L1 cache thrashing & regression > 2%)
         {
@@ -289,26 +282,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem matmul_tile_128_comm (a b c : UInt64) : a * b + c = c + a * b := by ac_rfl"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "matmul_tiled_u64": [30.70, 30.65, 30.74, 30.68, 30.71, 30.69, 30.72]
-                    },
-                    "candidate": {
-                        "matmul_tiled_u64": [54.20, 54.45, 54.12, 54.38, 54.29, 54.31, 54.25]
-                    },
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "matmul_tiled_u64": [68.40, 68.32, 68.51, 68.39, 68.44, 68.37, 68.42]
-                    },
-                    "candidate": {
-                        "matmul_tiled_u64": [112.60, 112.85, 112.40, 112.72, 112.65, 112.58, 112.70]
-                    },
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"matmul_tiled_u64": [30.70, 30.65, 30.74, 30.68, 30.71, 30.69, 30.72]},
+                {"matmul_tiled_u64": [54.20, 54.45, 54.12, 54.38, 54.29, 54.31, 54.25]},
+                {"matmul_tiled_u64": [68.40, 68.32, 68.51, 68.39, 68.44, 68.37, 68.42]},
+                {"matmul_tiled_u64": [112.60, 112.85, 112.40, 112.72, 112.65, 112.58, 112.70]},
+            ),
         },
         # 8. ACCEPTED at Stage 1+2+3 (Hybrid CPU/GPU Cost-Model Offload & 32x32/16x16 Tiled PTX Kernels)
         {
@@ -330,70 +309,64 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "TranslationValidated m := by exact cert_checker_valid"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "dot_product_u64": get_samples(
-                            spark_raw, "official_lean4", "dot_product_u64",
-                            [85.08, 84.92, 85.21, 85.01, 85.14, 84.99, 85.05],
-                        ),
-                        "saxpy_kernel": get_samples(
-                            spark_raw, "official_lean4", "saxpy_kernel",
-                            [4854.1, 4849.0, 4858.3, 4851.2, 4855.0, 4852.7, 4853.9],
-                        ),
-                        "matmul_tiled_u64": get_samples(
-                            spark_raw, "official_lean4", "matmul_tiled_u64",
-                            [1458.3, 1455.1, 1460.2, 1457.8, 1459.0, 1456.4, 1458.1],
-                        ),
-                    },
-                    "candidate": {
-                        "dot_product_u64": get_samples(
-                            spark_raw, "lean_native_hybrid", "dot_product_u64",
-                            [3.02, 2.99, 3.05, 3.01, 3.03, 3.00, 3.02],
-                        ),
-                        "saxpy_kernel": get_samples(
-                            spark_raw, "lean_native_hybrid", "saxpy_kernel",
-                            [3.92, 3.89, 3.95, 3.91, 3.93, 3.90, 3.92],
-                        ),
-                        "matmul_tiled_u64": get_samples(
-                            spark_raw, "lean_native_hybrid", "matmul_tiled_u64",
-                            [2.18, 2.16, 2.20, 2.17, 2.19, 2.18, 2.17],
-                        ),
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "dot_product_u64": get_samples(
+                        spark_raw, "official_lean4", "dot_product_u64",
+                        [85.08, 84.92, 85.21, 85.01, 85.14, 84.99, 85.05],
+                    ),
+                    "saxpy_kernel": get_samples(
+                        spark_raw, "official_lean4", "saxpy_kernel",
+                        [4854.1, 4849.0, 4858.3, 4851.2, 4855.0, 4852.7, 4853.9],
+                    ),
+                    "matmul_tiled_u64": get_samples(
+                        spark_raw, "official_lean4", "matmul_tiled_u64",
+                        [1458.3, 1455.1, 1460.2, 1457.8, 1459.0, 1456.4, 1458.1],
+                    ),
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "dot_product_u64": get_samples(
-                            ashur_raw, "official_lean4", "dot_product_u64",
-                            [115.4, 115.1, 115.8, 115.3, 115.5, 115.2, 115.4],
-                        ),
-                        "saxpy_kernel": get_samples(
-                            ashur_raw, "official_lean4", "saxpy_kernel",
-                            [3620.5, 3615.2, 3624.1, 3618.9, 3621.0, 3619.4, 3620.1],
-                        ),
-                        "matmul_tiled_u64": get_samples(
-                            ashur_raw, "official_lean4", "matmul_tiled_u64",
-                            [1980.2, 1976.5, 1983.1, 1979.0, 1981.4, 1978.8, 1980.0],
-                        ),
-                    },
-                    "candidate": {
-                        "dot_product_u64": get_samples(
-                            ashur_raw, "lean_native_hybrid", "dot_product_u64",
-                            [11.80, 11.75, 11.84, 11.79, 11.81, 11.78, 11.80],
-                        ),
-                        "saxpy_kernel": get_samples(
-                            ashur_raw, "lean_native_hybrid", "saxpy_kernel",
-                            [24.50, 24.42, 24.58, 24.49, 24.52, 24.47, 24.51],
-                        ),
-                        "matmul_tiled_u64": get_samples(
-                            ashur_raw, "lean_native_hybrid", "matmul_tiled_u64",
-                            [68.40, 68.32, 68.51, 68.39, 68.44, 68.37, 68.42],
-                        ),
-                    },
+                {
+                    "dot_product_u64": get_samples(
+                        spark_raw, "lean_native_hybrid", "dot_product_u64",
+                        [3.02, 2.99, 3.05, 3.01, 3.03, 3.00, 3.02],
+                    ),
+                    "saxpy_kernel": get_samples(
+                        spark_raw, "lean_native_hybrid", "saxpy_kernel",
+                        [3.92, 3.89, 3.95, 3.91, 3.93, 3.90, 3.92],
+                    ),
+                    "matmul_tiled_u64": get_samples(
+                        spark_raw, "lean_native_hybrid", "matmul_tiled_u64",
+                        [2.18, 2.16, 2.20, 2.17, 2.19, 2.18, 2.17],
+                    ),
                 },
-            },
+                {
+                    "dot_product_u64": get_samples(
+                        ashur_raw, "official_lean4", "dot_product_u64",
+                        [115.4, 115.1, 115.8, 115.3, 115.5, 115.2, 115.4],
+                    ),
+                    "saxpy_kernel": get_samples(
+                        ashur_raw, "official_lean4", "saxpy_kernel",
+                        [3620.5, 3615.2, 3624.1, 3618.9, 3621.0, 3619.4, 3620.1],
+                    ),
+                    "matmul_tiled_u64": get_samples(
+                        ashur_raw, "official_lean4", "matmul_tiled_u64",
+                        [1980.2, 1976.5, 1983.1, 1979.0, 1981.4, 1978.8, 1980.0],
+                    ),
+                },
+                {
+                    "dot_product_u64": get_samples(
+                        ashur_raw, "lean_native_hybrid", "dot_product_u64",
+                        [11.80, 11.75, 11.84, 11.79, 11.81, 11.78, 11.80],
+                    ),
+                    "saxpy_kernel": get_samples(
+                        ashur_raw, "lean_native_hybrid", "saxpy_kernel",
+                        [24.50, 24.42, 24.58, 24.49, 24.52, 24.47, 24.51],
+                    ),
+                    "matmul_tiled_u64": get_samples(
+                        ashur_raw, "lean_native_hybrid", "matmul_tiled_u64",
+                        [68.40, 68.32, 68.51, 68.39, 68.44, 68.37, 68.42],
+                    ),
+                },
+            ),
         },
         # =====================================================================
         # 12 NEW v0.2 AUTONOMOUS RESEARCH HYPOTHESES (exp_009 .. exp_020)
@@ -417,18 +390,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "CodeRefines (.ite c t1 e1) (.ite c t2 e2)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"collatz_steps": [308.4, 307.9, 309.1, 308.2, 308.6, 308.0, 308.5]},
-                    "candidate": {"collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"collatz_steps": [438.2, 437.5, 439.0, 438.1, 438.6, 437.9, 438.4]},
-                    "candidate": {"collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"collatz_steps": [308.4, 307.9, 309.1, 308.2, 308.6, 308.0, 308.5]},
+                {"collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0]},
+                {"collatz_steps": [438.2, 437.5, 439.0, 438.1, 438.6, 437.9, 438.4]},
+                {"collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4]},
+            ),
         },
         # 10. REJECTED at Stage 1 (Unsound shift-right then shift-left mask omission)
         {
@@ -462,18 +429,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem shr_shl_eq_and_mask (x : UInt64) : (x >>> 3) <<< 3 = x &&& 0xfffffffffffffff8 := by decide"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"collatz_steps": [296.4, 295.9, 296.8, 296.1, 296.5, 296.0, 296.3]},
-                    "candidate": {"collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"collatz_steps": [421.5, 420.9, 422.1, 421.2, 421.7, 421.0, 421.4]},
-                    "candidate": {"collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"collatz_steps": [296.4, 295.9, 296.8, 296.1, 296.5, 296.0, 296.3]},
+                {"collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0]},
+                {"collatz_steps": [421.5, 420.9, 422.1, 421.2, 421.7, 421.0, 421.4]},
+                {"collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4]},
+            ),
         },
         # 12. ACCEPTED at Stage 1+2+3 (Tail-Recursive `.jp`/`.jmp` Lifting to `seqFor` Loops)
         {
@@ -493,18 +454,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem unboxedLoopStep_sound : evalCode fuel env st (seqFor ...) = .ok (v, st')"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"tuple_accum_sum": [962.6, 960.4, 964.1, 961.8, 963.2, 959.9, 962.0]},
-                    "candidate": {"tuple_accum_sum": [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"tuple_accum_sum": [1120.5, 1118.9, 1122.1, 1119.4, 1121.0, 1120.2, 1119.8]},
-                    "candidate": {"tuple_accum_sum": [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"tuple_accum_sum": [962.6, 960.4, 964.1, 961.8, 963.2, 959.9, 962.0]},
+                {"tuple_accum_sum": [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31]},
+                {"tuple_accum_sum": [1120.5, 1118.9, 1122.1, 1119.4, 1121.0, 1120.2, 1119.8]},
+                {"tuple_accum_sum": [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81]},
+            ),
         },
         # 13. REJECTED at Stage 2 (Forbidden `Lean.trustCompiler` axiom in candidate proof)
         {
@@ -539,18 +494,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "CodeRefines (.incRef v d k1) (.incRef v d k2)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"dot_product_u64": [85.08, 84.92, 85.21, 85.01, 85.14, 84.99, 85.05]},
-                    "candidate": {"dot_product_u64": [4.38, 4.35, 4.41, 4.37, 4.39, 4.36, 4.38]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"dot_product_u64": [115.4, 115.1, 115.8, 115.3, 115.5, 115.2, 115.4]},
-                    "candidate": {"dot_product_u64": [11.80, 11.75, 11.84, 11.79, 11.81, 11.78, 11.80]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"dot_product_u64": [85.08, 84.92, 85.21, 85.01, 85.14, 84.99, 85.05]},
+                {"dot_product_u64": [4.38, 4.35, 4.41, 4.37, 4.39, 4.36, 4.38]},
+                {"dot_product_u64": [115.4, 115.1, 115.8, 115.3, 115.5, 115.2, 115.4]},
+                {"dot_product_u64": [11.80, 11.75, 11.84, 11.79, 11.81, 11.78, 11.80]},
+            ),
         },
         # 15. ACCEPTED at Stage 1+2+3 (PTX 8.0 `.shared` Tree-Reduction Kernel for `dot_product_u64`)
         {
@@ -571,18 +520,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "CodeRefines c c ∧ checkConcreteSamples fuel samples c c = true"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"dot_product_u64": [85.08, 84.92, 85.21, 85.01, 85.14, 84.99, 85.05]},
-                    "candidate": {"dot_product_u64": [3.02, 2.99, 3.05, 3.01, 3.03, 3.00, 3.02]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"dot_product_u64": [115.4, 115.1, 115.8, 115.3, 115.5, 115.2, 115.4]},
-                    "candidate": {"dot_product_u64": [11.80, 11.75, 11.84, 11.79, 11.81, 11.78, 11.80]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"dot_product_u64": [85.08, 84.92, 85.21, 85.01, 85.14, 84.99, 85.05]},
+                {"dot_product_u64": [3.02, 2.99, 3.05, 3.01, 3.03, 3.00, 3.02]},
+                {"dot_product_u64": [115.4, 115.1, 115.8, 115.3, 115.5, 115.2, 115.4]},
+                {"dot_product_u64": [11.80, 11.75, 11.84, 11.79, 11.81, 11.78, 11.80]},
+            ),
         },
         # 16. ACCEPTED at Stage 1+2+3 (PTX 8.0 2D `.shared` 16x16 Tiled Matrix Multiplication Kernel)
         {
@@ -603,18 +546,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "CodeRefines src tgt → checkConcreteSamples fuel samples src tgt = true"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"matmul_tiled_u64": [1458.3, 1455.1, 1460.2, 1457.8, 1459.0, 1456.4, 1458.1]},
-                    "candidate": {"matmul_tiled_u64": [2.18, 2.16, 2.20, 2.17, 2.19, 2.18, 2.17]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"matmul_tiled_u64": [1980.2, 1976.5, 1983.1, 1979.0, 1981.4, 1978.8, 1980.0]},
-                    "candidate": {"matmul_tiled_u64": [68.40, 68.32, 68.51, 68.39, 68.44, 68.37, 68.42]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"matmul_tiled_u64": [1458.3, 1455.1, 1460.2, 1457.8, 1459.0, 1456.4, 1458.1]},
+                {"matmul_tiled_u64": [2.18, 2.16, 2.20, 2.17, 2.19, 2.18, 2.17]},
+                {"matmul_tiled_u64": [1980.2, 1976.5, 1983.1, 1979.0, 1981.4, 1978.8, 1980.0]},
+                {"matmul_tiled_u64": [68.40, 68.32, 68.51, 68.39, 68.44, 68.37, 68.42]},
+            ),
         },
         # 17. REJECTED at Stage 1 (Unsound sub-overflow distributive rewrite `x - (y - z) -> (x - y) - z`)
         {
@@ -649,18 +586,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "evalScalarExpr env (.binOp .add (.constU64 a) (.constU64 b)) = evalScalarExpr env (.constU64 (a + b)) := rfl"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"saxpy_kernel": [4854.1, 4849.0, 4858.3, 4851.2, 4855.0, 4852.7, 4853.9]},
-                    "candidate": {"saxpy_kernel": [3.92, 3.89, 3.95, 3.91, 3.93, 3.90, 3.92]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"saxpy_kernel": [3620.5, 3615.2, 3624.1, 3618.9, 3621.0, 3619.4, 3620.1]},
-                    "candidate": {"saxpy_kernel": [24.50, 24.42, 24.58, 24.49, 24.52, 24.47, 24.51]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"saxpy_kernel": [4854.1, 4849.0, 4858.3, 4851.2, 4855.0, 4852.7, 4853.9]},
+                {"saxpy_kernel": [3.92, 3.89, 3.95, 3.91, 3.93, 3.90, 3.92]},
+                {"saxpy_kernel": [3620.5, 3615.2, 3624.1, 3618.9, 3621.0, 3619.4, 3620.1]},
+                {"saxpy_kernel": [24.50, 24.42, 24.58, 24.49, 24.52, 24.47, 24.51]},
+            ),
         },
         # 19. REJECTED at Stage 3 (Sub-threshold GPU offload `minGpuElements = 256` causing PCIe/launch overhead regression)
         {
@@ -675,18 +606,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
             "axioms": ["propext", "Quot.sound"],
             "proof_source": "-- Sound, but kernel launch overhead (~8 us) regresses small-vector loops by > 18%",
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47]},
-                    "candidate": {"sarray_scale_bias": [15.10, 15.22, 15.05, 15.18, 15.14, 15.11, 15.16]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26]},
-                    "candidate": {"sarray_scale_bias": [21.90, 22.05, 21.84, 21.95, 21.92, 21.88, 21.94]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47]},
+                {"sarray_scale_bias": [15.10, 15.22, 15.05, 15.18, 15.14, 15.11, 15.16]},
+                {"sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26]},
+                {"sarray_scale_bias": [21.90, 22.05, 21.84, 21.95, 21.92, 21.88, 21.94]},
+            ),
         },
         # 20. ACCEPTED at Stage 1+2+3 (LLVM 18 `opt` Loop + SLP Vectorizer Pipeline Integration in `build-exe`)
         {
@@ -708,34 +633,28 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "∃ vTgt, evalCode fuel env st tgt = .ok (vTgt, st') ∧ (v == vTgt) = true"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                        "tuple_accum_sum": [962.6, 960.4, 964.1, 961.8, 963.2, 959.9, 962.0],
-                        "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
-                    },
-                    "candidate": {
-                        "collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0],
-                        "tuple_accum_sum": [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31],
-                        "sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
+                    "tuple_accum_sum": [962.6, 960.4, 964.1, 961.8, 963.2, 959.9, 962.0],
+                    "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                        "tuple_accum_sum": [1120.5, 1118.9, 1122.1, 1119.4, 1121.0, 1120.2, 1119.8],
-                        "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
-                    },
-                    "candidate": {
-                        "collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4],
-                        "tuple_accum_sum": [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81],
-                        "sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
-                    },
+                {
+                    "collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0],
+                    "tuple_accum_sum": [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31],
+                    "sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
                 },
-            },
+                {
+                    "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
+                    "tuple_accum_sum": [1120.5, 1118.9, 1122.1, 1119.4, 1121.0, 1120.2, 1119.8],
+                    "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
+                },
+                {
+                    "collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4],
+                    "tuple_accum_sum": [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81],
+                    "sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
+                },
+            ),
         },
         # 21. ACCEPTED at Stage 1+2+3 (v0.3 Same-Slot EVM 256-Bit SSTORE -> SLOAD Forwarding in AlgebraicOpt)
         {
@@ -757,18 +676,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 ".ok (.u256 val, st.storageStore mapId slot val)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"tuple_accum_sum": [34.80, 34.72, 34.88, 34.76, 34.81, 34.75, 34.79]},
-                    "candidate": {"tuple_accum_sum": [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"tuple_accum_sum": [58.90, 58.82, 58.98, 58.85, 58.91, 58.87, 58.89]},
-                    "candidate": {"tuple_accum_sum": [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"tuple_accum_sum": [34.80, 34.72, 34.88, 34.76, 34.81, 34.75, 34.79]},
+                {"tuple_accum_sum": [25.31, 25.28, 25.35, 25.30, 25.29, 25.33, 25.31]},
+                {"tuple_accum_sum": [58.90, 58.82, 58.98, 58.85, 58.91, 58.87, 58.89]},
+                {"tuple_accum_sum": [43.80, 43.75, 43.88, 43.82, 43.79, 43.84, 43.81]},
+            ),
         },
         # 22. REJECTED at Stage 1 (v0.3 Unsound Cross-Slot EVM SSTORE -> SLOAD Forwarding without Slot Equality Check)
         {
@@ -803,18 +716,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "evalBinOp .bitXor (.u256 w) (.u256 UInt256.zero) = .ok (.u256 w)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"saxpy_kernel": [4.95, 4.91, 4.98, 4.94, 4.96, 4.92, 4.95]},
-                    "candidate": {"saxpy_kernel": [1.85, 1.84, 1.86, 1.85, 1.85, 1.84, 1.86]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"saxpy_kernel": [8.45, 8.41, 8.49, 8.44, 8.46, 8.42, 8.45]},
-                    "candidate": {"saxpy_kernel": [7.12, 7.09, 7.15, 7.11, 7.13, 7.10, 7.12]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"saxpy_kernel": [4.95, 4.91, 4.98, 4.94, 4.96, 4.92, 4.95]},
+                {"saxpy_kernel": [1.85, 1.84, 1.86, 1.85, 1.85, 1.84, 1.86]},
+                {"saxpy_kernel": [8.45, 8.41, 8.49, 8.44, 8.46, 8.42, 8.45]},
+                {"saxpy_kernel": [7.12, 7.09, 7.15, 7.11, 7.13, 7.10, 7.12]},
+            ),
         },
         # 24. ACCEPTED at Stage 1+2+3 (v0.3 Equality Constraint Propagation & Certified Counterexample Validator in FastCheck)
         {
@@ -836,30 +743,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "∃ v st', evalCode fuel env st d.body = .ok (v, st') ∧ isCounterexampleVal v = true"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                        "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
-                    },
-                    "candidate": {
-                        "collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0],
-                        "sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
+                    "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                        "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
-                    },
-                    "candidate": {
-                        "collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4],
-                        "sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
-                    },
+                {
+                    "collatz_steps": [289.9, 289.4, 290.5, 289.7, 290.1, 289.8, 290.0],
+                    "sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
                 },
-            },
+                {
+                    "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
+                    "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
+                },
+                {
+                    "collatz_steps": [412.3, 411.8, 413.0, 412.1, 412.6, 411.9, 412.4],
+                    "sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
+                },
+            ),
         },
         # 25. ACCEPTED at Stage 1+2+3 (v0.4 Unified PeepholeProofs + AlgebraicOpt Constant Folding Soundness)
         {
@@ -880,18 +781,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "evalScalarExpr env (rewriteConstFoldBinOp op a b) = evalScalarExpr env (.binOp op (.constU64 a) (.constU64 b))"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4]},
-                    "candidate": {"collatz_steps": [288.4, 287.9, 288.8, 288.2, 288.5, 288.1, 288.3]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2]},
-                    "candidate": {"collatz_steps": [410.5, 410.1, 411.0, 410.4, 410.7, 410.2, 410.6]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4]},
+                {"collatz_steps": [288.4, 287.9, 288.8, 288.2, 288.5, 288.1, 288.3]},
+                {"collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2]},
+                {"collatz_steps": [410.5, 410.1, 411.0, 410.4, 410.7, 410.2, 410.6]},
+            ),
         },
         # 26. ACCEPTED at Stage 1+2+3 (v0.4 Formal Soundness of FastCheck Equality Constraint Substitution)
         {
@@ -913,18 +808,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "evalScalarExpr env (substScalarExpr [{ lhsVar := x, rhsExpr := rhs }] e) = evalScalarExpr env e"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {"collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4]},
-                    "candidate": {"collatz_steps": [289.1, 288.7, 289.5, 289.0, 289.2, 288.9, 289.1]},
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {"collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2]},
-                    "candidate": {"collatz_steps": [411.2, 410.8, 411.7, 411.0, 411.4, 410.9, 411.3]},
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4]},
+                {"collatz_steps": [289.1, 288.7, 289.5, 289.0, 289.2, 288.9, 289.1]},
+                {"collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2]},
+                {"collatz_steps": [411.2, 410.8, 411.7, 411.0, 411.4, 410.9, 411.3]},
+            ),
         },
         # 27. ACCEPTED at Stage 1+2+3 (v0.4 Cost-Guided Enumerative Superoptimizer Synthesis)
         {
@@ -944,30 +833,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem rewriteScalarVerified_sound (e : ScalarExpr) : ScalarExprEquiv e (rewriteScalarVerified e)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                        "tuple_accum_sum": [189.2, 188.5, 189.8, 189.0, 188.7, 189.5, 189.1],
-                    },
-                    "candidate": {
-                        "collatz_steps": [287.5, 287.1, 288.0, 287.4, 287.7, 287.2, 287.6],
-                        "tuple_accum_sum": [35.4, 35.1, 35.7, 35.3, 35.5, 35.2, 35.4],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
+                    "tuple_accum_sum": [189.2, 188.5, 189.8, 189.0, 188.7, 189.5, 189.1],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                        "tuple_accum_sum": [245.1, 244.3, 245.8, 244.9, 245.2, 244.6, 245.0],
-                    },
-                    "candidate": {
-                        "collatz_steps": [409.2, 408.8, 409.7, 409.0, 409.4, 408.9, 409.3],
-                        "tuple_accum_sum": [51.2, 50.9, 51.6, 51.1, 51.3, 51.0, 51.2],
-                    },
+                {
+                    "collatz_steps": [287.5, 287.1, 288.0, 287.4, 287.7, 287.2, 287.6],
+                    "tuple_accum_sum": [35.4, 35.1, 35.7, 35.3, 35.5, 35.2, 35.4],
                 },
-            },
+                {
+                    "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
+                    "tuple_accum_sum": [245.1, 244.3, 245.8, 244.9, 245.2, 244.6, 245.0],
+                },
+                {
+                    "collatz_steps": [409.2, 408.8, 409.7, 409.0, 409.4, 408.9, 409.3],
+                    "tuple_accum_sum": [51.2, 50.9, 51.6, 51.1, 51.3, 51.0, 51.2],
+                },
+            ),
         },
         # 28. REJECTED at Stage 1 (v0.4 Unsound Superoptimizer Candidate: Unchecked Shift Composition k1 + k2 >= 64)
         {
@@ -1005,30 +888,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem evalBinOp_mul_eight (v : Val) : evalBinOp .mul v (.u64 8) = evalBinOp .shl v (.u64 3)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "saxpy_kernel": [4.95, 4.91, 4.98, 4.94, 4.96, 4.92, 4.95],
-                        "matmul_tiled_u64": [95.4, 94.8, 95.9, 95.1, 95.6, 95.0, 95.3],
-                    },
-                    "candidate": {
-                        "saxpy_kernel": [1.85, 1.84, 1.86, 1.85, 1.85, 1.84, 1.86],
-                        "matmul_tiled_u64": [3.85, 3.82, 3.89, 3.84, 3.86, 3.83, 3.85],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "saxpy_kernel": [4.95, 4.91, 4.98, 4.94, 4.96, 4.92, 4.95],
+                    "matmul_tiled_u64": [95.4, 94.8, 95.9, 95.1, 95.6, 95.0, 95.3],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "saxpy_kernel": [8.45, 8.41, 8.49, 8.44, 8.46, 8.42, 8.45],
-                        "matmul_tiled_u64": [142.3, 141.8, 142.9, 142.1, 142.5, 141.9, 142.4],
-                    },
-                    "candidate": {
-                        "saxpy_kernel": [7.12, 7.09, 7.15, 7.11, 7.13, 7.10, 7.12],
-                        "matmul_tiled_u64": [68.4, 68.1, 68.8, 68.3, 68.5, 68.2, 68.4],
-                    },
+                {
+                    "saxpy_kernel": [1.85, 1.84, 1.86, 1.85, 1.85, 1.84, 1.86],
+                    "matmul_tiled_u64": [3.85, 3.82, 3.89, 3.84, 3.86, 3.83, 3.85],
                 },
-            },
+                {
+                    "saxpy_kernel": [8.45, 8.41, 8.49, 8.44, 8.46, 8.42, 8.45],
+                    "matmul_tiled_u64": [142.3, 141.8, 142.9, 142.1, 142.5, 141.9, 142.4],
+                },
+                {
+                    "saxpy_kernel": [7.12, 7.09, 7.15, 7.11, 7.13, 7.10, 7.12],
+                    "matmul_tiled_u64": [68.4, 68.1, 68.8, 68.3, 68.5, 68.2, 68.4],
+                },
+            ),
         },
         # 30. ACCEPTED at Stage 1+2+3 (v0.4 LLVM 18 C-ABI Boxing/Unboxing Wrapper Thunks for build-exe)
         {
@@ -1048,30 +925,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem evalBinOp_and_self (v : Val) : evalBinOp .bitAnd v v = .ok v"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "tuple_accum_sum": [189.2, 188.5, 189.8, 189.0, 188.7, 189.5, 189.1],
-                        "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
-                    },
-                    "candidate": {
-                        "tuple_accum_sum": [35.4, 35.1, 35.7, 35.3, 35.5, 35.2, 35.4],
-                        "sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "tuple_accum_sum": [189.2, 188.5, 189.8, 189.0, 188.7, 189.5, 189.1],
+                    "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "tuple_accum_sum": [245.1, 244.3, 245.8, 244.9, 245.2, 244.6, 245.0],
-                        "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
-                    },
-                    "candidate": {
-                        "tuple_accum_sum": [51.2, 50.9, 51.6, 51.1, 51.3, 51.0, 51.2],
-                        "sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
-                    },
+                {
+                    "tuple_accum_sum": [35.4, 35.1, 35.7, 35.3, 35.5, 35.2, 35.4],
+                    "sarray_scale_bias": [12.46, 12.42, 12.50, 12.45, 12.48, 12.44, 12.47],
                 },
-            },
+                {
+                    "tuple_accum_sum": [245.1, 244.3, 245.8, 244.9, 245.2, 244.6, 245.0],
+                    "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
+                },
+                {
+                    "tuple_accum_sum": [51.2, 50.9, 51.6, 51.1, 51.3, 51.0, 51.2],
+                    "sarray_scale_bias": [18.25, 18.20, 18.31, 18.24, 18.27, 18.22, 18.26],
+                },
+            ),
         },
         # 31. ACCEPTED at Stage 1+2+3 (v0.5 Segregated Optimization Plugin Pipeline & Law 1 Gate)
         {
@@ -1092,30 +963,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "Refines (evalWithUntrustedOptPlugin pluginFn verifyGate src) src"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                        "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
-                    },
-                    "candidate": {
-                        "collatz_steps": [287.2, 286.9, 287.6, 287.1, 287.4, 287.0, 287.3],
-                        "sarray_scale_bias": [12.44, 12.40, 12.48, 12.43, 12.46, 12.42, 12.45],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
+                    "sarray_scale_bias": [2501.5, 2498.2, 2504.1, 2500.8, 2499.5, 2502.3, 2501.0],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                        "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
-                    },
-                    "candidate": {
-                        "collatz_steps": [408.8, 408.4, 409.3, 408.7, 409.0, 408.6, 408.9],
-                        "sarray_scale_bias": [18.22, 18.18, 18.28, 18.21, 18.24, 18.20, 18.23],
-                    },
+                {
+                    "collatz_steps": [287.2, 286.9, 287.6, 287.1, 287.4, 287.0, 287.3],
+                    "sarray_scale_bias": [12.44, 12.40, 12.48, 12.43, 12.46, 12.42, 12.45],
                 },
-            },
+                {
+                    "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
+                    "sarray_scale_bias": [1890.4, 1888.1, 1892.5, 1889.7, 1891.2, 1890.0, 1889.3],
+                },
+                {
+                    "collatz_steps": [408.8, 408.4, 409.3, 408.7, 409.0, 408.6, 408.9],
+                    "sarray_scale_bias": [18.22, 18.18, 18.28, 18.21, 18.24, 18.20, 18.23],
+                },
+            ),
         },
         # 32. REJECTED at Stage 2 (v0.5 Adversarial Unsound Plugin Caught by Law 1 Gate)
         {
@@ -1174,26 +1039,12 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "checkNonVacuousSpec satCnt cexFound = true -> satCnt > 0 ∧ cexFound = false"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                    },
-                    "candidate": {
-                        "collatz_steps": [287.3, 286.9, 287.7, 287.1, 287.5, 287.0, 287.2],
-                    },
-                },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                    },
-                    "candidate": {
-                        "collatz_steps": [408.9, 408.5, 409.4, 408.8, 409.1, 408.7, 409.0],
-                    },
-                },
-            },
+            "arch_Samples": arch_pair(
+                {"collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4]},
+                {"collatz_steps": [287.3, 286.9, 287.7, 287.1, 287.5, 287.0, 287.2]},
+                {"collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2]},
+                {"collatz_steps": [408.9, 408.5, 409.4, 408.8, 409.1, 408.7, 409.0]},
+            ),
         },
         # 35. ACCEPTED at Stage 1+2+3 (v0.5 Multi-Target GPU PTX & Apple Metal Superopt Pipeline Composition Law 2)
         {
@@ -1214,30 +1065,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "(∀ p ∈ passes, ∀ d, CodeRefines d (p d)) -> CodeRefines c (passes.foldl (fun acc p => p acc) c)"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "saxpy_kernel": [4.95, 4.91, 4.98, 4.94, 4.96, 4.92, 4.95],
-                        "dot_product_u64": [9.82, 9.79, 9.86, 9.81, 9.84, 9.80, 9.83],
-                    },
-                    "candidate": {
-                        "saxpy_kernel": [1.84, 1.83, 1.85, 1.84, 1.85, 1.83, 1.84],
-                        "dot_product_u64": [2.91, 2.89, 2.94, 2.90, 2.92, 2.90, 2.91],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "saxpy_kernel": [4.95, 4.91, 4.98, 4.94, 4.96, 4.92, 4.95],
+                    "dot_product_u64": [9.82, 9.79, 9.86, 9.81, 9.84, 9.80, 9.83],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "saxpy_kernel": [8.45, 8.41, 8.49, 8.44, 8.46, 8.42, 8.45],
-                        "dot_product_u64": [14.20, 14.15, 14.26, 14.19, 14.22, 14.17, 14.21],
-                    },
-                    "candidate": {
-                        "saxpy_kernel": [7.10, 7.08, 7.13, 7.09, 7.11, 7.09, 7.10],
-                        "dot_product_u64": [6.15, 6.12, 6.19, 6.14, 6.16, 6.13, 6.15],
-                    },
+                {
+                    "saxpy_kernel": [1.84, 1.83, 1.85, 1.84, 1.85, 1.83, 1.84],
+                    "dot_product_u64": [2.91, 2.89, 2.94, 2.90, 2.92, 2.90, 2.91],
                 },
-            },
+                {
+                    "saxpy_kernel": [8.45, 8.41, 8.49, 8.44, 8.46, 8.42, 8.45],
+                    "dot_product_u64": [14.20, 14.15, 14.26, 14.19, 14.22, 14.17, 14.21],
+                },
+                {
+                    "saxpy_kernel": [7.10, 7.08, 7.13, 7.09, 7.11, 7.09, 7.10],
+                    "dot_product_u64": [6.15, 6.12, 6.19, 6.14, 6.16, 6.13, 6.15],
+                },
+            ),
         },
         # 36. ACCEPTED at Stage 1+2+3 (v0.5 C-ABI Tagged Scalar Round-Trip Law 4)
         {
@@ -1257,30 +1102,24 @@ def build_candidate_hypotheses(latest_bench: Dict[str, Any]) -> List[Dict[str, A
                 "theorem c_abi_unbox_box_one : leanUnboxScalarU64 (leanBoxScalarU64 1) = 1 := rfl"
             ),
             "num_states": 100000,
-            "arch_Samples": {
-                "aarch64": {
-                    "host": "spark-de79",
-                    "baseline": {
-                        "tuple_accum_sum": [189.2, 188.5, 189.8, 189.0, 188.7, 189.5, 189.1],
-                        "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
-                    },
-                    "candidate": {
-                        "tuple_accum_sum": [35.3, 35.0, 35.6, 35.2, 35.4, 35.1, 35.3],
-                        "collatz_steps": [287.2, 286.8, 287.6, 287.1, 287.4, 287.0, 287.2],
-                    },
+            "arch_Samples": arch_pair(
+                {
+                    "tuple_accum_sum": [189.2, 188.5, 189.8, 189.0, 188.7, 189.5, 189.1],
+                    "collatz_steps": [423.9, 421.5, 424.1, 422.8, 423.0, 425.2, 422.4],
                 },
-                "x86_64": {
-                    "host": "ashur",
-                    "baseline": {
-                        "tuple_accum_sum": [245.1, 244.3, 245.8, 244.9, 245.2, 244.6, 245.0],
-                        "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
-                    },
-                    "candidate": {
-                        "tuple_accum_sum": [51.1, 50.8, 51.5, 51.0, 51.2, 50.9, 51.1],
-                        "collatz_steps": [408.8, 408.4, 409.3, 408.7, 409.0, 408.6, 408.9],
-                    },
+                {
+                    "tuple_accum_sum": [35.3, 35.0, 35.6, 35.2, 35.4, 35.1, 35.3],
+                    "collatz_steps": [287.2, 286.8, 287.6, 287.1, 287.4, 287.0, 287.2],
                 },
-            },
+                {
+                    "tuple_accum_sum": [245.1, 244.3, 245.8, 244.9, 245.2, 244.6, 245.0],
+                    "collatz_steps": [618.4, 619.2, 617.9, 620.1, 618.8, 619.5, 618.2],
+                },
+                {
+                    "tuple_accum_sum": [51.1, 50.8, 51.5, 51.0, 51.2, 50.9, 51.1],
+                    "collatz_steps": [408.8, 408.4, 409.3, 408.7, 409.0, 408.6, 408.9],
+                },
+            ),
         },
     ]
 

@@ -439,6 +439,38 @@ def emitScalarExpr256 (e : LNIRScalarExpr) (s : EmitState) : String × EmitState
 def emitScalarExpr (e : LNIRScalarExpr) (s : EmitState) : String × EmitState :=
   emitScalarExprWithWidth "i64" "63" e s
 
+/-- Emit 512-bit exact `mulDivDown` (`roundUp = false`) or `mulDivUp` (`roundUp = true`) for 256-bit EVM values. -/
+def emitMulDiv512 (dst aVar bVar denomVar : VarId) (roundUp : Bool) : EmitM Unit := do
+  let aVal ← loadVarAsI256 aVar
+  let bVal ← loadVarAsI256 bVar
+  let dVal ← loadVarAsI256 denomVar
+  let a512 ← freshTmp "zext512_a"
+  let b512 ← freshTmp "zext512_b"
+  let d512 ← freshTmp "zext512_d"
+  let prod512 ← freshTmp "mul512"
+  let isZero ← freshTmp "d512_z"
+  let safeD512 ← freshTmp "safe_d512"
+  for line in [
+    s!"  {a512} = zext i256 {aVal} to i512",
+    s!"  {b512} = zext i256 {bVal} to i512",
+    s!"  {d512} = zext i256 {dVal} to i512",
+    s!"  {prod512} = mul nuw i512 {a512}, {b512}",
+    s!"  {isZero} = icmp eq i512 {d512}, 0",
+    s!"  {safeD512} = select i1 {isZero}, i512 1, i512 {d512}"
+  ] do emitLine line
+  let num512 ← if roundUp then do
+    let dMinus1 ← freshTmp "dm1_512"
+    let numTmp ← freshTmp "num512"
+    emitLine s!"  {dMinus1} = sub i512 {safeD512}, 1"
+    emitLine s!"  {numTmp} = add i512 {prod512}, {dMinus1}"
+    pure numTmp
+  else pure prod512
+  let quot512 ← freshTmp "udiv512"
+  let res256 ← freshTmp "trunc256"
+  emitLine s!"  {quot512} = udiv i512 {num512}, {safeD512}"
+  emitLine s!"  {res256} = trunc i512 {quot512} to i256"
+  storeI256ToVar dst res256
+
 /-- Lower an `LNIRExpr` and store its result into `%slot_v{dst}`. -/
 def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := do
   let st ← get
@@ -457,55 +489,9 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
     emitLine s!"  {cVal} = add i256 0, {w.toNat}"
     storeI256ToVar dst cVal
   | .mulDivDown aVar bVar denomVar =>
-    let aVal ← loadVarAsI256 aVar
-    let bVal ← loadVarAsI256 bVar
-    let dVal ← loadVarAsI256 denomVar
-    let a512 ← freshTmp "zext512_a"
-    let b512 ← freshTmp "zext512_b"
-    let d512 ← freshTmp "zext512_d"
-    let prod512 ← freshTmp "mul512"
-    let isZero ← freshTmp "d512_z"
-    let safeD512 ← freshTmp "safe_d512"
-    let quot512 ← freshTmp "udiv512"
-    let res256 ← freshTmp "trunc256"
-    for line in [
-      s!"  {a512} = zext i256 {aVal} to i512",
-      s!"  {b512} = zext i256 {bVal} to i512",
-      s!"  {d512} = zext i256 {dVal} to i512",
-      s!"  {prod512} = mul nuw i512 {a512}, {b512}",
-      s!"  {isZero} = icmp eq i512 {d512}, 0",
-      s!"  {safeD512} = select i1 {isZero}, i512 1, i512 {d512}",
-      s!"  {quot512} = udiv i512 {prod512}, {safeD512}",
-      s!"  {res256} = trunc i512 {quot512} to i256"
-    ] do emitLine line
-    storeI256ToVar dst res256
+    emitMulDiv512 dst aVar bVar denomVar false
   | .mulDivUp aVar bVar denomVar =>
-    let aVal ← loadVarAsI256 aVar
-    let bVal ← loadVarAsI256 bVar
-    let dVal ← loadVarAsI256 denomVar
-    let a512 ← freshTmp "zext512_a"
-    let b512 ← freshTmp "zext512_b"
-    let d512 ← freshTmp "zext512_d"
-    let prod512 ← freshTmp "mul512"
-    let isZero ← freshTmp "d512_z"
-    let safeD512 ← freshTmp "safe_d512"
-    let dMinus1 ← freshTmp "dm1_512"
-    let num512 ← freshTmp "num512"
-    let quot512 ← freshTmp "udiv512"
-    let res256 ← freshTmp "trunc256"
-    for line in [
-      s!"  {a512} = zext i256 {aVal} to i512",
-      s!"  {b512} = zext i256 {bVal} to i512",
-      s!"  {d512} = zext i256 {dVal} to i512",
-      s!"  {prod512} = mul nuw i512 {a512}, {b512}",
-      s!"  {isZero} = icmp eq i512 {d512}, 0",
-      s!"  {safeD512} = select i1 {isZero}, i512 1, i512 {d512}",
-      s!"  {dMinus1} = sub i512 {safeD512}, 1",
-      s!"  {num512} = add i512 {prod512}, {dMinus1}",
-      s!"  {quot512} = udiv i512 {num512}, {safeD512}",
-      s!"  {res256} = trunc i512 {quot512} to i256"
-    ] do emitLine line
-    storeI256ToVar dst res256
+    emitMulDiv512 dst aVar bVar denomVar true
   | .storageLoad mapVar slotVar =>
     let mapPtr ← loadVarAsPtr mapVar
     let slotVal ← loadVarAsI256 slotVar

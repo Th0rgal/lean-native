@@ -887,39 +887,31 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
     | .i32 => "ui32"
     | _    => "ui64"
   let tensorTy := s!"tensor<262144x{shloElem}>"
+  let mkVpu (params : String) (retVar : String) (body : List String) : String :=
+    String.intercalate "\n" ([
+      s!"  func.func @{fnName}({params}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{"
+    ] ++ body ++ [s!"    return {retVar} : {tensorTy}", "  }"])
   match kernel with
   | .mapScaleAdd scale bias =>
-    String.intercalate "\n" [
-      s!"  func.func @{fnName}(%in0: {tensorTy}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{",
+    mkVpu s!"%in0: {tensorTy}" "%res" [
       s!"    %c_scale = stablehlo.constant dense<{scale}> : {tensorTy}",
       s!"    %c_bias = stablehlo.constant dense<{bias}> : {tensorTy}",
       s!"    %scaled = stablehlo.multiply %in0, %c_scale : {tensorTy}",
-      s!"    %res = stablehlo.add %scaled, %c_bias : {tensorTy}",
-      s!"    return %res : {tensorTy}",
-      "  }"
+      s!"    %res = stablehlo.add %scaled, %c_bias : {tensorTy}"
     ]
   | .zipAdd =>
-    String.intercalate "\n" [
-      s!"  func.func @{fnName}(%in0: {tensorTy}, %in1: {tensorTy}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{",
-      s!"    %res = stablehlo.add %in0, %in1 : {tensorTy}",
-      s!"    return %res : {tensorTy}",
-      "  }"
+    mkVpu s!"%in0: {tensorTy}, %in1: {tensorTy}" "%res" [
+      s!"    %res = stablehlo.add %in0, %in1 : {tensorTy}"
     ]
   | .zipMul =>
-    String.intercalate "\n" [
-      s!"  func.func @{fnName}(%in0: {tensorTy}, %in1: {tensorTy}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{",
-      s!"    %res = stablehlo.multiply %in0, %in1 : {tensorTy}",
-      s!"    return %res : {tensorTy}",
-      "  }"
+    mkVpu s!"%in0: {tensorTy}, %in1: {tensorTy}" "%res" [
+      s!"    %res = stablehlo.multiply %in0, %in1 : {tensorTy}"
     ]
   | .saxpy alphaBits =>
-    String.intercalate "\n" [
-      s!"  func.func @{fnName}(%x: {tensorTy}, %y: {tensorTy}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{",
+    mkVpu s!"%x: {tensorTy}, %y: {tensorTy}" "%res" [
       s!"    %c_alpha = stablehlo.constant dense<{alphaBits}> : {tensorTy}",
       s!"    %ax = stablehlo.multiply %c_alpha, %x : {tensorTy}",
-      s!"    %res = stablehlo.add %ax, %y : {tensorTy}",
-      s!"    return %res : {tensorTy}",
-      "  }"
+      s!"    %res = stablehlo.add %ax, %y : {tensorTy}"
     ]
   | .dotProduct =>
     String.intercalate "\n" [
@@ -929,8 +921,7 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
       "  }"
     ]
   | .stencil1D3Pt wLeft wCenter wRight =>
-    String.intercalate "\n" [
-      s!"  func.func @{fnName}(%in0: {tensorTy}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{",
+    mkVpu s!"%in0: {tensorTy}" "%res" [
       s!"    %c_wl = stablehlo.constant dense<{wLeft}> : {tensorTy}",
       s!"    %c_wc = stablehlo.constant dense<{wCenter}> : {tensorTy}",
       s!"    %c_wr = stablehlo.constant dense<{wRight}> : {tensorTy}",
@@ -938,18 +929,13 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
       s!"    %tc = stablehlo.multiply %in0, %c_wc : {tensorTy}",
       s!"    %tr = stablehlo.multiply %in0, %c_wr : {tensorTy}",
       s!"    %tlc = stablehlo.add %tl, %tc : {tensorTy}",
-      s!"    %res = stablehlo.add %tlc, %tr : {tensorTy}",
-      s!"    return %res : {tensorTy}",
-      "  }"
+      s!"    %res = stablehlo.add %tlc, %tr : {tensorTy}"
     ]
   | .customScalar _ _ _ =>
-    String.intercalate "\n" [
-      s!"  func.func @{fnName}(%in0: {tensorTy}, %in1: {tensorTy}) -> {tensorTy} attributes \{tpu.unit = \"vpu_128x8\", tpu.vmem_block = 1024 : i64} \{",
+    mkVpu s!"%in0: {tensorTy}, %in1: {tensorTy}" "%xored" [
       s!"    %sum = stablehlo.add %in0, %in1 : {tensorTy}",
       s!"    %diff = stablehlo.subtract %in0, %in1 : {tensorTy}",
-      s!"    %xored = stablehlo.xor %sum, %diff : {tensorTy}",
-      s!"    return %xored : {tensorTy}",
-      "  }"
+      s!"    %xored = stablehlo.xor %sum, %diff : {tensorTy}"
     ]
 
 /-- Lower `LNIRModule` declarations and parallel regions to a Google Cloud TPU v5e StableHLO
