@@ -170,23 +170,27 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.matryoshka_incremental_prefix_eq_full_eval
   , ``LeanNative.Spec.sarray_restrict_simd_gate_sound
   , ``LeanNative.Spec.sarray_escaping_closure_rejects_restrict_simd
+  , ``LeanNative.Spec.nested_prod_while_sroa_gate_sound
+  , ``LeanNative.Spec.escaping_pair_rejects_nested_prod_sroa
+  , ``LeanNative.Spec.mulhi_u128_peephole_gate_sound
+  , ``LeanNative.Spec.non32_mask_rejects_mulhi_u128_peephole
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
 structure TheoremAxiomAudit where
-  theoremName      : String
-  existsInEnv      : Bool
-  axiomsUsed       : List String
-  forbiddenFound   : List String
+  theoremName : String
+  existsInEnv : Bool
+  axiomsUsed : List String
+  forbiddenFound : List String
   nonStandardFound : List String
-  passed           : Bool
+  passed : Bool
   deriving Repr, DecidableEq, Inhabited, BEq, ToExpr
 
 /-- Aggregate report of the in-kernel transitive axiom audit. -/
 structure AxiomAuditReport where
-  passed               : Bool
-  theoremsAudited      : Nat
-  results              : List TheoremAxiomAudit
+  passed : Bool
+  theoremsAudited : Nat
+  results : List TheoremAxiomAudit
   forbiddenAxiomsFound : List String
   deriving Repr, DecidableEq, Inhabited, BEq, ToExpr
 
@@ -194,27 +198,14 @@ structure AxiomAuditReport where
 def auditTheoremInCoreM (declName : Name) : CoreM TheoremAxiomAudit := do
   let env ← getEnv
   if !env.contains declName then
-    return {
-      theoremName := declName.toString
-      existsInEnv := false
-      axiomsUsed := []
-      forbiddenFound := ["missing_declaration"]
-      nonStandardFound := ["missing_declaration"]
-      passed := false
-    }
-  let axs ← Lean.collectAxioms declName
-  let axList := axs.toList
-  let forbidden := axList.filter (fun a => forbiddenAxioms.contains a)
-  let nonStd := axList.filter (fun a => !(allowedStandardAxioms.contains a))
-  let passed := forbidden.isEmpty && nonStd.isEmpty
-  return {
-    theoremName := declName.toString
-    existsInEnv := true
-    axiomsUsed := axList.map Name.toString
-    forbiddenFound := forbidden.map Name.toString
-    nonStandardFound := nonStd.map Name.toString
-    passed := passed
-  }
+    return { theoremName := declName.toString, existsInEnv := false, axiomsUsed := [],
+             forbiddenFound := ["missing_declaration"], nonStandardFound := ["missing_declaration"], passed := false }
+  let axList := (← Lean.collectAxioms declName).toList
+  let forbidden := axList.filter (forbiddenAxioms.contains ·)
+  let nonStd := axList.filter (!allowedStandardAxioms.contains ·)
+  return { theoremName := declName.toString, existsInEnv := true, axiomsUsed := axList.map Name.toString,
+           forbiddenFound := forbidden.map Name.toString, nonStandardFound := nonStd.map Name.toString,
+           passed := forbidden.isEmpty && nonStd.isEmpty }
 
 /-- Audit all soundness theorems in `LeanNative.Proofs` and `LeanNative.Semantics` in `CoreM`. -/
 def auditAllProofsCoreM (names : List Name := auditedTheoremNames) : CoreM AxiomAuditReport := do
@@ -223,19 +214,10 @@ def auditAllProofsCoreM (names : List Name := auditedTheoremNames) : CoreM Axiom
   for name in names do
     let res ← auditTheoremInCoreM name
     results := results ++ [res]
-    for f in res.forbiddenFound do
-      if !allForbidden.contains f then
-        allForbidden := allForbidden ++ [f]
-    for ns in res.nonStandardFound do
-      if !allForbidden.contains ns then
-        allForbidden := allForbidden ++ [ns]
-  let passed := results.all (·.passed)
-  return {
-    passed := passed
-    theoremsAudited := results.length
-    results := results
-    forbiddenAxiomsFound := allForbidden
-  }
+    for f in res.forbiddenFound ++ res.nonStandardFound do
+      if !allForbidden.contains f then allForbidden := allForbidden ++ [f]
+  return { passed := results.all (·.passed), theoremsAudited := results.length,
+           results := results, forbiddenAxiomsFound := allForbidden }
 
 /-- Elaboration-time kernel gate: runs `auditAllProofsCoreM` during compilation of `AxiomAudit.lean`,
     fails the build if any theorem depends on `sorryAx`, `trustCompiler`, or non-standard axioms,
@@ -245,42 +227,20 @@ elab "#verify_lean_native_axioms" : command => do
     let report ← auditAllProofsCoreM auditedTheoremNames
     if !report.passed then
       throwError s!"[AxiomAudit] Kernel axiom audit FAILED! Forbidden/non-standard axioms found: {report.forbiddenAxiomsFound}"
-    let decl := Declaration.defnDecl {
-      name := `LeanNative.Proofs.verifiedAxiomAuditReport
-      levelParams := []
-      type := mkConst ``AxiomAuditReport
-      value := toExpr report
-      hints := ReducibilityHints.abbrev
-      safety := DefinitionSafety.safe
-    }
-    addAndCompile decl
+    addAndCompile (Declaration.defnDecl { name := `LeanNative.Proofs.verifiedAxiomAuditReport, levelParams := [], type := mkConst ``AxiomAuditReport, value := toExpr report, hints := ReducibilityHints.abbrev, safety := DefinitionSafety.safe })
 
 #verify_lean_native_axioms
 
 private abbrev escapeJsonStr := LeanNative.IR.jsonEscape
 
 def TheoremAxiomAudit.toJson (t : TheoremAxiomAudit) : String :=
-  let axs := String.intercalate "," (t.axiomsUsed.map (fun a => s!"\"{escapeJsonStr a}\""))
-  let forb := String.intercalate "," (t.forbiddenFound.map (fun a => s!"\"{escapeJsonStr a}\""))
-  let nonStd := String.intercalate "," (t.nonStandardFound.map (fun a => s!"\"{escapeJsonStr a}\""))
-  "{" ++
-  s!"\"theoremName\":\"{escapeJsonStr t.theoremName}\"," ++
-  s!"\"existsInEnv\":{if t.existsInEnv then "true" else "false"}," ++
-  s!"\"passed\":{if t.passed then "true" else "false"}," ++
-  s!"\"axiomsUsed\":[{axs}]," ++
-  s!"\"forbiddenFound\":[{forb}]," ++
-  s!"\"nonStandardFound\":[{nonStd}]" ++
-  "}"
+  let q (xs : List String) := String.intercalate "," (xs.map (fun a => s!"\"{escapeJsonStr a}\""))
+  s!"\{\"theoremName\":\"{escapeJsonStr t.theoremName}\",\"existsInEnv\":{t.existsInEnv},\"passed\":{t.passed},\"axiomsUsed\":[{q t.axiomsUsed}],\"forbiddenFound\":[{q t.forbiddenFound}],\"nonStandardFound\":[{q t.nonStandardFound}]}"
 
 def AxiomAuditReport.toJson (r : AxiomAuditReport) : String :=
   let resJson := String.intercalate "," (r.results.map TheoremAxiomAudit.toJson)
   let forbJson := String.intercalate "," (r.forbiddenAxiomsFound.map (fun a => s!"\"{escapeJsonStr a}\""))
-  "{" ++
-  s!"\"passed\":{if r.passed then "true" else "false"}," ++
-  s!"\"theoremsAudited\":{r.theoremsAudited}," ++
-  s!"\"forbiddenAxiomsFound\":[{forbJson}]," ++
-  s!"\"results\":[{resJson}]" ++
-  "}"
+  s!"\{\"passed\":{r.passed},\"theoremsAudited\":{r.theoremsAudited},\"forbiddenAxiomsFound\":[{forbJson}],\"results\":[{resJson}]}"
 
 def AxiomAuditReport.formatSummary (r : AxiomAuditReport) : String :=
   let sAx := "sor" ++ "ryAx"

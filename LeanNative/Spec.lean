@@ -744,5 +744,69 @@ theorem sarray_escaping_closure_rejects_restrict_simd (inp : SArrayRestrictSimdI
     canEmitRestrictSimd inp = false :=
   sarrayRestrictSimdMetaSpec.rejects_unsafe inp (by simp [h_esc])
 
+/-- Recursive binary-tree `Prod` and interprocedural nested `whileM`/`repeatM` SROA unboxing gate (`ln_c_opt` Pass 3):
+    requires positive leaf count (`0 < leafCount`), zero escaping pair pointers (`pairEscapes = false`),
+    and a purely scalar inner-loop accumulator (`innerLoopScalar = true`). -/
+structure NestedProdWhileSroaInput where
+  leafCount       : Nat
+  pairEscapes     : Bool
+  innerLoopScalar : Bool
+  deriving Repr, DecidableEq, BEq
+
+def canUnboxNestedProdWhile (inp : NestedProdWhileSroaInput) : Bool :=
+  decide (0 < inp.leafCount) && !inp.pairEscapes && inp.innerLoopScalar
+
+theorem nested_prod_while_sroa_gate_sound (inp : NestedProdWhileSroaInput) :
+    canUnboxNestedProdWhile inp = true ↔
+      (0 < inp.leafCount ∧ inp.pairEscapes = false ∧ inp.innerLoopScalar = true) := by
+  simp [canUnboxNestedProdWhile, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+def nestedProdWhileSroaMetaSpec : MetaGateSpec NestedProdWhileSroaInput
+    (fun inp => 0 < inp.leafCount ∧ inp.pairEscapes = false ∧ inp.innerLoopScalar = true) where
+  gate := canUnboxNestedProdWhile
+  sound := fun inp => (nested_prod_while_sroa_gate_sound inp).mp
+  complete := fun inp => (nested_prod_while_sroa_gate_sound inp).mpr
+  posWitness := ⟨8, false, true⟩
+  negWitness := ⟨8, true, true⟩
+  nonVacuous := rfl
+  tight := rfl
+
+theorem escaping_pair_rejects_nested_prod_sroa (inp : NestedProdWhileSroaInput)
+    (h_esc : inp.pairEscapes = true) :
+    canUnboxNestedProdWhile inp = false :=
+  nestedProdWhileSroaMetaSpec.rejects_unsafe inp (by simp [h_esc])
+
+/-- Structural 64x64->128 `mulHi` (`__uint128_t`) peephole gate (`ln_c_opt` Pass 3b):
+    requires an exact `0xFFFFFFFF` 32-bit half-word mask (`maskBits = 32`), a `32`-bit shift (`shiftBits = 32`),
+    and clean cross-product carry propagation (`hasCarry = true`). -/
+structure MulHiU128PeepholeInput where
+  maskBits  : Nat
+  shiftBits : Nat
+  hasCarry  : Bool
+  deriving Repr, DecidableEq, BEq
+
+def canRewriteMulHiU128 (inp : MulHiU128PeepholeInput) : Bool :=
+  decide (inp.maskBits = 32) && decide (inp.shiftBits = 32) && inp.hasCarry
+
+theorem mulhi_u128_peephole_gate_sound (inp : MulHiU128PeepholeInput) :
+    canRewriteMulHiU128 inp = true ↔
+      (inp.maskBits = 32 ∧ inp.shiftBits = 32 ∧ inp.hasCarry = true) := by
+  simp [canRewriteMulHiU128, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+def mulHiU128PeepholeMetaSpec : MetaGateSpec MulHiU128PeepholeInput
+    (fun inp => inp.maskBits = 32 ∧ inp.shiftBits = 32 ∧ inp.hasCarry = true) where
+  gate := canRewriteMulHiU128
+  sound := fun inp => (mulhi_u128_peephole_gate_sound inp).mp
+  complete := fun inp => (mulhi_u128_peephole_gate_sound inp).mpr
+  posWitness := ⟨32, 32, true⟩
+  negWitness := ⟨16, 32, true⟩
+  nonVacuous := rfl
+  tight := rfl
+
+theorem non32_mask_rejects_mulhi_u128_peephole (inp : MulHiU128PeepholeInput)
+    (h_ne : inp.maskBits ≠ 32) :
+    canRewriteMulHiU128 inp = false :=
+  mulHiU128PeepholeMetaSpec.rejects_unsafe inp (by simp [h_ne])
+
 end LeanNative.Spec
 

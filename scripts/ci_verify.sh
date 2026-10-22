@@ -16,15 +16,15 @@ export PATH="$ROOT_DIR/../turbo-lean/target/release:/var/lib/sandboxed-node/cach
 BASE_REF="HEAD"
 for arg in "$@"; do
   if [[ "$arg" == "--sync-docs" ]]; then
-    grep -q "145 machine-checked in-kernel proofs" README.md
-    grep -q "56/56" README.md
-    grep -q "145/145" AGENTS.md
+    grep -q "149 machine-checked in-kernel proofs" README.md
+    grep -q "60/60" README.md
+    grep -q "149/149" AGENTS.md
   else
     BASE_REF="$arg"
   fi
 done
-grep -q "145 machine-checked in-kernel proofs" README.md
-grep -q "145/145" AGENTS.md
+grep -q "149 machine-checked in-kernel proofs" README.md
+grep -q "149/149" AGENTS.md
 EXTRA_PR_FLAGS="${LEAN_NATIVE_PR_FLAGS:-}"
 
 echo "=================================================================="
@@ -41,20 +41,23 @@ echo "[2/5] Running Gate 1 & Gate 3: Spec Pinning, Untrusted Plugin Gate, Hardwa
 $FULL_BIN pr-verify --base "$BASE_REF" $EXTRA_PR_FLAGS
 $CORE_BIN plugins --test-adversarial
 python3 scripts/tune_hardware_profile.py --verify-profiles profiles
+if [[ -f /tmp/opencode/raw_bench.c ]]; then
+  python3 scripts/test_rename_invariance.py /tmp/opencode/raw_bench.c
+fi
 
 if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean..."
   turbo-lean --json audit-spec LeanNative/Spec.lean > /tmp/ln_ci_audit_spec.json
   grep -q '"vacuous_specs": 0' /tmp/ln_ci_audit_spec.json
-  grep -q '"tight_specs": 56' /tmp/ln_ci_audit_spec.json
-  echo "  -> turbo-lean audit-spec: 56/56 tight in Spec.lean (0 vacuous specs)!"
+  grep -q '"tight_specs": 60' /tmp/ln_ci_audit_spec.json
+  echo "  -> turbo-lean audit-spec: 60/60 tight in Spec.lean (0 vacuous specs)!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (145 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (149 theorems) & Self-Tests..."
 $CORE_BIN self-test
 $FULL_BIN self-test
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 145" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 149" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."

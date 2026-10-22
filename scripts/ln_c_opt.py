@@ -757,6 +757,142 @@ def apply_pass2_range_forin(c_text):
         f_new = f.replace("{\n_start:", "{\n" + "\n".join(fp) + "\n_start:", 1)
         out_parts.append(f_new)
     out_parts.append(c_text[last_idx:])
+    c_text = "".join(out_parts)
+
+    # Sub-pass 2D: 1-array or 2-tuple of sarrays Range.forIn' push initialization loops
+    out_parts = []
+    last_idx = 0
+    for m in re.finditer(r"LEAN_EXPORT lean_object\* (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(([^)]*)\)\{\n_start:", c_text):
+        pos = m.start()
+        out_parts.append(c_text[last_idx:pos])
+        params_str = m.group(2)
+        depth = 0
+        started = False
+        end_pos = pos
+        for i in range(pos, len(c_text)):
+            if c_text[i] == "{":
+                depth += 1
+                started = True
+            elif c_text[i] == "}":
+                depth -= 1
+                if started and depth == 0:
+                    end_pos = i + 1
+                    break
+        f = c_text[pos:end_pos]
+        last_idx = end_pos
+        if "ln_array_push_auto(" not in f:
+            out_parts.append(f); continue
+        params = [p.strip().split()[-1] for p in params_str.split(",") if p.strip()]
+        if len(params) < 3:
+            out_parts.append(f); continue
+        range_var, b_var, i_var = params[-3], params[-2], params[-1]
+        m_1p = re.search(
+            r"_start:\n\{\nlean_object\* (v_stop_[0-9_]+); lean_object\* (v_step_[0-9_]+); uint8_t (v___x_[0-9_]+);[ \t]*\n"
+            r"\1 = lean_ctor_get\(" + re.escape(range_var) + r", 1\);\n"
+            r"\2 = lean_ctor_get\(" + re.escape(range_var) + r", 2\);\n"
+            r"\3 = lean_nat_dec_lt\(" + re.escape(i_var) + r", \1\);\n"
+            r"if \(\3 == 0\)\n\{\nlean_dec\(" + re.escape(i_var) + r"\);\nreturn " + re.escape(b_var) + r";\n\}\nelse\n\{\n"
+            r"(.*?)\n"
+            r"([a-zA-Z0-9_]+) = lean_box_uint64\(([a-zA-Z0-9_]+)\);\n"
+            r"([a-zA-Z0-9_]+) = ln_array_push_auto\(" + re.escape(b_var) + r", \5\);\n"
+            r"([a-zA-Z0-9_]+) = lean_nat_add\(" + re.escape(i_var) + r", \2\);\n"
+            r"lean_dec\(" + re.escape(i_var) + r"\);\n"
+            + re.escape(b_var) + r" = \7;\n"
+            + re.escape(i_var) + r" = \8;\n"
+            r"goto _start;",
+            f, re.DOTALL
+        )
+        if m_1p:
+            stop_var, step_var, core_1p, val_u = m_1p.group(1), m_1p.group(2), m_1p.group(4), m_1p.group(6)
+            core_mod = re.sub(r"([a-zA-Z0-9_]+) = lean_uint64_of_nat\(" + re.escape(i_var) + r"\);", r"\1 = (uint64_t)ln_i;", core_1p)
+            if "lean_nat_" not in core_mod and "lean_alloc_" not in core_mod:
+                fp = [
+                    "{",
+                    f"lean_object* {stop_var} = lean_ctor_get({range_var}, 1);",
+                    f"lean_object* {step_var} = lean_ctor_get({range_var}, 2);",
+                    f"if ({i_var} == lean_box(0) && lean_is_scalar({stop_var}) && {step_var} == lean_box(1) && lean_obj_tag({b_var}) == 248 && ln_sarray_u64_size({b_var}) == 0) {{",
+                    f"size_t ln_n = lean_unbox({stop_var});",
+                    f"lean_dec({b_var});",
+                    "lean_object* ln_r = lean_alloc_sarray(8, ln_n, ln_n);",
+                    "uint64_t* __restrict__ ln_ptr = ln_sarray_u64_ptr(ln_r);",
+                    "for (size_t ln_i = 0; ln_i < ln_n; ++ln_i) {",
+                    core_mod,
+                    f"ln_ptr[ln_i] = {val_u};",
+                    "}",
+                    "return ln_r;",
+                    "}",
+                    "}"
+                ]
+                out_parts.append(f.replace("{\n_start:", "{\n" + "\n".join(fp) + "\n_start:", 1))
+                continue
+        m_2p = re.search(
+            r"_start:\n\{\nlean_object\* (v_stop_[0-9_]+); lean_object\* (v_step_[0-9_]+); uint8_t (v___x_[0-9_]+);[ \t]*\n"
+            r"\1 = lean_ctor_get\(" + re.escape(range_var) + r", 1\);\n"
+            r"\2 = lean_ctor_get\(" + re.escape(range_var) + r", 2\);\n"
+            r"\3 = lean_nat_dec_lt\(" + re.escape(i_var) + r", \1\);\n"
+            r"if \(\3 == 0\)\n\{\nlean_dec\(" + re.escape(i_var) + r"\);\nreturn " + re.escape(b_var) + r";\n\}\nelse\n\{\n"
+            r"lean_object\* (v_fst_[0-9_]+); lean_object\* (v_snd_[0-9_]+);[^\n]+\n"
+            r"\4 = lean_ctor_get\(" + re.escape(b_var) + r", 0\);\n"
+            r"\5 = lean_ctor_get\(" + re.escape(b_var) + r", 1\);\n"
+            r".*?"
+            r"v_resetjp_[0-9_]+:\n\{\n"
+            r"(.*?)\n"
+            r"if \(v_isShared_[0-9_]+ == 0\)\n\{",
+            f, re.DOTALL
+        )
+        if m_2p:
+            stop_var, step_var, fst_v, snd_v, core_2p = m_2p.group(1), m_2p.group(2), m_2p.group(4), m_2p.group(5), m_2p.group(6)
+            pm1 = re.search(r"([a-zA-Z0-9_]+) = lean_box_uint64\(([a-zA-Z0-9_]+)\);\n([a-zA-Z0-9_]+) = ln_array_push_auto\(" + re.escape(fst_v) + r", \1\);", core_2p)
+            pm2 = re.search(r"([a-zA-Z0-9_]+) = lean_box_uint64\(([a-zA-Z0-9_]+)\);\n([a-zA-Z0-9_]+) = ln_array_push_auto\(" + re.escape(snd_v) + r", \1\);", core_2p)
+            if pm1 and pm2:
+                u1, u2 = pm1.group(2), pm2.group(2)
+                nat_exprs = {i_var: "ln_i"}
+                c2_lines = []
+                ok_2p = True
+                for cl in [l.strip() for l in core_2p.splitlines() if l.strip()]:
+                    if any(cl.startswith(t) for t in ("lean_object* ", "uint64_t ", "uint8_t ")):
+                        c2_lines.append(cl); continue
+                    if cl.startswith("lean_dec("): continue
+                    if "= lean_box_uint64(" in cl or "= ln_array_push_auto(" in cl: continue
+                    um = re.match(r"([a-zA-Z0-9_]+) = lean_unsigned_to_nat\(([0-9]+)u\);", cl)
+                    if um:
+                        nat_exprs[um.group(1)] = f"{um.group(2)}ULL"; continue
+                    nm = re.match(r"([a-zA-Z0-9_]+) = lean_nat_(mul|add|land)\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);", cl)
+                    if nm and nm.group(3) in nat_exprs and nm.group(4) in nat_exprs:
+                        op_sym = {"mul": "*", "add": "+", "land": "&"}[nm.group(2)]
+                        nat_exprs[nm.group(1)] = f"({nat_exprs[nm.group(3)]} {op_sym} {nat_exprs[nm.group(4)]})"
+                        continue
+                    uom = re.match(r"([a-zA-Z0-9_]+) = lean_uint64_of_nat\(([a-zA-Z0-9_]+)\);", cl)
+                    if uom and uom.group(2) in nat_exprs:
+                        c2_lines.append(f"{uom.group(1)} = (uint64_t){nat_exprs[uom.group(2)]};")
+                        continue
+                    ok_2p = False; break
+                if ok_2p:
+                    fp = [
+                        "{",
+                        f"lean_object* {stop_var} = lean_ctor_get({range_var}, 1);",
+                        f"lean_object* {step_var} = lean_ctor_get({range_var}, 2);",
+                        f"lean_object* {fst_v} = lean_ctor_get({b_var}, 0);",
+                        f"lean_object* {snd_v} = lean_ctor_get({b_var}, 1);",
+                        f"if ({i_var} == lean_box(0) && lean_is_scalar({stop_var}) && {step_var} == lean_box(1) && lean_obj_tag({fst_v}) == 248 && lean_obj_tag({snd_v}) == 248 && ln_sarray_u64_size({fst_v}) == 0 && ln_sarray_u64_size({snd_v}) == 0) {{",
+                        f"size_t ln_n = lean_unbox({stop_var});",
+                        f"lean_dec({b_var});",
+                        "lean_object* ln_ra = lean_alloc_sarray(8, ln_n, ln_n);",
+                        "lean_object* ln_rb = lean_alloc_sarray(8, ln_n, ln_n);",
+                        "uint64_t * __restrict__ ln_pa = ln_sarray_u64_ptr(ln_ra), * __restrict__ ln_pb = ln_sarray_u64_ptr(ln_rb);",
+                        "for (size_t ln_i = 0; ln_i < ln_n; ++ln_i) {",
+                        *c2_lines,
+                        f"ln_pa[ln_i] = {u1}; ln_pb[ln_i] = {u2};",
+                        "}",
+                        "lean_object* ln_r = lean_alloc_ctor(0, 2, 0); lean_ctor_set(ln_r, 0, ln_ra); lean_ctor_set(ln_r, 1, ln_rb);",
+                        "return ln_r;",
+                        "}",
+                        "}"
+                    ]
+                    out_parts.append(f.replace("{\n_start:", "{\n" + "\n".join(fp) + "\n_start:", 1))
+                    continue
+        out_parts.append(f)
+    out_parts.append(c_text[last_idx:])
     return "".join(out_parts)
 
 def apply_pass3_while_sroa(c_text):
@@ -834,7 +970,18 @@ def apply_pass3_while_sroa(c_text):
             f_new = f_new.replace(jp_m.group(0) + "\n", "")
         c_text = c_text[:pos] + f_new + c_text[end_pos:]
 
-    # Step 2: SROA on whileM/repeatM_erased___at___00...___redArg
+    # Step 2: interprocedural nested whileM/repeatM scalar SROA
+    scalar_consts = {}
+    for m in re.finditer(r"static const lean_ctor_object ([a-zA-Z0-9_]+)_value = \{[^\n]*LEAN_SCALAR_PTR_LITERAL\(([^)]+)\)\}\};", c_text):
+        bs = [int(x.strip()) for x in m.group(2).split(",")]
+        val = sum(b << (8 * i) for i, b in enumerate(bs))
+        scalar_consts[m.group(1)] = f"{val}ULL"
+
+    const_pairs = {}
+    for m in re.finditer(r"static const lean_ctor_object ([a-zA-Z0-9_]+)_value = \{[^\n]*\.m_objs = \{\(\(lean_object\*\)&([a-zA-Z0-9_]+)_value\),\(\(lean_object\*\)&([a-zA-Z0-9_]+)_value\)\}\};", c_text):
+        const_pairs[m.group(1)] = (m.group(2), m.group(3))
+
+    scalar_while_fns = {}
     out_parts = []
     last_idx = 0
     for m in re.finditer(r"LEAN_EXPORT lean_object\* (l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00[a-zA-Z0-9_]+___redArg)\(([^)]*)\)\{\n_start:\n\{", c_text):
@@ -854,7 +1001,8 @@ def apply_pass3_while_sroa(c_text):
         f = c_text[pos:end_pos]
         last_idx = end_pos
 
-        params = [p.strip().split()[-1] for p in params_str.split(",") if p.strip()]
+        param_decls = [p.strip() for p in params_str.split(",") if p.strip()]
+        params = [p.split()[-1] for p in param_decls]
         if not params:
             out_parts.append(f); continue
         state_var = params[-1]
@@ -880,14 +1028,13 @@ def apply_pass3_while_sroa(c_text):
             if node in ctor_gets and 0 in ctor_gets[node] and 1 in ctor_gets[node]:
                 f0, s1 = ctor_gets[node][0], ctor_gets[node][1]
                 spine_nodes.append((node, f0, s1))
-                walk_prod(f0)
-                walk_prod(s1)
-            else:
-                leaves.append(node)
-        walk_prod(state_var)
+                return (walk_prod(f0), walk_prod(s1))
+            idx_l = len(leaves)
+            leaves.append(node)
+            return idx_l
+        spine_tree = walk_prod(state_var)
         internal_nodes = {n for (n, _, _) in spine_nodes}
 
-        # Match spine destructuring (only when each spine node has a single !lean_is_exclusive check)
         excl_info = {}
         ok_spine = True
         for (node, f0, s1) in spine_nodes:
@@ -940,6 +1087,85 @@ def apply_pass3_while_sroa(c_text):
         ):
             pair_defs[rm.group(1)] = (rm.group(4), rm.group(5))
 
+        box_map = {}
+        for bm in re.finditer(r"([a-zA-Z0-9_]+) = lean_box_uint64\(([a-zA-Z0-9_]+)\);", body):
+            box_map[bm.group(1)] = bm.group(2)
+
+        const_var_map = {}
+        for cm in re.finditer(r"([a-zA-Z0-9_]+) = \(\(lean_object\*\)\(([a-zA-Z0-9_]+)\)\);", body):
+            cname = cm.group(2)
+            if cname in scalar_consts:
+                box_map[cm.group(1)] = scalar_consts[cname]
+            else:
+                const_var_map[cm.group(1)] = cname
+
+        inner_calls = []
+        inner_leaf_vars = {}
+        inner_internal_nodes = set()
+        inner_excl_info = {}
+        inner_arg_pairs = set()
+
+        for icm in re.finditer(r"([a-zA-Z0-9_]+) = (l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00[a-zA-Z0-9_]+___redArg)\(([^)]*)\);", body):
+            ret_v, callee_fn, args_s = icm.group(1), icm.group(2), icm.group(3)
+            if callee_fn not in scalar_while_fns:
+                continue
+            callee_tree, callee_num_leaves = scalar_while_fns[callee_fn]
+            call_args = [a.strip() for a in args_s.split(",") if a.strip()]
+            state_arg = call_args[-1]
+            arg_leaves = []
+            arg_pairs_local = set()
+            def extract_arg_tree(t_node, cur_v):
+                if isinstance(t_node, tuple):
+                    if cur_v in pair_defs:
+                        arg_pairs_local.add(cur_v)
+                        a0, a1 = pair_defs[cur_v]
+                        return extract_arg_tree(t_node[0], a0) and extract_arg_tree(t_node[1], a1)
+                    cname = const_var_map.get(cur_v, cur_v)
+                    if cname in const_pairs:
+                        c0, c1 = const_pairs[cname]
+                        return extract_arg_tree(t_node[0], c0) and extract_arg_tree(t_node[1], c1)
+                    return False
+                else:
+                    arg_leaves.append(cur_v)
+                    return True
+            if not extract_arg_tree(callee_tree, state_arg):
+                continue
+
+            ret_local_internal = set()
+            ret_local_excl = {}
+            ret_local_leaves = {}
+            def walk_ret_proj(t_node, cur_v):
+                if isinstance(t_node, tuple):
+                    if cur_v not in ctor_gets:
+                        return
+                    ret_local_internal.add(cur_v)
+                    em = re.search(
+                        r"([a-zA-Z0-9_]+) = !lean_is_exclusive\(" + re.escape(cur_v) + r"\);\n"
+                        r"if \(\1 == 0\)\n\{\n"
+                        r"(?:lean_object\* [a-zA-Z0-9_]+;[ \t]*\n[a-zA-Z0-9_]+ = lean_ctor_get\(" + re.escape(cur_v) + r", [01]\);\nlean_dec\([a-zA-Z0-9_]+\);\n)?"
+                        r"([a-zA-Z0-9_]+) = " + re.escape(cur_v) + r";\n"
+                        r"([a-zA-Z0-9_]+) = \1;\n"
+                        r"goto (v_resetjp_[0-9_]+);\n\}\nelse\n\{\n"
+                        r"(?:lean_inc\([a-zA-Z0-9_]+\);\n)+lean_dec\(" + re.escape(cur_v) + r"\);\n"
+                        r"\2 = lean_box\(0\);\n"
+                        r"\3 = \1;\n"
+                        r"goto \4;\n\}",
+                        body
+                    )
+                    if em:
+                        ret_local_excl[cur_v] = (em.group(1), em.group(2), em.group(3), em.group(4))
+                    for idx_c in (0, 1):
+                        if idx_c in ctor_gets[cur_v]:
+                            walk_ret_proj(t_node[idx_c], ctor_gets[cur_v][idx_c])
+                else:
+                    ret_local_leaves[cur_v] = f"ic_{ret_v}_{t_node}"
+            walk_ret_proj(callee_tree, ret_v)
+            inner_calls.append((icm.group(0), ret_v, callee_fn, call_args[:-1], arg_leaves, callee_num_leaves))
+            inner_leaf_vars.update(ret_local_leaves)
+            inner_internal_nodes.update(ret_local_internal)
+            inner_excl_info.update(ret_local_excl)
+            inner_arg_pairs.update(arg_pairs_local)
+
         node_set = {n for (n, _, _) in spine_nodes}
         be_leaf_vals = {}
         be_pair_vars = set()
@@ -963,15 +1189,9 @@ def apply_pass3_while_sroa(c_text):
         if not ok_be:
             out_parts.append(f); continue
 
-        box_map = {}
-        for bm in re.finditer(r"([a-zA-Z0-9_]+) = lean_box_uint64\(([a-zA-Z0-9_]+)\);", body):
-            box_map[bm.group(1)] = bm.group(2)
-
-        # (ok_reuse guard relaxed: verified semantically safe across all 20 benchmarks)
-
-        # Fixed-point determination of leaf_is_u64 (supports shift chains like sha256/keccak where leaf_k+1 = leaf_k)
+        all_candidate_leaves = list(leaves) + list(inner_leaf_vars.keys())
         leaf_can_unbox = {}
-        for lv in leaves:
+        for lv in all_candidate_leaves:
             uses = [l.strip() for l in body.splitlines() if re.search(r"\b" + re.escape(lv) + r"\b", l) and "lean_object* " not in l]
             u_ok = True
             for u in uses:
@@ -991,11 +1211,26 @@ def apply_pass3_while_sroa(c_text):
                 if not leaf_is_u64[lv]: continue
                 for nr, vals in be_leaf_vals.items():
                     v_i = vals[idx_l]
-                    if v_i in box_map: continue
+                    if v_i in box_map or v_i in scalar_consts: continue
+                    if v_i in inner_leaf_vars and leaf_can_unbox.get(v_i, False): continue
                     if v_i in leaves and leaf_is_u64[v_i]: continue
                     leaf_is_u64[lv] = False
                     changed = True
                     break
+
+        # Validate that any inner_calls only pass scalarizable arg_leaves
+        valid_inner_calls = []
+        for ic_tup in inner_calls:
+            call_str, ret_v, callee_fn, extra_args, arg_leaves, callee_num_leaves = ic_tup
+            if all((av in box_map or av in scalar_consts or (av in inner_leaf_vars or (av in leaves and leaf_is_u64[av]))) for av in arg_leaves):
+                valid_inner_calls.append(ic_tup)
+        if len(valid_inner_calls) != len(inner_calls):
+            # Fallback if an inner call wasn't fully scalarizable
+            inner_calls = []
+            inner_leaf_vars = {}
+            inner_internal_nodes = set()
+            inner_excl_info = {}
+            inner_arg_pairs = set()
 
         ok_internal = True
         for (node, f0, s1) in spine_nodes:
@@ -1037,12 +1272,23 @@ def apply_pass3_while_sroa(c_text):
             hdr.append(f"lean_object* {reuse_v} = lean_box(0);")
             hdr.append(f"uint8_t {shared_v} = 1;")
             hdr.append(f"uint8_t {chk_v} = 1;")
+        for inode, (chk_v, reuse_v, shared_v, _) in inner_excl_info.items():
+            hdr.append(f"lean_object* {reuse_v} = lean_box(0);")
+            hdr.append(f"uint8_t {shared_v} = 1;")
+            hdr.append(f"uint8_t {chk_v} = 1;")
 
         new_body = body
         vars_to_strip_decl = set()
         for (node, f0, s1) in spine_nodes:
             chk_v, reuse_v, shared_v, _ = excl_info[node]
             vars_to_strip_decl.update([f0, s1, chk_v, reuse_v, shared_v])
+        for inode in inner_internal_nodes:
+            vars_to_strip_decl.add(inode)
+            if inode in ctor_gets:
+                for ch in ctor_gets[inode].values():
+                    vars_to_strip_decl.add(ch)
+        for inode, (chk_v, reuse_v, shared_v, _) in inner_excl_info.items():
+            vars_to_strip_decl.update([chk_v, reuse_v, shared_v])
 
         for (node, f0, s1) in spine_nodes:
             chk_v, reuse_v, shared_v, jp_lbl = excl_info[node]
@@ -1055,7 +1301,7 @@ def apply_pass3_while_sroa(c_text):
                 + re.escape(reuse_v) + r" = " + re.escape(node) + r";\n"
                 + re.escape(shared_v) + r" = " + re.escape(chk_v) + r";\n"
                 r"goto " + re.escape(jp_lbl) + r";\n\}\nelse\n\{\n"
-                r"(?:lean_inc\([a-zA-Z0-9_]+\);\n)+lean_dec\(" + re.escape(node) + r"\);\n"
+                r"(?:lean_inc\([a-zA-Z0-9_]+\);\n)*lean_dec\(" + re.escape(node) + r"\);\n"
                 + re.escape(reuse_v) + r" = lean_box\(0\);\n"
                 + re.escape(shared_v) + r" = " + re.escape(chk_v) + r";\n"
                 r"goto " + re.escape(jp_lbl) + r";\n\}",
@@ -1064,7 +1310,56 @@ def apply_pass3_while_sroa(c_text):
             )
             new_body = re.sub(r"[ \t]*lean_del_object\(" + re.escape(reuse_v) + r"\);\n", "", new_body)
 
-        for pv in be_pair_vars:
+        # Strip inner call return projections and exclusivity checks BEFORE removing leaf lean_inc
+        for inode in inner_internal_nodes:
+            if inode in ctor_gets:
+                for idx_c, ch in ctor_gets[inode].items():
+                    new_body = re.sub(r"[ \t]*" + re.escape(ch) + r" = lean_ctor_get\(" + re.escape(inode) + rf", {idx_c}\);\n(?:[ \t]*lean_inc\(" + re.escape(ch) + r"\);\n)?", "", new_body)
+            new_body = re.sub(r"[ \t]*lean_dec_ref\(" + re.escape(inode) + r"\);\n", "", new_body)
+            if inode in inner_excl_info:
+                chk_v, reuse_v, shared_v, jp_lbl = inner_excl_info[inode]
+                new_body = re.sub(
+                    re.escape(chk_v) + r" = !lean_is_exclusive\(" + re.escape(inode) + r"\);\n"
+                    r"if \(" + re.escape(chk_v) + r" == 0\)\n\{\n"
+                    r"(?:lean_object\* [a-zA-Z0-9_]+;[ \t]*\n[a-zA-Z0-9_]+ = lean_ctor_get\(" + re.escape(inode) + r", [01]\);\nlean_dec\([a-zA-Z0-9_]+\);\n)?"
+                    + re.escape(reuse_v) + r" = " + re.escape(inode) + r";\n"
+                    + re.escape(shared_v) + r" = " + re.escape(chk_v) + r";\n"
+                    r"goto " + re.escape(jp_lbl) + r";\n\}\nelse\n\{\n"
+                    r"(?:lean_inc\([a-zA-Z0-9_]+\);\n)*lean_dec\(" + re.escape(inode) + r"\);\n"
+                    + re.escape(reuse_v) + r" = lean_box\(0\);\n"
+                    + re.escape(shared_v) + r" = " + re.escape(chk_v) + r";\n"
+                    r"goto " + re.escape(jp_lbl) + r";\n\}",
+                    f"goto {jp_lbl};",
+                    new_body
+                )
+                new_body = re.sub(r"[ \t]*lean_del_object\(" + re.escape(reuse_v) + r"\);\n", "", new_body)
+            new_body = re.sub(r"[ \t]*lean_dec\(" + re.escape(inode) + r"\);\n", "", new_body)
+
+        # Rewrite inner calls to scalar helper calls
+        for call_str, ret_v, callee_fn, extra_args, arg_leaves, callee_num_leaves in inner_calls:
+            lines_ic = []
+            for idx_k in range(callee_num_leaves):
+                av = arg_leaves[idx_k]
+                if av in leaves:
+                    a_expr = f"u_{av}"
+                elif av in inner_leaf_vars:
+                    a_expr = inner_leaf_vars[av]
+                elif av in box_map:
+                    a_expr = box_map[av]
+                else:
+                    a_expr = scalar_consts[av]
+                lines_ic.append(f"uint64_t ic_{ret_v}_{idx_k} = {a_expr};")
+            ptr_args = [f"&ic_{ret_v}_{idx_k}" for idx_k in range(callee_num_leaves)]
+            all_c_args = ", ".join(extra_args + ptr_args)
+            lines_ic.append(f"{callee_fn}_scalar({all_c_args});")
+            new_body = new_body.replace(call_str, "\n".join(lines_ic))
+
+        for ilv, ic_var in inner_leaf_vars.items():
+            new_body = new_body.replace(f"lean_unbox_uint64({ilv})", ic_var)
+            new_body = re.sub(r"[ \t]*lean_dec\(" + re.escape(ilv) + r"\);\n", "", new_body)
+            new_body = re.sub(r"[ \t]*lean_inc\(" + re.escape(ilv) + r"\);\n", "", new_body)
+
+        for pv in be_pair_vars | inner_arg_pairs:
             new_body = re.sub(
                 r"if \([a-zA-Z0-9_]+ == 0\)\n\{\n"
                 r"(?:lean_ctor_set\([a-zA-Z0-9_]+, [01], [a-zA-Z0-9_]+\);\n)*"
@@ -1087,6 +1382,13 @@ def apply_pass3_while_sroa(c_text):
                 new_body
             )
 
+        for ilv, ic_var in inner_leaf_vars.items():
+            new_body = re.sub(
+                r"lean_ctor_set\(([a-zA-Z0-9_]+), ([01]), " + re.escape(ilv) + r"\);",
+                rf"lean_ctor_set(\1, \2, lean_box_uint64({ic_var}));",
+                new_body
+            )
+
         for lv in leaves:
             if not leaf_is_u64[lv]: continue
             new_body = new_body.replace(f"lean_unbox_uint64({lv})", f"u_{lv}")
@@ -1103,7 +1405,14 @@ def apply_pass3_while_sroa(c_text):
             for idx_l, lv in enumerate(leaves):
                 v_i = vals[idx_l]
                 if leaf_is_u64[lv]:
-                    u_expr = f"u_{v_i}" if v_i in leaves else box_map[v_i]
+                    if v_i in leaves:
+                        u_expr = f"u_{v_i}"
+                    elif v_i in inner_leaf_vars:
+                        u_expr = inner_leaf_vars[v_i]
+                    elif v_i in box_map:
+                        u_expr = box_map[v_i]
+                    else:
+                        u_expr = scalar_consts[v_i]
                     assigns.append(f"uint64_t next_u_{lv} = {u_expr};")
                 else:
                     assigns.append(f"lean_object* next_{lv} = {v_i};")
@@ -1131,6 +1440,7 @@ def apply_pass3_while_sroa(c_text):
                 if re.search(r"\b" + re.escape(bv) + r"\b", l)
                 and "lean_object* " not in l
                 and l.strip() != f"{bv} = lean_box_uint64({uv});"
+                and not l.strip().startswith(f"{bv} = ((lean_object*)(")
             ]
             if not uses_after:
                 new_body = new_body.replace(f"{bv} = lean_box_uint64({uv});", f"{bv} = lean_box(0);")
@@ -1146,8 +1456,45 @@ def apply_pass3_while_sroa(c_text):
                 continue
             cleaned_lines.append(line)
 
+        scalar_helper = ""
+        if all(leaf_is_u64[lv] for lv in leaves):
+            scalar_while_fns[fn_name] = (spine_tree, len(leaves))
+            extra_p_decls = param_decls[:-1]
+            ptr_p_decls = [f"uint64_t* p_{idx_l}" for idx_l in range(len(leaves))]
+            sig_args = ", ".join(extra_p_decls + ptr_p_decls)
+            sh_hdr = ["{"]
+            for idx_l, lv in enumerate(leaves):
+                sh_hdr.append(f"uint64_t u_{lv} = *p_{idx_l};")
+            for (node, _, _) in spine_nodes:
+                chk_v, reuse_v, shared_v, _ = excl_info[node]
+                sh_hdr.append(f"lean_object* {reuse_v} = lean_box(0);")
+                sh_hdr.append(f"uint8_t {shared_v} = 1;")
+                sh_hdr.append(f"uint8_t {chk_v} = 1;")
+            for inode, (chk_v, reuse_v, shared_v, _) in inner_excl_info.items():
+                sh_hdr.append(f"lean_object* {reuse_v} = lean_box(0);")
+                sh_hdr.append(f"uint8_t {shared_v} = 1;")
+                sh_hdr.append(f"uint8_t {chk_v} = 1;")
+            ret_assigns = " ".join([f"*p_{idx_l} = u_{lv};" for idx_l, lv in enumerate(leaves)]) + " return;"
+            sh_body = re.sub(
+                r"if \(([a-zA-Z0-9_]+) == 0\)\n\{\n.*?return [a-zA-Z0-9_]+;\n(?:[ \t]*\}\n)+([ \t]*else\n\{)",
+                rf"if (\1 == 0)\n{{\n{ret_assigns}\n}}\n\2",
+                "\n".join(cleaned_lines),
+                count=1,
+                flags=re.DOTALL
+            )
+            sh_body = re.sub(r"\breturn [a-zA-Z0-9_]+;", ret_assigns, sh_body)
+            sh_body = sh_body.replace("goto _start;", "continue;")
+            scalar_helper = (
+                f"static inline __attribute__((always_inline)) void {fn_name}_scalar({sig_args}){{\n"
+                + "\n".join(sh_hdr)
+                + "\n#pragma clang loop unroll(full)\nfor (;;) {\n"
+                + sh_body
+                + "\n}\n}\n}\n"
+            )
+
         f_final = (
-            f"LEAN_EXPORT lean_object* {fn_name}({params_str}){{\n"
+            scalar_helper
+            + f"LEAN_EXPORT lean_object* {fn_name}({params_str}){{\n"
             + "\n".join(hdr)
             + "\n_start:\n{\n"
             + "\n".join(cleaned_lines)
@@ -1155,7 +1502,7 @@ def apply_pass3_while_sroa(c_text):
         )
         out_parts.append(f_final)
     out_parts.append(c_text[last_idx:])
-    c_text = "".join(out_parts)
+    return apply_pass3b_structural_peepholes("".join(out_parts))
     return apply_pass3b_structural_peepholes(c_text)
 
 def apply_pass3b_structural_peepholes(c_text):
@@ -1632,47 +1979,6 @@ def apply_pass2c_hot_loops(c_text):
         c_text, count=1
     )
 
-    # 9. Array.push init loops: benchSArrayScaleBias_spec__1, benchDotProductU64_spec__0, benchSaxpyKernel_spec__0, benchMatmulTiledU64_spec__0
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00benchSArrayScaleBias_spec__1___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + "".join([f"lean_object* p_{idx} = {p.strip().split()[-1]};\n" for idx, p in enumerate(m.group(2).split(","))])
-            + "lean_object* st = lean_ctor_get(p_0, 1); lean_object* sp = lean_ctor_get(p_0, 2);\n"
-            + "if (p_2 == lean_box(0) && lean_is_scalar(st) && sp == lean_box(1) && lean_obj_tag(p_1) == 248 && ln_sarray_u64_size(p_1) == 0) {\n"
-            + "size_t n = lean_unbox(st);\n"
-            + "lean_dec(p_1);\n"
-            + "lean_object* r = lean_alloc_sarray(8, n, n);\n"
-            + "uint64_t* ptr = ln_sarray_u64_ptr(r);\n"
-            + "for (size_t i = 0; i < n; ++i) ptr[i] = (uint64_t)i * 13ULL + 5ULL;\n"
-            + "return r;\n}\n}\n"
-        ),
-        c_text, count=1
-    )
-    for fn_spec, c1, c2, c3, c4, mask in [
-        ("benchDotProductU64_spec__0___redArg", 17, 3, 31, 11, 65535),
-        ("benchSaxpyKernel_spec__0___redArg", 7, 1, 19, 9, 65535),
-        ("benchMatmulTiledU64_spec__0___redArg", 13, 7, 29, 3, 255),
-    ]:
-        c_text = re.sub(
-            rf"(LEAN_EXPORT lean_object\* l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00{fn_spec}\()([^)]+)(\)\{{\n)",
-            lambda m, c1=c1, c2=c2, c3=c3, c4=c4, mask=mask: (
-                m.group(1) + m.group(2) + "){\n{\n"
-                + "".join([f"lean_object* p_{idx} = {p.strip().split()[-1]};\n" for idx, p in enumerate(m.group(2).split(","))])
-                + "lean_object* st = lean_ctor_get(p_0, 1); lean_object* sp = lean_ctor_get(p_0, 2);\n"
-                + "lean_object* a = lean_ctor_get(p_1, 0); lean_object* b = lean_ctor_get(p_1, 1);\n"
-                + "if (p_2 == lean_box(0) && lean_is_scalar(st) && sp == lean_box(1) && lean_obj_tag(a) == 248 && lean_obj_tag(b) == 248 && ln_sarray_u64_size(a) == 0 && ln_sarray_u64_size(b) == 0) {\n"
-                + "size_t n = lean_unbox(st);\n"
-                + "lean_dec(p_1);\n"
-                + "lean_object* ra = lean_alloc_sarray(8, n, n); lean_object* rb = lean_alloc_sarray(8, n, n);\n"
-                + "uint64_t *pa = ln_sarray_u64_ptr(ra), *pb = ln_sarray_u64_ptr(rb);\n"
-                + f"for (size_t i = 0; i < n; ++i) {{ pa[i] = (uint64_t)((i * {c1} + {c2}) & {mask}); pb[i] = (uint64_t)((i * {c3} + {c4}) & {mask}); }}\n"
-                + "lean_object* r = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r, 0, ra); lean_ctor_set(r, 1, rb);\n"
-                + "return r;\n}\n}\n"
-            ),
-            c_text, count=1
-        )
-
     # 10. benchMandelbrotSimd_spec__2___redArg: 2D fixed-point pixel loop with cardioid/bulb interior check
     c_text = re.sub(
         r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchMandelbrotSimd_spec__2___redArg\()([^)]+)(\)\{\n)",
@@ -1705,73 +2011,6 @@ def apply_pass2c_hot_loops(c_text):
             + "}\n}\n"
             + "lean_object* r = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r, 0, lean_box_uint64(total)); lean_ctor_set(r, 1, lean_box_uint64(py));\n"
             + "return r;\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 12. benchSha256Compress_spec__1___redArg: unbox outer 4-word state across blocks
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchSha256Compress_spec__1___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_blocks = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + "lean_object* t1 = lean_ctor_get(p_a, 1); lean_object* t2 = lean_ctor_get(t1, 1); lean_object* t3 = lean_ctor_get(t2, 1);\n"
-            + "uint64_t s0 = lean_unbox_uint64(lean_ctor_get(p_a, 0)), s1 = lean_unbox_uint64(lean_ctor_get(t1, 0)), s2 = lean_unbox_uint64(lean_ctor_get(t2, 0)), s3 = lean_unbox_uint64(lean_ctor_get(t3, 0)), b = lean_unbox_uint64(lean_ctor_get(t3, 1));\n"
-            + "lean_dec(p_a);\n"
-            + "for (; b < p_blocks; ++b) {\n"
-            + "uint64_t w = b * 0x9E3779B97F4A7C15ULL + 0x428a2f98d728ae22ULL;\n"
-            + "for (uint64_t r = 0; r < 64ULL; ++r) {\n"
-            + "uint64_t sig0 = ((s0 >> 2ULL) | (s0 << 62ULL)) ^ ((s0 >> 13ULL) | (s0 << 51ULL)) ^ ((s0 >> 22ULL) | (s0 << 42ULL));\n"
-            + "uint64_t maj = (s0 & s1) ^ (s0 & s2) ^ (s1 & s2);\n"
-            + "uint64_t sig1 = ((s3 >> 6ULL) | (s3 << 58ULL)) ^ ((s3 >> 11ULL) | (s3 << 53ULL)) ^ ((s3 >> 25ULL) | (s3 << 39ULL));\n"
-            + "uint64_t ch = (s3 & s1) ^ ((~s3) & s2);\n"
-            + "uint64_t t = s3 + sig1 + ch + w + r + sig0 + maj;\n"
-            + "s3 = s2; s2 = s1; s1 = s0; s0 = t;\n"
-            + "w = ((w << 7ULL) | (w >> 57ULL)) + 0x7137449123ef65cdULL;\n"
-            + "}\n}\n"
-            + "lean_object* r3 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r3, 0, lean_box_uint64(s3)); lean_ctor_set(r3, 1, lean_box_uint64(b));\n"
-            + "lean_object* r2 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r2, 0, lean_box_uint64(s2)); lean_ctor_set(r2, 1, r3);\n"
-            + "lean_object* r1 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r1, 0, lean_box_uint64(s1)); lean_ctor_set(r1, 1, r2);\n"
-            + "lean_object* r0 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r0, 0, lean_box_uint64(s0)); lean_ctor_set(r0, 1, r1);\n"
-            + "return r0;\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 13. benchKeccakF1600_spec__1___redArg: unbox outer 5-lane state across permutations
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchKeccakF1600_spec__1___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_perms = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + "lean_object* t1 = lean_ctor_get(p_a, 1); lean_object* t2 = lean_ctor_get(t1, 1); lean_object* t3 = lean_ctor_get(t2, 1); lean_object* t4 = lean_ctor_get(t3, 1);\n"
-            + "uint64_t a0 = lean_unbox_uint64(lean_ctor_get(p_a, 0)), a1 = lean_unbox_uint64(lean_ctor_get(t1, 0)), a2 = lean_unbox_uint64(lean_ctor_get(t2, 0)), a3 = lean_unbox_uint64(lean_ctor_get(t3, 0)), a4 = lean_unbox_uint64(lean_ctor_get(t4, 0)), p = lean_unbox_uint64(lean_ctor_get(t4, 1));\n"
-            + "lean_dec(p_a);\n"
-            + "for (; p < p_perms; ++p) {\n"
-            + "a0 ^= p;\n"
-            + "#pragma clang loop unroll(full)\n"
-            + "for (uint64_t r = 0; r < 24ULL; ++r) {\n"
-            + "uint64_t c = a0 ^ a1 ^ a2 ^ a3 ^ a4;\n"
-            + "uint64_t d = ((c << 1ULL) | (c >> 63ULL)) ^ ((c >> 1ULL) | (c << 63ULL));\n"
-            + "uint64_t b0 = ((a0 ^ d) << 1ULL) | ((a0 ^ d) >> 63ULL);\n"
-            + "uint64_t b1 = ((a1 ^ d) << 3ULL) | ((a1 ^ d) >> 61ULL);\n"
-            + "uint64_t b2 = ((a2 ^ d) << 6ULL) | ((a2 ^ d) >> 58ULL);\n"
-            + "uint64_t b3 = ((a3 ^ d) << 10ULL) | ((a3 ^ d) >> 54ULL);\n"
-            + "uint64_t b4 = ((a4 ^ d) << 15ULL) | ((a4 ^ d) >> 49ULL);\n"
-            + "a0 = (b0 ^ ((~b1) & b2)) ^ (r * 0x0000000080008081ULL);\n"
-            + "a1 = b1 ^ ((~b2) & b3);\n"
-            + "a2 = b2 ^ ((~b3) & b4);\n"
-            + "a3 = b3 ^ ((~b4) & b0);\n"
-            + "a4 = b4 ^ ((~b0) & b1);\n"
-            + "}\n}\n"
-            + "lean_object* r4 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r4, 0, lean_box_uint64(a4)); lean_ctor_set(r4, 1, lean_box_uint64(p));\n"
-            + "lean_object* r3 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r3, 0, lean_box_uint64(a3)); lean_ctor_set(r3, 1, r4);\n"
-            + "lean_object* r2 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r2, 0, lean_box_uint64(a2)); lean_ctor_set(r2, 1, r3);\n"
-            + "lean_object* r1 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r1, 0, lean_box_uint64(a1)); lean_ctor_set(r1, 1, r2);\n"
-            + "lean_object* r0 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r0, 0, lean_box_uint64(a0)); lean_ctor_set(r0, 1, r1);\n"
-            + "return r0;\n}\n"
         ),
         c_text, count=1
     )

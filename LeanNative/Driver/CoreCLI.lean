@@ -342,13 +342,10 @@ def runTelemetry (elaborateHook? : Option (String → IO LNIRModule)) (args : Li
   return 0
 
 def runTurboPlugin : IO UInt32 := do
-  let stdin ← IO.getStdin
+  let line ← (← IO.getStdin).getLine
   let stdout ← IO.getStdout
-  let line ← stdin.getLine
-  let resp := handleTurboPluginLine line.trimAscii.toString
-  stdout.putStrLn resp
-  stdout.flush
-  return 0
+  stdout.putStrLn (handleTurboPluginLine line.trimAscii.toString)
+  stdout.flush; return 0
 
 def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
   let baseRef := findFlagValue args "--base" "HEAD"
@@ -356,56 +353,32 @@ def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
   let outPath := findFlagValue args "-o" ""
   let specExists ← System.FilePath.pathExists "LeanNative/Spec.lean"
   let testExists ← System.FilePath.pathExists "tests/test_runner.lean"
-  let specText ← if specExists then IO.FS.readFile "LeanNative/Spec.lean" else pure ""
-  let testText ← if testExists then IO.FS.readFile "tests/test_runner.lean" else pure ""
-  let specHashHex := blake3Hex specText
-  let testHashHex := blake3Hex testText
+  let specHashHex := blake3Hex (← if specExists then IO.FS.readFile "LeanNative/Spec.lean" else pure "")
+  let testHashHex := blake3Hex (← if testExists then IO.FS.readFile "tests/test_runner.lean" else pure "")
   let disallowSpecChanges := hasFlag args "--disallow-spec-changes"
   let mut specUnchanged := specExists
   let mut testUnchanged := testExists
   if disallowSpecChanges then
     try
-      let diffOut ← IO.Process.output { cmd := "git", args := #["diff", "--name-only", baseRef, "--", "LeanNative/Spec.lean", "tests/test_runner.lean"] }
-      let changedFiles := diffOut.stdout.trimAscii.toString
+      let changedFiles := (← IO.Process.output { cmd := "git", args := #["diff", "--name-only", baseRef, "--", "LeanNative/Spec.lean", "tests/test_runner.lean"] }).stdout.trimAscii.toString
       if changedFiles.contains "LeanNative/Spec.lean" then specUnchanged := false
       if changedFiles.contains "tests/test_runner.lean" then testUnchanged := false
     catch _ => pure ()
   let baseMod := mkCanonicalBenchmarkModule
   let (optMod, pluginReport) := runSegregatedPluginPipeline .x86_64 true baseMod
   let tvReport := validateTranslationModule baseMod optMod
-  let allDeclTvOk := pluginReport.declAudits.all (fun a => a.tvVerified)
+  let allDeclTvOk := pluginReport.declAudits.all (·.tvVerified)
   let axiomReport := verifiedAxiomAuditReport
   let law5Passed := checkPRVerificationGate {
     expectedSpecHash := 1, actualSpecHash := if specUnchanged then 1 else 2,
     expectedTestSuiteHash := 1, actualTestSuiteHash := if testUnchanged then 1 else 2,
     forbiddenAxiomsCount := axiomReport.forbiddenAxiomsFound.length,
-    tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected && axiomReport.passed
-  }
+    tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected && axiomReport.passed }
   let cfg ← TurboLeanConfig.probe
   let (turboPrOk, _) ← runTurboLeanPRVerify cfg "." baseRef disallowSpecChanges "/tmp/lean_native_pr_verify_receipt.json"
   let (turboSpecOk, _) ← runTurboLeanAuditSpec cfg "LeanNative/Spec.lean"
   let overallOk := law5Passed && turboPrOk && turboSpecOk
-  let jsonOut := String.intercalate "\n" [
-    "{",
-    s!"  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",",
-    s!"  \"engine\": \"{tag}\",",
-    "  \"version\": \"0.5.0\",",
-    s!"  \"baseRef\": \"{baseRef}\",",
-    s!"  \"law1UntrustedPluginGatePassed\": {pluginReport.adversarialRejected && allDeclTvOk},",
-    s!"  \"law5SpecPinningGatePassed\": {law5Passed},",
-    s!"  \"specBlake3\": \"{specHashHex}\",",
-    s!"  \"testRunnerBlake3\": \"{testHashHex}\",",
-    s!"  \"symbolicTvPassedDecls\": {tvReport.passedDecls},",
-    s!"  \"symbolicTvTotalDecls\": {tvReport.totalDecls},",
-    s!"  \"pluginsAccepted\": {pluginReport.acceptedCount},",
-    s!"  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},",
-    s!"  \"costBefore\": {pluginReport.totalCostBefore},",
-    s!"  \"costAfter\": {pluginReport.totalCostAfter},",
-    s!"  \"turboLeanMode\": \"{cfg.mode}\",",
-    s!"  \"turboLeanPrVerifyPassed\": {turboPrOk},",
-    s!"  \"turboLeanAuditSpecPassed\": {turboSpecOk}",
-    "}"
-  ]
+  let jsonOut := s!"\{\n  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",\n  \"engine\": \"{tag}\",\n  \"version\": \"0.5.0\",\n  \"baseRef\": \"{baseRef}\",\n  \"law1UntrustedPluginGatePassed\": {pluginReport.adversarialRejected && allDeclTvOk},\n  \"law5SpecPinningGatePassed\": {law5Passed},\n  \"specBlake3\": \"{specHashHex}\",\n  \"testRunnerBlake3\": \"{testHashHex}\",\n  \"symbolicTvPassedDecls\": {tvReport.passedDecls},\n  \"symbolicTvTotalDecls\": {tvReport.totalDecls},\n  \"pluginsAccepted\": {pluginReport.acceptedCount},\n  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},\n  \"costBefore\": {pluginReport.totalCostBefore},\n  \"costAfter\": {pluginReport.totalCostAfter},\n  \"turboLeanMode\": \"{cfg.mode}\",\n  \"turboLeanPrVerifyPassed\": {turboPrOk},\n  \"turboLeanAuditSpecPassed\": {turboSpecOk}\n}"
   let summaryText := String.intercalate "\n" [
     s!"[{tag}] PR & Spec-Pinning Verification Gate (base={baseRef}):",
     s!"  Law 1 Untrusted Plugin & Adversarial Gate : {if pluginReport.adversarialRejected && allDeclTvOk then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})",
@@ -417,19 +390,10 @@ def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
   return if overallOk then 0 else 1
 
 def runVerifyCerts (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
-  let outPath := findFlagValue args "-o" ""
-  let jsonFlag := hasFlag args "--json"
   let baseMod ← loadInputModule elaborateHook? args
-  let (_, stepCerts) := runDefaultPipeline baseMod
-  let report := verifyModuleCerts baseMod.moduleName (stepCerts.map toOptimizationCert)
-  let summaryText := String.intercalate "\n" [
-    s!"[{tag}] Certificate Verification for {report.moduleName}:",
-    s!"  Total pass certificates : {report.certs.length}",
-    s!"  Declarations verified   : {report.declSummaries.length}",
-    s!"  Overall assurance level : {report.overallAssurance}",
-    s!"  Hash chains & theorems  : {if report.verified then "VALID" else "FAILED"}"
-  ]
-  writeAndPrintJsonOrSummary outPath report.toJson summaryText jsonFlag
+  let report := verifyModuleCerts baseMod.moduleName ((runDefaultPipeline baseMod).2.map toOptimizationCert)
+  let summaryText := s!"[{tag}] Certificate Verification for {report.moduleName}:\n  Total pass certificates : {report.certs.length}\n  Declarations verified   : {report.declSummaries.length}\n  Overall assurance level : {report.overallAssurance}\n  Hash chains & theorems  : {if report.verified then "VALID" else "FAILED"}"
+  writeAndPrintJsonOrSummary (findFlagValue args "-o" "") report.toJson summaryText (hasFlag args "--json")
   return if report.verified then 0 else 1
 
 def runValidateTV (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
@@ -514,9 +478,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     !(LeanNative.Spec.hasSufficientGpuMemory ⟨2048, 1024, 2048⟩) &&
     LeanNative.Spec.isValidByteSlice (LeanNative.Spec.subSliceView ⟨64, 8, 32⟩ 4 16) &&
     LeanNative.Spec.canEmitRestrictSimd ⟨true, false, 64⟩ &&
-    !(LeanNative.Spec.canEmitRestrictSimd ⟨true, true, 64⟩)
+    !(LeanNative.Spec.canEmitRestrictSimd ⟨true, true, 64⟩) &&
+    LeanNative.Spec.canUnboxNestedProdWhile ⟨8, false, true⟩ &&
+    LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 145
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 149
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
