@@ -478,18 +478,14 @@ def toJsonString (r : VerificationReceipt) : String :=
   let sorted := sortFileInterfaces r.perFileInterfaces
   let kvPairs := sorted.map (fun (k, v) => s!"    \"{k}\": \"{v}\"")
   let mapBody := if kvPairs.isEmpty then "{}" else "{\n" ++ String.intercalate ",\n" kvPairs ++ "\n  }"
-  "{\n" ++
-  s!"  \"schema_version\": {r.schemaVersion},\n" ++
-  s!"  \"mode\": \"{r.mode}\",\n" ++
-  s!"  \"interface_hash\": \"{r.interfaceHash}\",\n" ++
-  s!"  \"action_key\": \"{r.actionKey}\",\n" ++
-  s!"  \"files_audited\": {r.filesAudited},\n" ++
-  s!"  \"theorem_shards\": {r.theoremShards},\n" ++
-  s!"  \"forbidden_constructs_found\": {r.forbiddenConstructsFound},\n" ++
-  s!"  \"per_file_interfaces\": {mapBody},\n" ++
-  s!"  \"receipt_blake3\": \"{r.receiptHash}\",\n" ++
-  s!"  \"receipt_hash\": \"{r.receiptHash}\"\n" ++
-  "}"
+  String.intercalate "\n" [
+    "{",
+    s!"  \"schema_version\": {r.schemaVersion},\n  \"mode\": \"{r.mode}\",",
+    s!"  \"interface_hash\": \"{r.interfaceHash}\",\n  \"action_key\": \"{r.actionKey}\",",
+    s!"  \"files_audited\": {r.filesAudited},\n  \"theorem_shards\": {r.theoremShards},\n  \"forbidden_constructs_found\": {r.forbiddenConstructsFound},",
+    s!"  \"per_file_interfaces\": {mapBody},",
+    s!"  \"receipt_blake3\": \"{r.receiptHash}\",\n  \"receipt_hash\": \"{r.receiptHash}\"\n}"
+  ]
 
 end VerificationReceipt
 
@@ -524,11 +520,8 @@ structure FastCheckResult where
 def checkShardWithFallback (cfg : TurboLeanConfig) (shard : TheoremShardSpec) : IO ShardCheckResult := do
   if !shard.verifyKey then
     return {
-      ok := false
-      backend := cfg.mode.toString
-      status := "shard_key_mismatch"
-      shardKey := shard.shardKey
-      notes := "Computed BLAKE3 theorem-shard-v1 key did not match claimed shardKey"
+      ok := false, backend := cfg.mode.toString, status := "shard_key_mismatch"
+      shardKey := shard.shardKey, notes := "Computed BLAKE3 theorem-shard-v1 key did not match claimed shardKey"
     }
 
   if cfg.hasZygoteDaemon then
@@ -536,61 +529,31 @@ def checkShardWithFallback (cfg : TurboLeanConfig) (shard : TheoremShardSpec) : 
       try
         let out ← IO.Process.output {
           cmd := "curl"
-          args := #[
-            "-s", "-m", "2",
-            "-X", "POST",
-            "-H", "Content-Type: application/json",
-            "-d", shard.toJsonString,
-            s!"{url}/check-shard"
-          ]
+          args := #["-s", "-m", "2", "-X", "POST", "-H", "Content-Type: application/json", "-d", shard.toJsonString, s!"{url}/check-shard"]
         }
         if out.exitCode == 0 && containsSubstr out.stdout "remote_theorem" then
-          return {
-            ok := true
-            backend := "zygote-daemon"
-            status := "remote_theorem_verified"
-            shardKey := shard.shardKey
-            notes := trimStr out.stdout
-          }
-      catch _ =>
-        pure ()
+          return { ok := true, backend := "zygote-daemon", status := "remote_theorem_verified", shardKey := shard.shardKey, notes := trimStr out.stdout }
+      catch _ => pure ()
 
   if cfg.hasTurboBinary then
     if let some bin := cfg.turboBin then
       try
-        let out ← IO.Process.output {
-          cmd := bin
-          args := #["check-shard", shard.toJsonString]
-        }
+        let out ← IO.Process.output { cmd := bin, args := #["check-shard", shard.toJsonString] }
         if out.exitCode == 0 then
-          return {
-            ok := true
-            backend := "turbo-cli"
-            status := "verified_via_turbo_cli"
-            shardKey := shard.shardKey
-            notes := trimStr out.stdout
-          }
-      catch _ =>
-        pure ()
+          return { ok := true, backend := "turbo-cli", status := "verified_via_turbo_cli", shardKey := shard.shardKey, notes := trimStr out.stdout }
+      catch _ => pure ()
 
   -- Self-contained standalone verification: check hygiene & forbidden tokens
   let forbidden := ["sor" ++ "ry", "adm" ++ "it", "native_" ++ "decide", "ofReduce" ++ "Bool", "trust" ++ "Compiler"]
-  let hasForbidden := forbidden.any (fun tok => containsSubstr shard.shardSource tok)
-  if hasForbidden then
+  if forbidden.any (fun tok => containsSubstr shard.shardSource tok) then
     return {
-      ok := false
-      backend := "standalone"
-      status := "forbidden_construct_rejected"
-      shardKey := shard.shardKey
-      notes := "Shard source contains forbidden soundness-bypassing construct"
+      ok := false, backend := "standalone", status := "forbidden_construct_rejected"
+      shardKey := shard.shardKey, notes := "Shard source contains forbidden soundness-bypassing construct"
     }
   else
     return {
-      ok := true
-      backend := if cfg.standalone then "standalone" else cfg.mode.toString
-      status := "standalone_shard_verified"
-      shardKey := shard.shardKey
-      notes := s!"Verified shard `{shard.name}` ({shard.shardKey})"
+      ok := true, backend := if cfg.standalone then "standalone" else cfg.mode.toString
+      status := "standalone_shard_verified", shardKey := shard.shardKey, notes := s!"Verified shard `{shard.name}` ({shard.shardKey})"
     }
 
 /-- SplitMix64 step returning `(randomWord, nextSeed)`. -/
@@ -919,43 +882,30 @@ def fastCheckCounterexample (cfg : TurboLeanConfig) (lhsExpr rhsExpr : String)
 /-- Verify a JSON receipt file on disk natively in Lean 4 using `blake3Hex`
     (and optionally query `turbo-lean` binary or Zygote daemon via `curl` when configured). -/
 def verifyReceiptFile (receiptPath : System.FilePath) (cfg : TurboLeanConfig := {}) : IO Bool := do
-  if !(← System.FilePath.pathExists receiptPath) then
-    return false
+  if !(← System.FilePath.pathExists receiptPath) then return false
   let raw ← IO.FS.readFile receiptPath
   match VerificationReceipt.fromJsonString? raw with
   | none => return false
   | some parsed =>
-    if !parsed.verify then
-      return false
+    if !parsed.verify then return false
     if cfg.hasTurboBinary then
       if let some bin := cfg.turboBin then
         try
-          let out ← IO.Process.output {
-            cmd := bin
-            args := #["verify-receipt", receiptPath.toString]
-          }
-          if out.exitCode == 0 then
-            return true
-        catch _ =>
-          pure ()
+          let out ← IO.Process.output { cmd := bin, args := #["verify-receipt", receiptPath.toString] }
+          if out.exitCode == 0 then return true
+        catch _ => pure ()
     if cfg.hasZygoteDaemon then
       if let some url := cfg.zygoteUrl then
         try
-          let _ ← IO.Process.output {
-            cmd := "curl"
-            args := #["-s", "-m", "1", s!"{url}/manifest"]
-          }
-        catch _ =>
-          pure ()
+          let _ ← IO.Process.output { cmd := "curl", args := #["-s", "-m", "1", s!"{url}/manifest"] }
+        catch _ => pure ()
     return true
 
 /-- Emit a cryptographic `VerificationReceipt` to `outputPath` and verify it natively in Lean 4. -/
 def emitVerificationReceipt (cfg : TurboLeanConfig) (receipt : VerificationReceipt)
     (outputPath : System.FilePath) : IO Bool := do
-  if !receipt.verify then
-    return false
-  if let some parent := outputPath.parent then
-    IO.FS.createDirAll parent
+  if !receipt.verify then return false
+  if let some parent := outputPath.parent then IO.FS.createDirAll parent
   IO.FS.writeFile outputPath (receipt.toJsonString ++ "\n")
   verifyReceiptFile outputPath cfg
 
@@ -964,50 +914,25 @@ def emitAndVerifyReceipt (cfg : TurboLeanConfig) (receipt : VerificationReceipt)
     (outputPath : System.FilePath) : IO Bool :=
   emitVerificationReceipt cfg receipt outputPath
 
-/-- Self-test suite verifying:
-    1. Pure Lean 4 BLAKE3 RFC test vector parity (`""` and `"abc"` via `blake3SelfTest`).
-    2. `computeBlake3DomainHash` native execution.
-    3. `TheoremShardSpec` domain-separated key (`theorem-shard-v1:`) and `checkShardWithFallback`.
-    4. `ConstantAuditReport` exact JSON serialization matching `TurboLean/Inspector.lean`.
-    5. `fastCheckRewrite` / `fastCheckCounterexample` accepting valid rewrites (`x * 2 -> x << 1`)
-       and rejecting buggy rewrites (`x * 2 -> x + 1`).
-    6. `emitVerificationReceipt` and `verifyReceiptFile` native cryptographic receipt verification. -/
+/-- Self-test suite verifying BLAKE3 RFC vectors, domain hashing, shard checking, fastCheckRewrite, and receipts. -/
 def runAdapterSelfTest (receiptPath : System.FilePath := "/tmp/lean_native_test_receipt.json") : IO Bool := do
-  if !blake3SelfTest then
-    return false
-
+  if !blake3SelfTest then return false
   let cfg ← TurboLeanConfig.probe
   let domHash ← computeBlake3DomainHash "turbo-lean-domain" "payload"
-  if domHash.length != 64 then
-    return false
-
+  if domHash.length != 64 then return false
   let shard := TheoremShardSpec.create
-    "LeanNative.Proofs.mul_two_eq_shl_one"
-    "leanprover/lean4:v4.31.0"
-    "1111111111111111"
-    "2222222222222222"
-    "3333333333333333"
-    "theorem mul_two_eq_shl_one (x : UInt64) : x * 2 = x <<< 1 := by decide"
-    "4444444444444444"
+    "LeanNative.Proofs.mul_two_eq_shl_one" "leanprover/lean4:v4.31.0"
+    "1111111111111111" "2222222222222222" "3333333333333333"
+    "theorem mul_two_eq_shl_one (x : UInt64) : x * 2 = x <<< 1 := by decide" "4444444444444444"
   let shardRes ← checkShardWithFallback cfg shard
-  if !shardRes.ok then
-    return false
-
+  if !shardRes.ok then return false
   let validCheck ← fastCheckRewrite cfg "x * 2" "x << 1" 100000
-  if !validCheck.ok || validCheck.counterexampleFound then
-    return false
-
+  if !validCheck.ok || validCheck.counterexampleFound then return false
   let buggyCheck ← fastCheckRewrite cfg "x * 2" "x + 1" 100000
-  if buggyCheck.ok || !buggyCheck.counterexampleFound || buggyCheck.witness.isNone then
-    return false
-
+  if buggyCheck.ok || !buggyCheck.counterexampleFound || buggyCheck.witness.isNone then return false
   let receipt := VerificationReceipt.create
-    (mode := cfg.mode.toString)
-    (interfaceHash := "4444444444444444")
-    (actionKey := shard.shardKey)
-    (filesAudited := 1)
-    (theoremShards := 1)
-    (forbiddenConstructsFound := 0)
+    (mode := cfg.mode.toString) (interfaceHash := "4444444444444444") (actionKey := shard.shardKey)
+    (filesAudited := 1) (theoremShards := 1) (forbiddenConstructsFound := 0)
     (perFileInterfaces := [("LeanNative/TurboLean/Adapter.lean", "4444444444444444")])
   emitVerificationReceipt cfg receipt receiptPath
 
@@ -1117,16 +1042,7 @@ def storeTelemetryBlob (cfg : TelemetryConfig) (payload : String) : IO String :=
     pure ()
   return refStr
 
-private def escapeJsonBlob (s : String) : String :=
-  s.foldl (fun acc c =>
-    match c with
-    | '"'  => acc ++ "\\\""
-    | '\\' => acc ++ "\\\\"
-    | '\n' => acc ++ "\\n"
-    | '\r' => acc ++ "\\r"
-    | '\t' => acc ++ "\\t"
-    | _    => acc.push c
-  ) ""
+private abbrev escapeJsonBlob := LeanNative.IR.jsonEscape
 
 private def appendJsonlLineBestEffort (dirPath : System.FilePath) (fileName : String) (jsonLine : String) : IO Unit := do
   try

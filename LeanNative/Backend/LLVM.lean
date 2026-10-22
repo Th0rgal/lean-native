@@ -452,12 +452,12 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
     let slotBuf ← freshTmp "sload_slot"
     let outBuf ← freshTmp "sload_out"
     let loadedVal ← freshTmp "sload_val"
-    emitLine s!"  {slotBuf} = alloca i256, align 8"
-    emitLine s!"  {outBuf} = alloca i256, align 8"
-    emitLine s!"  store i256 {slotVal}, ptr {slotBuf}, align 8"
-    emitLine s!"  store i256 0, ptr {outBuf}, align 8"
-    emitLine s!"  call void @lean_native_evm_sload(ptr {mapPtr}, ptr {slotBuf}, ptr {outBuf})"
-    emitLine s!"  {loadedVal} = load i256, ptr {outBuf}, align 8"
+    for line in [
+      s!"  {slotBuf} = alloca i256, align 8\n  {outBuf} = alloca i256, align 8",
+      s!"  store i256 {slotVal}, ptr {slotBuf}, align 8\n  store i256 0, ptr {outBuf}, align 8",
+      s!"  call void @lean_native_evm_sload(ptr {mapPtr}, ptr {slotBuf}, ptr {outBuf})",
+      s!"  {loadedVal} = load i256, ptr {outBuf}, align 8"
+    ] do emitLine line
     storeI256ToVar dst loadedVal
   | .storageStore mapVar slotVar valVar =>
     let mapPtr ← loadVarAsPtr mapVar
@@ -465,11 +465,11 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
     let val256 ← loadVarAsI256 valVar
     let slotBuf ← freshTmp "sstore_slot"
     let valBuf ← freshTmp "sstore_val"
-    emitLine s!"  {slotBuf} = alloca i256, align 8"
-    emitLine s!"  {valBuf} = alloca i256, align 8"
-    emitLine s!"  store i256 {slotVal}, ptr {slotBuf}, align 8"
-    emitLine s!"  store i256 {val256}, ptr {valBuf}, align 8"
-    emitLine s!"  call void @lean_native_evm_sstore(ptr {mapPtr}, ptr {slotBuf}, ptr {valBuf})"
+    for line in [
+      s!"  {slotBuf} = alloca i256, align 8\n  {valBuf} = alloca i256, align 8",
+      s!"  store i256 {slotVal}, ptr {slotBuf}, align 8\n  store i256 {val256}, ptr {valBuf}, align 8",
+      s!"  call void @lean_native_evm_sstore(ptr {mapPtr}, ptr {slotBuf}, ptr {valBuf})"
+    ] do emitLine line
     storePtrToVar dst mapPtr
   | .mkTuple fields =>
     let dstSlotTy ← getVarSlotType dst
@@ -637,25 +637,13 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
       emitLine s!"  {uVal} = call i64 @lean_native_unbox_u64(ptr {p})"
       storeI64ToVar dst uVal
   | .call _ args _ _ =>
-    -- Evaluate first argument or zero if external call placeholder
     match args[0]? with
-    | some a0 =>
-      if slotLLVMType ty == "ptr" then
-        let p ← loadVarAsPtr a0
-        storePtrToVar dst p
-      else if slotLLVMType ty == "i256" then
-        let v ← loadVarAsI256 a0
-        storeI256ToVar dst v
-      else
-        let v ← loadVarAsI64 a0
-        storeI64ToVar dst v
+    | some a0 => copyVarSlot dst a0
     | none =>
-      if slotLLVMType ty == "ptr" then
-        storePtrToVar dst "null"
-      else if slotLLVMType ty == "i256" then
-        storeI256ToVar dst "0"
-      else
-        storeI64ToVar dst "0"
+      let sTy := slotLLVMType ty
+      if sTy == "ptr" then storePtrToVar dst "null"
+      else if sTy == "i256" then storeI256ToVar dst "0"
+      else storeI64ToVar dst "0"
 
 /-- Emit inline or baseline reference count adjustment (`incRef` / `decRef`). -/
 def emitRefCountOp (isInc : Bool) (objVar : VarId) (count : Nat) : EmitM Unit := do
@@ -670,19 +658,13 @@ def emitRefCountOp (isInc : Bool) (objVar : VarId) (count : Nat) : EmitM Unit :=
     let isPos ← freshTmp "rc_pos"
     let expPos ← freshTmp "rc_exp"
     let nextRc ← freshTmp "rc_next"
-    emitLine s!"  {isNull} = icmp eq ptr {objPtr}, null"
-    emitLine s!"  br i1 {isNull}, label %{doneLbl}, label %{chkLbl}"
-    emitLine s!"{chkLbl}:"
-    emitLine s!"  {rcVal} = load i32, ptr {objPtr}, align 4"
-    emitLine s!"  {isPos} = icmp sgt i32 {rcVal}, 0"
-    emitLine s!"  {expPos} = call i1 @llvm.expect.i1(i1 {isPos}, i1 true)"
-    emitLine s!"  br i1 {expPos}, label %{updLbl}, label %{doneLbl}"
-    emitLine s!"{updLbl}:"
     let opStr := if isInc then "add nsw" else "sub nsw"
-    emitLine s!"  {nextRc} = {opStr} i32 {rcVal}, {count}"
-    emitLine s!"  store i32 {nextRc}, ptr {objPtr}, align 4"
-    emitLine s!"  br label %{doneLbl}"
-    emitLine s!"{doneLbl}:"
+    for line in [
+      s!"  {isNull} = icmp eq ptr {objPtr}, null\n  br i1 {isNull}, label %{doneLbl}, label %{chkLbl}",
+      s!"{chkLbl}:\n  {rcVal} = load i32, ptr {objPtr}, align 4\n  {isPos} = icmp sgt i32 {rcVal}, 0",
+      s!"  {expPos} = call i1 @llvm.expect.i1(i1 {isPos}, i1 true)\n  br i1 {expPos}, label %{updLbl}, label %{doneLbl}",
+      s!"{updLbl}:\n  {nextRc} = {opStr} i32 {rcVal}, {count}\n  store i32 {nextRc}, ptr {objPtr}, align 4\n  br label %{doneLbl}\n{doneLbl}:"
+    ] do emitLine line
   else
     let fn := if isInc then "@lean_native_inc" else "@lean_native_dec"
     emitLine s!"  call void {fn}(ptr {objPtr}, i64 {count})"
@@ -1007,57 +989,29 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
   let mkRcFn (fnName lbl op : String) : String :=
     String.intercalate "\n" [
       s!"define weak_odr dso_local void @{fnName}(ptr %obj, i64 %count) {attr} \{",
-      "entry:",
-      "  %is_null = icmp eq ptr %obj, null",
-      "  br i1 %is_null, label %done, label %check",
-      "check:",
-      "  %p_int = ptrtoint ptr %obj to i64",
-      "  %tag = and i64 %p_int, 1",
-      "  %is_scalar = icmp ne i64 %tag, 0",
-      "  br i1 %is_scalar, label %done, label %upd",
-      "upd:",
-      "  %rc = load i32, ptr %obj, align 4",
-      "  %is_pos = icmp sgt i32 %rc, 0",
-      s!"  br i1 %is_pos, label %{lbl}, label %done",
-      s!"{lbl}:",
-      "  %c32 = trunc i64 %count to i32",
-      s!"  %rc_next = {op} nsw i32 %rc, %c32",
-      "  store i32 %rc_next, ptr %obj, align 4",
-      "  br label %done",
-      "done:",
-      "  ret void",
-      "}"
+      "entry:\n  %is_null = icmp eq ptr %obj, null\n  br i1 %is_null, label %done, label %check",
+      "check:\n  %p_int = ptrtoint ptr %obj to i64\n  %tag = and i64 %p_int, 1\n  %is_scalar = icmp ne i64 %tag, 0\n  br i1 %is_scalar, label %done, label %upd",
+      s!"upd:\n  %rc = load i32, ptr %obj, align 4\n  %is_pos = icmp sgt i32 %rc, 0\n  br i1 %is_pos, label %{lbl}, label %done",
+      s!"{lbl}:\n  %c32 = trunc i64 %count to i32\n  %rc_next = {op} nsw i32 %rc, %c32\n  store i32 %rc_next, ptr %obj, align 4\n  br label %done",
+      "done:\n  ret void\n}"
     ]
   let mkCpuLoopFn (sig : String) (bodyLines : List String) : String :=
     String.intercalate "\n" ([
       s!"define weak_odr dso_local void @{sig} {attr} \{",
-      "entry:",
-      "  %cmp0 = icmp eq i64 %n, 0",
-      "  br i1 %cmp0, label %exit, label %loop",
-      "loop:",
-      "  %i = phi i64 [ 0, %entry ], [ %i_next, %loop ]"
+      "entry:\n  %cmp0 = icmp eq i64 %n, 0\n  br i1 %cmp0, label %exit, label %loop",
+      "loop:\n  %i = phi i64 [ 0, %entry ], [ %i_next, %loop ]"
     ] ++ bodyLines ++ [
-      "  %i_next = add nuw nsw i64 %i, 1",
-      "  %done = icmp eq i64 %i_next, %n",
-      s!"  br i1 %done, label %exit, label %loop{loopMd}",
-      "exit:",
-      "  ret void",
-      "}"
+      s!"  %i_next = add nuw nsw i64 %i, 1\n  %done = icmp eq i64 %i_next, %n\n  br i1 %done, label %exit, label %loop{loopMd}",
+      "exit:\n  ret void\n}"
     ])
   String.intercalate "\n\n" [
     String.intercalate "\n" [
       "; --- LeanNative Runtime Intrinsics & C ABI Entrypoints ---",
       "declare i1 @llvm.expect.i1(i1, i1) #2",
-      "declare { i256, i1 } @llvm.uadd.with.overflow.i256(i256, i256) #2",
-      "declare { i256, i1 } @llvm.usub.with.overflow.i256(i256, i256) #2",
-      "declare { i256, i1 } @llvm.umul.with.overflow.i256(i256, i256) #2",
-      "declare i256 @llvm.ctlz.i256(i256, i1 immarg) #2",
-      "declare void @llvm.trap()",
-      "declare void @lean_native_evm_sload(ptr, ptr, ptr)",
-      "declare void @lean_native_evm_sstore(ptr, ptr, ptr)",
-      "declare noalias ptr @malloc(i64 noundef)",
-      "declare void @free(ptr noundef)",
-      "declare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)"
+      "declare { i256, i1 } @llvm.uadd.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.usub.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.umul.with.overflow.i256(i256, i256) #2",
+      "declare i256 @llvm.ctlz.i256(i256, i1 immarg) #2\ndeclare void @llvm.trap()",
+      "declare void @lean_native_evm_sload(ptr, ptr, ptr)\ndeclare void @lean_native_evm_sstore(ptr, ptr, ptr)",
+      "declare noalias ptr @malloc(i64 noundef)\ndeclare void @free(ptr noundef)\ndeclare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)"
     ],
     mkRcFn "lean_native_inc" "do_inc" "add",
     mkRcFn "lean_native_dec" "do_dec" "sub",
@@ -1065,60 +1019,25 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
     s!"define weak_odr dso_local i64 @lean_native_unbox_u64(ptr %boxed) {attr} \{\nentry:\n  %i = ptrtoint ptr %boxed to i64\n  %v = lshr i64 %i, 1\n  ret i64 %v\n}",
     String.intercalate "\n" [
       s!"define weak_odr dso_local ptr @lean_native_ensure_exclusive(ptr %arr) {attr} \{",
-      "entry:",
-      "  %is_null = icmp eq ptr %arr, null",
-      "  br i1 %is_null, label %ret_same, label %chk_rc",
-      "chk_rc:",
-      "  %rc = load i32, ptr %arr, align 4",
-      "  %is_excl = icmp eq i32 %rc, 1",
-      "  %exp = call i1 @llvm.expect.i1(i1 %is_excl, i1 true)",
-      "  br i1 %exp, label %ret_same, label %clone",
-      "ret_same:",
-      "  ret ptr %arr",
-      "clone:",
-      "  %sz_ptr = getelementptr inbounds i64, ptr %arr, i64 1",
-      "  %sz = load i64, ptr %sz_ptr, align 8",
-      "  %bytes_data = shl i64 %sz, 3",
-      "  %total_bytes = add i64 %bytes_data, 24",
-      "  %new_arr = call noalias ptr @malloc(i64 %total_bytes)",
-      "  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %new_arr, ptr align 8 %arr, i64 %total_bytes, i1 false)",
-      "  store i32 1, ptr %new_arr, align 4",
-      "  %gt1 = icmp sgt i32 %rc, 1",
-      "  br i1 %gt1, label %dec_old, label %done_clone",
-      "dec_old:",
-      "  %rc_dec = sub nsw i32 %rc, 1",
-      "  store i32 %rc_dec, ptr %arr, align 4",
-      "  br label %done_clone",
-      "done_clone:",
-      "  ret ptr %new_arr",
-      "}"
+      "entry:\n  %is_null = icmp eq ptr %arr, null\n  br i1 %is_null, label %ret_same, label %chk_rc",
+      "chk_rc:\n  %rc = load i32, ptr %arr, align 4\n  %is_excl = icmp eq i32 %rc, 1\n  %exp = call i1 @llvm.expect.i1(i1 %is_excl, i1 true)\n  br i1 %exp, label %ret_same, label %clone",
+      "ret_same:\n  ret ptr %arr",
+      "clone:\n  %sz_ptr = getelementptr inbounds i64, ptr %arr, i64 1\n  %sz = load i64, ptr %sz_ptr, align 8\n  %bytes_data = shl i64 %sz, 3\n  %total_bytes = add i64 %bytes_data, 24",
+      "  %new_arr = call noalias ptr @malloc(i64 %total_bytes)\n  call void @llvm.memcpy.p0.p0.i64(ptr align 8 %new_arr, ptr align 8 %arr, i64 %total_bytes, i1 false)\n  store i32 1, ptr %new_arr, align 4",
+      "  %gt1 = icmp sgt i32 %rc, 1\n  br i1 %gt1, label %dec_old, label %done_clone",
+      "dec_old:\n  %rc_dec = sub nsw i32 %rc, 1\n  store i32 %rc_dec, ptr %arr, align 4\n  br label %done_clone\ndone_clone:\n  ret ptr %new_arr\n}"
     ],
     mkCpuLoopFn "lean_native_cpu_saxpy_u64(ptr noalias %out, ptr noalias %x, ptr noalias %y, i64 %alpha, i64 %n)" [
-      "  %px = getelementptr inbounds i64, ptr %x, i64 %i",
-      "  %py = getelementptr inbounds i64, ptr %y, i64 %i",
-      "  %po = getelementptr inbounds i64, ptr %out, i64 %i",
-      "  %vx = load i64, ptr %px, align 8",
-      "  %vy = load i64, ptr %py, align 8",
-      "  %prod = mul i64 %vx, %alpha",
-      "  %res = add i64 %prod, %vy",
-      "  store i64 %res, ptr %po, align 8"
+      "  %px = getelementptr inbounds i64, ptr %x, i64 %i\n  %py = getelementptr inbounds i64, ptr %y, i64 %i\n  %po = getelementptr inbounds i64, ptr %out, i64 %i",
+      "  %vx = load i64, ptr %px, align 8\n  %vy = load i64, ptr %py, align 8\n  %prod = mul i64 %vx, %alpha\n  %res = add i64 %prod, %vy\n  store i64 %res, ptr %po, align 8"
     ],
     mkCpuLoopFn "lean_native_cpu_map_scale_add_u64(ptr noalias %out, ptr noalias %in0, i64 %scale, i64 %bias, i64 %n)" [
-      "  %pi = getelementptr inbounds i64, ptr %in0, i64 %i",
-      "  %po = getelementptr inbounds i64, ptr %out, i64 %i",
-      "  %vi = load i64, ptr %pi, align 8",
-      "  %prod = mul i64 %vi, %scale",
-      "  %res = add i64 %prod, %bias",
-      "  store i64 %res, ptr %po, align 8"
+      "  %pi = getelementptr inbounds i64, ptr %in0, i64 %i\n  %po = getelementptr inbounds i64, ptr %out, i64 %i",
+      "  %vi = load i64, ptr %pi, align 8\n  %prod = mul i64 %vi, %scale\n  %res = add i64 %prod, %bias\n  store i64 %res, ptr %po, align 8"
     ],
     mkCpuLoopFn "lean_native_cpu_zip_add_u64(ptr noalias %out, ptr noalias %in0, ptr noalias %in1, i64 %n)" [
-      "  %p0 = getelementptr inbounds i64, ptr %in0, i64 %i",
-      "  %p1 = getelementptr inbounds i64, ptr %in1, i64 %i",
-      "  %po = getelementptr inbounds i64, ptr %out, i64 %i",
-      "  %v0 = load i64, ptr %p0, align 8",
-      "  %v1 = load i64, ptr %p1, align 8",
-      "  %res = add i64 %v0, %v1",
-      "  store i64 %res, ptr %po, align 8"
+      "  %p0 = getelementptr inbounds i64, ptr %in0, i64 %i\n  %p1 = getelementptr inbounds i64, ptr %in1, i64 %i\n  %po = getelementptr inbounds i64, ptr %out, i64 %i",
+      "  %v0 = load i64, ptr %p0, align 8\n  %v1 = load i64, ptr %p1, align 8\n  %res = add i64 %v0, %v1\n  store i64 %res, ptr %po, align 8"
     ]
   ]
 

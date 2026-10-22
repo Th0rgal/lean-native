@@ -41,16 +41,9 @@ open LeanNative.Backend.Hybrid
 open LeanNative.Backend.FastCheck
 open LeanNative.TurboLean
 
-/-- Convert a `PassStepCert` emitted by `LeanNative.Transform` into a `LeanNative.Proofs.OptimizationCert`. -/
 def toOptimizationCert (c : PassStepCert) : OptimizationCert where
-  passName   := c.passName
-  declName   := c.declName
-  inputHash  := c.inputHash
-  outputHash := c.outputHash
-  changed    := c.changed
-  assurance  := c.assurance
-  theoremRef := c.theoremRef
-  notes      := c.notes
+  passName := c.passName; declName := c.declName; inputHash := c.inputHash; outputHash := c.outputHash
+  changed := c.changed; assurance := c.assurance; theoremRef := c.theoremRef; notes := c.notes
 
 def parseTargetArch : String → TargetArch
   | "arm64" | "aarch64" => .arm64
@@ -70,48 +63,42 @@ def findFlagValue (args : List String) (flag : String) (defaultVal : String) : S
   | f :: v :: rest => if f == flag then v else findFlagValue (v :: rest) flag defaultVal
   | _ :: rest => findFlagValue rest flag defaultVal
 
-def hasFlag (args : List String) (flag : String) : Bool :=
-  args.contains flag
+def hasFlag (args : List String) (flag : String) : Bool := args.contains flag
 
 def findFirstPositional : List String → String
   | [] => ""
   | "--input" :: v :: _ | "--lnir" :: v :: _ => v
   | flag :: v :: rest =>
-    if ["-o", "--opt", "--arch", "--target", "--profile", "--sm", "--samples"].contains flag then
-      findFirstPositional rest
+    if ["-o", "--opt", "--arch", "--target", "--profile", "--sm", "--samples"].contains flag then findFirstPositional rest
     else if flag.startsWith "-" then findFirstPositional (v :: rest) else flag
   | [a] => if a.startsWith "-" then "" else a
 
 structure CoreCLIOptions where
-  inputPath        : String := ""
-  outputPath       : String := ""
-  arch             : TargetArch := .x86_64
-  emitCABI         : Bool := false
-  emitLLVM         : Bool := false
-  emitPTX          : Bool := false
-  emitMetal        : Bool := false
-  isBaseline       : Bool := false
-  smArch           : String := "sm_90"
-  numSamples       : Nat := 4096
+  inputPath : String := ""
+  outputPath : String := ""
+  arch : TargetArch := .x86_64
+  emitCABI : Bool := false
+  emitLLVM : Bool := false
+  emitPTX : Bool := false
+  emitMetal : Bool := false
+  isBaseline : Bool := false
+  smArch : String := "sm_90"
+  numSamples : Nat := 4096
   useConstraintProp : Bool := true
   deriving Repr, Inhabited, BEq
 
 def parseCoreCLIOptions (args : List String) : CoreCLIOptions :=
   let inPos := findFirstPositional args
   let inExp := findFlagValue args "--input" (findFlagValue args "--lnir" "")
-  {
-    inputPath := if !inExp.isEmpty then inExp else inPos
-    outputPath := findFlagValue args "-o" ""
-    arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
-    emitCABI := hasFlag args "--c-abi" || hasFlag args "--emit-c-abi"
-    emitLLVM := hasFlag args "--emit-llvm" || hasFlag args "--llvm"
-    emitPTX := hasFlag args "--emit-ptx" || hasFlag args "--ptx"
-    emitMetal := hasFlag args "--emit-metal" || hasFlag args "--metal"
-    isBaseline := hasFlag args "--baseline"
-    smArch := findFlagValue args "--sm" "sm_90"
-    numSamples := (findFlagValue args "--samples" "4096").toNat?.getD 4096
-    useConstraintProp := !(hasFlag args "--no-constraint-prop")
-  }
+  { inputPath := if !inExp.isEmpty then inExp else inPos, outputPath := findFlagValue args "-o" "",
+    arch := parseTargetArch (findFlagValue args "--arch" "x86_64"),
+    emitCABI := hasFlag args "--c-abi" || hasFlag args "--emit-c-abi",
+    emitLLVM := hasFlag args "--emit-llvm" || hasFlag args "--llvm",
+    emitPTX := hasFlag args "--emit-ptx" || hasFlag args "--ptx",
+    emitMetal := hasFlag args "--emit-metal" || hasFlag args "--metal",
+    isBaseline := hasFlag args "--baseline", smArch := findFlagValue args "--sm" "sm_90",
+    numSamples := (findFlagValue args "--samples" "4096").toNat?.getD 4096,
+    useConstraintProp := !(hasFlag args "--no-constraint-prop") }
 
 /-- Load an `LNIRModule` from `--lnir <path>`, `--input <path>`, or positional argument, using `elaborateHook?` for `.lean`
     sources when running inside the full `lean-native` frontend. Never silently falls back to
@@ -124,11 +111,9 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
     let raw ← IO.FS.readFile path
     match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
     | some mod =>
-      if mod.decls.isEmpty then
-        throw <| IO.userError s!"[lean-native] Failed to extract any LNIR declarations from '{path}'"
+      if mod.decls.isEmpty then throw <| IO.userError s!"[lean-native] Failed to extract any LNIR declarations from '{path}'"
       return mod
-    | none =>
-      throw <| IO.userError s!"[lean-native] Failed to parse LNIR wire/JSON module from '{path}'"
+    | none => throw <| IO.userError s!"[lean-native] Failed to parse LNIR wire/JSON module from '{path}'"
   let lnirFile := findFlagValue args "--lnir" ""
   if !lnirFile.isEmpty then return (← parseWireOrJsonFile lnirFile)
   let inFileExplicit := findFlagValue args "--input" ""
@@ -141,14 +126,12 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
       return (LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw).getD mkCanonicalBenchmarkModule
     else return mkCanonicalBenchmarkModule
   else if inFile == "fastcheck" || inFile == "fastcheck-sample" then return mkFastCheckSampleModule
-  else if inFile.endsWith ".lnir" || inFile.endsWith ".json" then
-    parseWireOrJsonFile inFile
+  else if inFile.endsWith ".lnir" || inFile.endsWith ".json" then parseWireOrJsonFile inFile
   else
     match elaborateHook? with
     | some ingestFn =>
       let mod ← ingestFn inFile
-      if mod.decls.isEmpty then
-        throw <| IO.userError s!"[lean-native] Failed to extract any LCNF declarations from '{inFile}'"
+      if mod.decls.isEmpty then throw <| IO.userError s!"[lean-native] Failed to extract any LCNF declarations from '{inFile}'"
       return mod
     | none =>
       if ← System.FilePath.pathExists inFile then
@@ -156,14 +139,11 @@ def loadInputModule (elaborateHook? : Option (String → IO LNIRModule)) (args :
         match LNIRModule.fromWire? raw <|> LNIRModule.fromJson? raw with
         | some mod => return mod
         | none => throw <| IO.userError s!"[lean-native-core] Cannot parse '{inFile}' as LNIR wire/JSON (use full 'lean-native' for .lean source elaboration)"
-      else
-        throw <| IO.userError s!"[lean-native-core] Input file '{inFile}' does not exist"
+      else throw <| IO.userError s!"[lean-native-core] Input file '{inFile}' does not exist"
 
 private def writeOrPrint (outPath text : String) (msg? : Option String := none) : IO UInt32 := do
   if outPath.isEmpty then IO.println text
-  else
-    IO.FS.writeFile outPath text
-    if let some m := msg? then IO.println m
+  else IO.FS.writeFile outPath text; if let some m := msg? then IO.println m
   return 0
 
 private def writeAndPrintJsonOrSummary (outPath jsonText summaryText : String) (jsonFlag : Bool) : IO Unit := do
@@ -179,13 +159,9 @@ def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   if opts.emitCABI then
     writeOrPrint opts.outputPath (LeanNative.Backend.emitFastCheckCABI optMod)
       (some s!"[{tag}] Wrote Zero-Boxing C-ABI SIMD FastCheck & Routing kernel to {opts.outputPath}")
-  else if opts.emitPTX then
-    writeOrPrint opts.outputPath (emitPTXModule optMod opts.smArch)
-  else if opts.emitMetal then
-    writeOrPrint opts.outputPath (emitMetalModule optMod)
-  else
-    let irText := if opts.isBaseline then emitLLVMBaseline optMod opts.arch else emitLLVMOptimized optMod opts.arch
-    writeOrPrint opts.outputPath irText
+  else if opts.emitPTX then writeOrPrint opts.outputPath (emitPTXModule optMod opts.smArch)
+  else if opts.emitMetal then writeOrPrint opts.outputPath (emitMetalModule optMod)
+  else writeOrPrint opts.outputPath (if opts.isBaseline then emitLLVMBaseline optMod opts.arch else emitLLVMOptimized optMod opts.arch)
 
 def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
@@ -196,51 +172,26 @@ def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let _ ← emitModuleTelemetryEvents telCfg .x86_64 false baseMod
   let (modToEmit, _) := if isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   let irText := if isBaseline then emitLLVMBaseline modToEmit arch else emitLLVMOptimized modToEmit arch
-  writeOrPrint outPath irText
-    (some s!"[{tag}] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}")
+  writeOrPrint outPath irText (some s!"[{tag}] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}")
 
 private def lnirTypeToCType : LNIRType → String
-  | .i1 => "uint8_t"
-  | .i8 => "uint8_t"
-  | .i16 => "uint16_t"
-  | .i32 => "uint32_t"
-  | .i64 => "uint64_t"
-  | .usize => "size_t"
-  | .u256 | .i256 => "const uint64_t*"
-  | .f32 => "float"
-  | .f64 => "double"
-  | .rawPtr _ | .sarray _ | .objPtr | .taggedPtr | .storageMap => "void*"
-  | .tuple _ => "uint64_t"
-  | .unit => "void"
+  | .i1 | .i8 => "uint8_t" | .i16 => "uint16_t" | .i32 => "uint32_t" | .i64 | .tuple _ => "uint64_t"
+  | .usize => "size_t" | .u256 | .i256 => "const uint64_t*" | .f32 => "float" | .f64 => "double"
+  | .rawPtr _ | .sarray _ | .objPtr | .taggedPtr | .storageMap => "void*" | .unit => "void"
 
 /-- Emit a C-ABI header (`.h`) and static library (`.a`) or LLVM IR for an `LNIRModule`
     so Rust (`crates/turbo-lean`) or C/C++ callers can invoke verified Lean kernels directly
     via `extern "C"` at `< 2 ns` overhead. -/
 def emitCAbiHeader (m : LNIRModule) : String :=
-  let declProtos := m.decls.map (fun d =>
-    let retC := lnirTypeToCType d.retTy
-    let paramsC :=
-      if d.params.isEmpty then "void"
-      else String.intercalate ", " (d.params.map (fun p => s!"{lnirTypeToCType p.ty} {p.name}"))
-    s!"{retC} {d.name}({paramsC});")
+  let declProtos := m.decls.map fun d =>
+    let paramsC := if d.params.isEmpty then "void" else String.intercalate ", " (d.params.map fun p => s!"{lnirTypeToCType p.ty} {p.name}")
+    s!"{lnirTypeToCType d.retTy} {d.name}({paramsC});"
   String.intercalate "\n" ([
     "/* Auto-generated C-ABI Header by lean-native compile-static-lib */",
-    "#ifndef LEAN_NATIVE_GENERATED_C_ABI_H",
-    "#define LEAN_NATIVE_GENERATED_C_ABI_H",
-    "#include <stdint.h>",
-    "#include <stddef.h>",
-    "#ifdef __cplusplus",
-    "extern \"C\" {",
-    "#endif",
-    ""
-  ] ++ declProtos ++ [
-    "",
-    "#ifdef __cplusplus",
-    "}",
-    "#endif",
-    "#endif /* LEAN_NATIVE_GENERATED_C_ABI_H */",
-    ""
-  ])
+    "#ifndef LEAN_NATIVE_GENERATED_C_ABI_H", "#define LEAN_NATIVE_GENERATED_C_ABI_H",
+    "#include <stdint.h>", "#include <stddef.h>",
+    "#ifdef __cplusplus", "extern \"C\" {", "#endif", ""
+  ] ++ declProtos ++ ["", "#ifdef __cplusplus", "}", "#endif", "#endif /* LEAN_NATIVE_GENERATED_C_ABI_H */", ""])
 
 def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
@@ -411,77 +362,58 @@ def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
   let baseRef := findFlagValue args "--base" "HEAD"
   let jsonFlag := hasFlag args "--json"
   let outPath := findFlagValue args "-o" ""
-
-  -- 1. Check Spec.lean and tests/test_runner.lean pinning against git diff if baseRef != ""
   let specExists ← System.FilePath.pathExists "LeanNative/Spec.lean"
   let testExists ← System.FilePath.pathExists "tests/test_runner.lean"
   let specText ← if specExists then IO.FS.readFile "LeanNative/Spec.lean" else pure ""
   let testText ← if testExists then IO.FS.readFile "tests/test_runner.lean" else pure ""
   let specHashHex := blake3Hex specText
   let testHashHex := blake3Hex testText
-
-  -- Check if git diff against baseRef modified Spec.lean or tests/test_runner.lean when --disallow-spec-changes is passed
   let disallowSpecChanges := hasFlag args "--disallow-spec-changes"
   let mut specUnchanged := specExists
   let mut testUnchanged := testExists
   if disallowSpecChanges then
     try
-      let diffOut ← IO.Process.output {
-        cmd := "git"
-        args := #["diff", "--name-only", baseRef, "--", "LeanNative/Spec.lean", "tests/test_runner.lean"]
-      }
+      let diffOut ← IO.Process.output { cmd := "git", args := #["diff", "--name-only", baseRef, "--", "LeanNative/Spec.lean", "tests/test_runner.lean"] }
       let changedFiles := diffOut.stdout.trimAscii.toString
       if changedFiles.contains "LeanNative/Spec.lean" then specUnchanged := false
       if changedFiles.contains "tests/test_runner.lean" then testUnchanged := false
-    catch _ =>
-      pure ()
-
-  -- 2. Run Segregated Optimization Plugin Pipeline + Adversarial Untrusted Plugin Gate (Law 1 & Law 2)
+    catch _ => pure ()
   let baseMod := mkCanonicalBenchmarkModule
   let (optMod, pluginReport) := runSegregatedPluginPipeline .x86_64 true baseMod
   let tvReport := validateTranslationModule baseMod optMod
   let allDeclTvOk := pluginReport.declAudits.all (fun a => a.tvVerified)
-
-  -- 3. Evaluate Law 5 (`LeanNative.Spec.checkPRVerificationGate`)
-  let prGateInput : PRVerificationInput := {
-    expectedSpecHash := 1
-    actualSpecHash := if specUnchanged then 1 else 2
-    expectedTestSuiteHash := 1
-    actualTestSuiteHash := if testUnchanged then 1 else 2
-    forbiddenAxiomsCount := 0
-    tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected
+  let law5Passed := checkPRVerificationGate {
+    expectedSpecHash := 1, actualSpecHash := if specUnchanged then 1 else 2,
+    expectedTestSuiteHash := 1, actualTestSuiteHash := if testUnchanged then 1 else 2,
+    forbiddenAxiomsCount := 0, tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected
   }
-  let law5Passed := checkPRVerificationGate prGateInput
-
-  -- 4. Invoke installed Season 8 `turbo-lean pr-verify` & `audit-spec`
   let cfg ← TurboLeanConfig.probe
   let (turboPrOk, _) ← runTurboLeanPRVerify cfg "." baseRef disallowSpecChanges "/tmp/lean_native_pr_verify_receipt.json"
   let (turboSpecOk, _) ← runTurboLeanAuditSpec cfg "LeanNative/Spec.lean"
-
   let overallOk := law5Passed && turboPrOk && turboSpecOk
-  let jsonOut :=
-    "{\n" ++
-    s!"  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",\n" ++
-    s!"  \"engine\": \"{tag}\",\n" ++
-    s!"  \"version\": \"0.5.0\",\n" ++
-    s!"  \"baseRef\": \"{baseRef}\",\n" ++
-    s!"  \"law1UntrustedPluginGatePassed\": {if pluginReport.adversarialRejected && allDeclTvOk then "true" else "false"},\n" ++
-    s!"  \"law5SpecPinningGatePassed\": {if law5Passed then "true" else "false"},\n" ++
-    s!"  \"specBlake3\": \"{specHashHex}\",\n" ++
-    s!"  \"testRunnerBlake3\": \"{testHashHex}\",\n" ++
-    s!"  \"symbolicTvPassedDecls\": {tvReport.passedDecls},\n" ++
-    s!"  \"symbolicTvTotalDecls\": {tvReport.totalDecls},\n" ++
-    s!"  \"pluginsAccepted\": {pluginReport.acceptedCount},\n" ++
-    s!"  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},\n" ++
-    s!"  \"costBefore\": {pluginReport.totalCostBefore},\n" ++
-    s!"  \"costAfter\": {pluginReport.totalCostAfter},\n" ++
-    s!"  \"turboLeanMode\": \"{cfg.mode}\",\n" ++
-    s!"  \"turboLeanPrVerifyPassed\": {if turboPrOk then "true" else "false"},\n" ++
-    s!"  \"turboLeanAuditSpecPassed\": {if turboSpecOk then "true" else "false"}\n" ++
+  let jsonOut := String.intercalate "\n" [
+    "{",
+    s!"  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",",
+    s!"  \"engine\": \"{tag}\",",
+    "  \"version\": \"0.5.0\",",
+    s!"  \"baseRef\": \"{baseRef}\",",
+    s!"  \"law1UntrustedPluginGatePassed\": {pluginReport.adversarialRejected && allDeclTvOk},",
+    s!"  \"law5SpecPinningGatePassed\": {law5Passed},",
+    s!"  \"specBlake3\": \"{specHashHex}\",",
+    s!"  \"testRunnerBlake3\": \"{testHashHex}\",",
+    s!"  \"symbolicTvPassedDecls\": {tvReport.passedDecls},",
+    s!"  \"symbolicTvTotalDecls\": {tvReport.totalDecls},",
+    s!"  \"pluginsAccepted\": {pluginReport.acceptedCount},",
+    s!"  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},",
+    s!"  \"costBefore\": {pluginReport.totalCostBefore},",
+    s!"  \"costAfter\": {pluginReport.totalCostAfter},",
+    s!"  \"turboLeanMode\": \"{cfg.mode}\",",
+    s!"  \"turboLeanPrVerifyPassed\": {turboPrOk},",
+    s!"  \"turboLeanAuditSpecPassed\": {turboSpecOk}",
     "}"
+  ]
   if !outPath.isEmpty then IO.FS.writeFile outPath jsonOut
-  if jsonFlag then
-    IO.println jsonOut
+  if jsonFlag then IO.println jsonOut
   else
     IO.println s!"[{tag}] PR & Spec-Pinning Verification Gate (base={baseRef}):"
     IO.println s!"  Law 1 Untrusted Plugin & Adversarial Gate : {if pluginReport.adversarialRejected && allDeclTvOk then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
@@ -495,12 +427,10 @@ def runVerifyCerts (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let jsonFlag := hasFlag args "--json"
   let baseMod ← loadInputModule elaborateHook? args
   let (_, stepCerts) := runDefaultPipeline baseMod
-  let optCerts := stepCerts.map toOptimizationCert
-  let report := verifyModuleCerts baseMod.moduleName optCerts
+  let report := verifyModuleCerts baseMod.moduleName (stepCerts.map toOptimizationCert)
   let jsonText := report.toJson
   if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
-  if jsonFlag then
-    IO.println jsonText
+  if jsonFlag then IO.println jsonText
   else
     IO.println s!"[{tag}] Certificate Verification for {report.moduleName}:"
     IO.println s!"  Total pass certificates : {report.certs.length}"
@@ -524,53 +454,31 @@ def runEmitLNIR (tag : String) (elaborateHook? : Option (String → IO LNIRModul
   let fastCheckFlag := hasFlag args "--fastcheck"
   let mod ← loadInputModule elaborateHook? args fastCheckFlag
   let useWire := wireFlag || outPath.endsWith ".lnir"
-  let outText := if useWire then mod.toWire else mod.toJson
-  writeOrPrint outPath outText
+  writeOrPrint outPath (if useWire then mod.toWire else mod.toJson)
     (some s!"[{tag}] Emitted LNIR ({if useWire then "wire" else "json"}, decls={mod.decls.length}) to {outPath}")
 
 def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"=== Lean Native ({tag} v0.5.0) Self-Test ==="
   let baseMod := mkCanonicalBenchmarkModule
-  let wireStr := baseMod.toWire
-  let jsonStr := baseMod.toJson
-  let roundTripWireOk := LNIRModule.fromWire? wireStr == some baseMod
-  let roundTripJsonOk := LNIRModule.fromJson? jsonStr == some baseMod
-
+  let roundTripWireOk := LNIRModule.fromWire? baseMod.toWire == some baseMod
+  let roundTripJsonOk := LNIRModule.fromJson? baseMod.toJson == some baseMod
   let (optMod, stepCerts) := runDefaultPipeline baseMod
-  let optCerts := stepCerts.map toOptimizationCert
-  let certReport := verifyModuleCerts baseMod.moduleName optCerts
+  let certReport := verifyModuleCerts baseMod.moduleName (stepCerts.map toOptimizationCert)
   let tvReport := validateTranslationModule baseMod optMod
-
   let (_, soReportX86) := superoptModule .x86_64 baseMod
   let (_, soReportMetal) := superoptModule .apple_metal baseMod
   let superoptOk := soReportX86.rewritesApplied > 0 && soReportMetal.rewritesApplied > 0 &&
     soReportX86.totalCostAfter < soReportX86.totalCostBefore
-
   let (_, pluginReport) := runSegregatedPluginPipeline .x86_64 true baseMod
   let pluginsOk := pluginReport.acceptedCount > 0 && pluginReport.adversarialRejected &&
     pluginReport.declAudits.all (fun a => a.tvVerified)
-  let law5Ok := checkPRVerificationGate {
-    expectedSpecHash := 42
-    actualSpecHash := 42
-    expectedTestSuiteHash := 99
-    actualTestSuiteHash := 99
-    forbiddenAxiomsCount := 0
-    tvAllPassed := tvReport.allPassed && pluginsOk
-  } && !(checkPRVerificationGate {
-    expectedSpecHash := 42
-    actualSpecHash := 43
-    expectedTestSuiteHash := 99
-    actualTestSuiteHash := 99
-    forbiddenAxiomsCount := 0
-    tvAllPassed := true
-  })
-
+  let law5Ok := checkPRVerificationGate ⟨42, 42, 99, 99, 0, tvReport.allPassed && pluginsOk⟩ &&
+    !(checkPRVerificationGate ⟨42, 43, 99, 99, 0, true⟩)
   let fcMod := mkFastCheckSampleModule
   let fcReportProp := runFastCheckModule fcMod 512 true
   let fcReportNaive := runFastCheckModule fcMod 512 false
   let fcPropOk := fcReportProp.counterexamplesFound == 1 && fcReportProp.vacuousPasses == 0 && fcReportProp.falsePositives == 0
   let fcNaiveVacuousOk := fcReportNaive.vacuousPasses == 1
-
   let fcLlvm := emitFastCheckLLVM fcMod
   let fcPtx := emitFastCheckPTX fcMod "sm_90"
   let fcMetal := emitFastCheckMetal fcMod
@@ -595,25 +503,16 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   let telCfg ← TelemetryConfig.probe ["--telemetry"]
   let telCount ← emitModuleTelemetryEvents telCfg .x86_64 true baseMod
   let telOk := telCount > 0
-
-  -- Test relational polytope sampling (`16 <= o0 <= o1 <= o2 <= o3`) + nested tuple SROA + GPU headroom gate
   let relDecl : LNIRDecl := {
     name := "ssz_monotone_offsets_bug"
-    params := [
-      { id := 0, name := "o0", ty := .i64, borrow := false },
-      { id := 1, name := "o1", ty := .i64, borrow := false }
-    ]
-    retTy := .i1
-    assurance := .verifiedKernelProof
-    isGpuCand := true
+    params := [{ id := 0, name := "o0", ty := .i64, borrow := false }, { id := 1, name := "o1", ty := .i64, borrow := false }]
+    retTy := .i1, assurance := .verifiedKernelProof, isGpuCand := true
     body :=
       .letBind 10 .i1 (.scalar (.binOp .le (.constU64 16) (.var 0)))
         (.letBind 11 .i1 (.scalar (.binOp .le (.var 0) (.var 1)))
           (.letBind 12 .i1 (.scalar (.binOp .bitAnd (.var 10) (.var 11)))
             (.letBind 13 .i1 (.scalar (.constBool true))
-              (.ite 12
-                (.letBind 14 .i1 (.scalar (.binOp .lt (.var 1) (.constU64 20))) (.ret 14))
-                (.ret 13)))))
+              (.ite 12 (.letBind 14 .i1 (.scalar (.binOp .lt (.var 1) (.constU64 20))) (.ret 14)) (.ret 13)))))
   }
   let relRes := runFastCheckDecl relDecl 64 true
   let relSamplingOk := relRes.counterexampleFound && relRes.certifiedCounterexample && !relRes.vacuousPass
@@ -621,20 +520,19 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.hasSufficientGpuMemory ⟨4096, 1024, 2048⟩ &&
     !(LeanNative.Spec.hasSufficientGpuMemory ⟨2048, 1024, 2048⟩) &&
     LeanNative.Spec.isValidByteSlice (LeanNative.Spec.subSliceView ⟨64, 8, 32⟩ 4 16)
-
+  let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
-  IO.println s!"2. LNIR Wire & JSON Round-Trip     : {if roundTripWireOk && roundTripJsonOk then "PASSED" else "FAILED"}"
-  IO.println s!"3. Certificate Chain Verification  : {if certReport.verified then "PASSED" else "FAILED"} ({certReport.certs.length} certs)"
-  IO.println s!"4. Alive2 Symbolic TV Validation   : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)"
-  IO.println s!"5. Enumerative Superoptimizer      : {if superoptOk then "PASSED" else "FAILED"} ({soReportX86.rewritesApplied} rewrites, cost {soReportX86.totalCostBefore}->{soReportX86.totalCostAfter})"
-  IO.println s!"6. Segregated Plugins & Law 1/5    : {if pluginsOk && law5Ok then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
-  IO.println s!"7. FastCheck ConstraintProp vs Vac : {if fcPropOk && fcNaiveVacuousOk && relSamplingOk then "PASSED" else "FAILED"} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses}, relPolytope=ok)"
-  IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {if metalValid && fcMetalValid && gpuHeadroomOk then "PASSED" else "FAILED"} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
-  IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {if blake3Ok then "PASSED" else "FAILED"}"
-  IO.println s!"10. Google Cloud TPU v5e Codegen   : {if tpuCodegenOk then "PASSED" else "FAILED"} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
-  IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {if mulDivOk then "PASSED" else "FAILED"} ((2^60 * 2^60) / 2^60 == 2^60)"
-  IO.println s!"12. CAS Telemetry Spooler (v1)     : {if telOk then "PASSED" else "FAILED"} ({telCount} accepted+rejected events, de Bruijn CAS blobs)"
-
+  IO.println s!"2. LNIR Wire & JSON Round-Trip     : {status (roundTripWireOk && roundTripJsonOk)}"
+  IO.println s!"3. Certificate Chain Verification  : {status certReport.verified} ({certReport.certs.length} certs)"
+  IO.println s!"4. Alive2 Symbolic TV Validation   : {status tvReport.allPassed} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)"
+  IO.println s!"5. Enumerative Superoptimizer      : {status superoptOk} ({soReportX86.rewritesApplied} rewrites, cost {soReportX86.totalCostBefore}->{soReportX86.totalCostAfter})"
+  IO.println s!"6. Segregated Plugins & Law 1/5    : {status (pluginsOk && law5Ok)} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
+  IO.println s!"7. FastCheck ConstraintProp vs Vac : {status (fcPropOk && fcNaiveVacuousOk && relSamplingOk)} (propCex={fcReportProp.counterexamplesFound}, naiveVacuous={fcReportNaive.vacuousPasses}, relPolytope=ok)"
+  IO.println s!"8. Unified GPUIR & Apple Metal 3.0 : {status (metalValid && fcMetalValid && gpuHeadroomOk)} ({gpuDescs.length} GPU descriptors, Metal={metalTxt.length}B)"
+  IO.println s!"9. Pure-Lean RFC BLAKE3 Self-Test  : {status blake3Ok}"
+  IO.println s!"10. Google Cloud TPU v5e Codegen   : {status tpuCodegenOk} (StableHLO={stablehloTxt.length}B, Pallas={pallasTxt.length}B)"
+  IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {status mulDivOk} ((2^60 * 2^60) / 2^60 == 2^60)"
+  IO.println s!"12. CAS Telemetry Spooler (v1)     : {status telOk} ({telCount} accepted+rejected events, de Bruijn CAS blobs)"
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
     fcPropOk && fcNaiveVacuousOk && relSamplingOk && gpuHeadroomOk &&
@@ -743,22 +641,20 @@ def getOrInitWorkerCache (cacheRef : IO.Ref (Option WorkerCache)) : IO WorkerCac
 def handleFastWorkerRequest? (engineName line : String) : Option String :=
   let reqId := extractRpcId line
   let method := (extractRpcStringField line "method").getD "ping"
+  let hasBool2 (k1 k2 : String) (b : Bool) := hasRpcBoolField line k1 b || hasRpcBoolField line k2 b
   match method with
   | "ping" =>
     some s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"status\":\"pong\",\"engine\":\"{engineName}\",\"version\":\"0.5.0\",\"decls\":8}}"
   | "eval-cex" =>
     let witnessEnv := (VarEnv.empty.bind 1 (.u64 1000000)).bind 0 (.u64 1000042)
     let certified := certifyCounterexample 128 evmConstrainedBuggyPropDecl witnessEnv HeapState.empty
-    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"declName\":\"evm_constrained_buggy_prop\",\"certified\":{if certified then "true" else "false"},\"falsePositives\":0,\"theorem\":\"LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive\",\"report\":\{\"counterexamplesFound\":1,\"vacuousPasses\":0,\"falsePositives\":0}}}"
+    some s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"declName\":\"evm_constrained_buggy_prop\",\"certified\":{certified},\"falsePositives\":0,\"theorem\":\"LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive\",\"report\":\{\"counterexamplesFound\":1,\"vacuousPasses\":0,\"falsePositives\":0}}}"
   | "select-target" =>
     let tripCount := extractRpcNatField line "trip_count" (extractRpcNatField line "tripCount" 65536)
-    let isMatrix := hasRpcBoolField line "is_matrix" true || hasRpcBoolField line "isMatrix" true
-    let is256Bit := hasRpcBoolField line "is_256bit" true || hasRpcBoolField line "is256Bit" true
-    let isControlHeavy := hasRpcBoolField line "is_control_heavy" true || hasRpcBoolField line "isControlHeavy" true
-    let hasTpu := hasRpcBoolField line "has_tpu" true || hasRpcBoolField line "hasTpu" true
-    let hasGpu := hasRpcBoolField line "has_gpu" true || hasRpcBoolField line "hasGpu" true || hasRpcBoolField line "has_cuda_gpu" true
-    let hasMetal := hasRpcBoolField line "has_metal" true || hasRpcBoolField line "hasMetal" true
-    let tgt := LeanNative.Backend.selectOptimalComputeTarget tripCount isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
+    let tgt := LeanNative.Backend.selectOptimalComputeTarget tripCount
+      (hasBool2 "is_matrix" "isMatrix" true) (hasBool2 "is_256bit" "is256Bit" true)
+      (hasBool2 "is_control_heavy" "isControlHeavy" true) (hasBool2 "has_tpu" "hasTpu" true)
+      (hasBool2 "has_gpu" "hasGpu" true || hasRpcBoolField line "has_cuda_gpu" true) (hasBool2 "has_metal" "hasMetal" true)
     some s!"\{\"id\":{reqId},\"ok\":true,\"target\":\"{tgt}\",\"result\":\{\"target\":\"{tgt}\",\"trip_count\":{tripCount}}}"
   | "riscv-step-audit" =>
     let boot := extractRpcNatField line "bootstrap_steps" 23132
@@ -768,30 +664,27 @@ def handleFastWorkerRequest? (engineName line : String) : Option String :=
     let verMin := extractRpcNatField line "verify_minutes" 12
     let (refuted, maxObs, violIn) := runRiscvStepBudgetAudit boot scale csr candK
     let yukonScore := candK * 10000 + verMin
-    let refStr := if refuted then "true" else "false"
-    some s!"\{\"id\":{reqId},\"ok\":true,\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore},\"result\":\{\"refuted\":{refStr},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore}}}"
+    let body := s!"\"refuted\":{refuted},\"max_observed_steps\":{maxObs},\"candidate_k\":{candK},\"violating_input\":{violIn},\"yukon_score\":{yukonScore}"
+    some s!"\{\"id\":{reqId},\"ok\":true,{body},\"result\":\{{body}}}"
   | "batch-fastcheck" =>
     let numSamples := extractRpcNatField line "samples" (extractRpcNatField line "num_samples" 1024)
     let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
-    let isMatrix := hasRpcBoolField line "is_matrix" true
-    let is256Bit := !(hasRpcBoolField line "is_256bit" false)
-    let isControlHeavy := hasRpcBoolField line "is_control_heavy" true
-    let hasTpu := hasRpcBoolField line "has_tpu" true
-    let hasGpu := !(hasRpcBoolField line "has_gpu" false)
-    let hasMetal := hasRpcBoolField line "has_metal" true
-    let recTarget := LeanNative.Backend.selectOptimalComputeTarget numSamples isMatrix is256Bit isControlHeavy hasTpu hasGpu hasMetal
+    let recTarget := LeanNative.Backend.selectOptimalComputeTarget numSamples
+      (hasRpcBoolField line "is_matrix" true) (!(hasRpcBoolField line "is_256bit" false))
+      (hasRpcBoolField line "is_control_heavy" true) (hasRpcBoolField line "has_tpu" true)
+      (!(hasRpcBoolField line "has_gpu" false)) (hasRpcBoolField line "has_metal" true)
     let customModOpt := (extractRpcStringField line "wire").bind LNIRModule.fromWire?
     let rep := runFastCheckModule (customModOpt.getD mkFastCheckSampleModule) numSamples (!noProp)
     some s!"\{\"id\":{reqId},\"ok\":true,\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"result\":\{\"recommended_target\":\"{recTarget}\",\"c_abi_ready\":true,\"report\":{rep.toJson}}}"
   | _ => none
 
 def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : String) : String :=
-  if let some fastResp := handleFastWorkerRequest? engineName line then
-    fastResp
+  if let some fastResp := handleFastWorkerRequest? engineName line then fastResp
   else
     let reqId := extractRpcId line
     let method := (extractRpcStringField line "method").getD "ping"
     let customModOpt := (extractRpcStringField line "wire").bind LNIRModule.fromWire?
+    let nDecls := cache.optMod.decls.length
     match method with
     | "compile-llvm" =>
       let archStr := (extractRpcStringField line "arch").getD "x86_64"
@@ -799,13 +692,11 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
       let ir := match customModOpt with
         | some m =>
           let arch := parseTargetArch archStr
-          let (mEmit, _) := if isBase then (m, []) else runDefaultPipeline m
-          if isBase then emitLLVMBaseline mEmit arch else emitLLVMOptimized mEmit arch
+          if isBase then emitLLVMBaseline m arch else emitLLVMOptimized (runDefaultPipeline m).1 arch
         | none =>
           if isBase then cache.llvmBaseX86
-          else if archStr == "arm64" || archStr == "aarch64" then cache.llvmOptArm
-          else cache.llvmOptX86
-      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"arch\":\"{escapeJsonWorker archStr}\",\"baseline\":{if isBase then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"irBytes\":{ir.length},\"ir\":\"{escapeJsonWorker ir}\"}}"
+          else if archStr == "arm64" || archStr == "aarch64" then cache.llvmOptArm else cache.llvmOptX86
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"arch\":\"{escapeJsonWorker archStr}\",\"baseline\":{isBase},\"decls\":{nDecls},\"irBytes\":{ir.length},\"ir\":\"{escapeJsonWorker ir}\"}}"
     | "compile-ptx" =>
       let sm := (extractRpcStringField line "sm").getD "sm_90"
       let isFc := hasRpcBoolField line "fastcheck" true
@@ -813,7 +704,7 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
         else match customModOpt with
           | some m => emitPTXModule (runDefaultPipeline m).1 sm
           | none => if sm == "sm_90" then cache.ptxSm90 else emitPTXModule cache.optMod sm
-      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"sm\":\"{escapeJsonWorker sm}\",\"decls\":{cache.optMod.decls.length},\"ptxBytes\":{ptx.length},\"ptx\":\"{escapeJsonWorker ptx}\"}}"
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"sm\":\"{escapeJsonWorker sm}\",\"decls\":{nDecls},\"ptxBytes\":{ptx.length},\"ptx\":\"{escapeJsonWorker ptx}\"}}"
     | "compile-metal" =>
       let isFc := hasRpcBoolField line "fastcheck" true
       let msl := if isFc then cache.fcMetalText
@@ -821,12 +712,12 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
           | some m => emitMetalModule (runDefaultPipeline m).1
           | none => cache.metalText
       let (valid, _) := validateMetalShader msl
-      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"apple_metal_3.0\",\"valid\":{if valid then "true" else "false"},\"decls\":{cache.optMod.decls.length},\"metalBytes\":{msl.length},\"metal\":\"{escapeJsonWorker msl}\"}}"
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"apple_metal_3.0\",\"valid\":{valid},\"decls\":{nDecls},\"metalBytes\":{msl.length},\"metal\":\"{escapeJsonWorker msl}\"}}"
     | "compile-mlir" =>
       let dialect := (extractRpcStringField line "dialect").getD "gpu"
       let mlir := match customModOpt with
         | some m =>
-          let (mOpt, _) := runDefaultPipeline m
+          let mOpt := (runDefaultPipeline m).1
           if dialect == "pallas" then emitTPUPallasModule mOpt
           else if dialect == "stablehlo" || dialect == "tpu" then emitStableHLOModule mOpt
           else emitMLIRModule mOpt
@@ -834,14 +725,12 @@ def handleWorkerRequest (engineName : String) (cache : WorkerCache) (line : Stri
           if dialect == "pallas" then cache.pallasText
           else if dialect == "stablehlo" || dialect == "tpu" then cache.stablehloText
           else cache.mlirText
-      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"dialect\":\"{escapeJsonWorker dialect}\",\"decls\":{cache.optMod.decls.length},\"mlirBytes\":{mlir.length},\"mlir\":\"{escapeJsonWorker mlir}\"}}"
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"dialect\":\"{escapeJsonWorker dialect}\",\"decls\":{nDecls},\"mlirBytes\":{mlir.length},\"mlir\":\"{escapeJsonWorker mlir}\"}}"
     | "compile-tpu" =>
       let (shlo, pallas) := match customModOpt with
-        | some m =>
-          let (mOpt, _) := runDefaultPipeline m
-          (emitStableHLOModule mOpt, emitTPUPallasModule mOpt)
+        | some m => let mOpt := (runDefaultPipeline m).1; (emitStableHLOModule mOpt, emitTPUPallasModule mOpt)
         | none => (cache.stablehloText, cache.pallasText)
-      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"google_cloud_tpu_v5e\",\"decls\":{cache.optMod.decls.length},\"stablehloBytes\":{shlo.length},\"pallasBytes\":{pallas.length},\"stablehlo\":\"{escapeJsonWorker shlo}\",\"pallas\":\"{escapeJsonWorker pallas}\"}}"
+      s!"\{\"id\":{reqId},\"ok\":true,\"result\":\{\"target\":\"google_cloud_tpu_v5e\",\"decls\":{nDecls},\"stablehloBytes\":{shlo.length},\"pallasBytes\":{pallas.length},\"stablehlo\":\"{escapeJsonWorker shlo}\",\"pallas\":\"{escapeJsonWorker pallas}\"}}"
     | "compile-fastcheck" =>
       let noProp := hasRpcBoolField line "useConstraintProp" false || hasRpcBoolField line "noConstraintProp" true
       let repJson := match customModOpt with
