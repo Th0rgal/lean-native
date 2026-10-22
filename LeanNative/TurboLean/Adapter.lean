@@ -1013,13 +1013,19 @@ def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
   let dirEnv ← IO.getEnv "LEAN_NATIVE_TELEMETRY_DIR"
   let homeOpt ← IO.getEnv "HOME"
+  let customCfgOpt ← IO.getEnv "SANDBOXED_TELEMETRY_CONFIG"
   let mut cfgText := ""
-  if let some home := homeOpt then
-    let cfgPath : System.FilePath := s!"{home}/.config/sandboxed-telemetry/config.json"
-    try
-      if ← cfgPath.pathExists then
-        cfgText ← IO.FS.readFile cfgPath
-    catch _ => pure ()
+  for cand in [
+    (customCfgOpt.map trimStr).getD "",
+    match homeOpt with | some h => s!"{h}/.config/sandboxed-telemetry/config.json" | none => "",
+    "/etc/sandboxed-telemetry/config.json"
+  ] do
+    if cfgText.isEmpty && !cand.isEmpty then
+      let cfgPath : System.FilePath := cand
+      try
+        if ← cfgPath.pathExists then
+          cfgText ← IO.FS.readFile cfgPath
+      catch _ => pure ()
   let cfgMode := extractSimpleJsonStr cfgText "mode"
   let cfgUrl := extractSimpleJsonStr cfgText "url"
   let cfgTok := extractSimpleJsonStr cfgText "token"
