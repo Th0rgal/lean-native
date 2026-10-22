@@ -84,18 +84,15 @@ theorem evalBinOp_four_mul (v : Val) : evalBinOp .mul (.u64 4) v = evalBinOp .sh
   unfold evalBinOp; cases v with | u64 _ => simp [uint64_four_mul] | _ => rfl
 theorem evalBinOp_eight_mul (v : Val) : evalBinOp .mul (.u64 8) v = evalBinOp .shl v (.u64 3) := by
   unfold evalBinOp; cases v with | u64 _ => simp [uint64_eight_mul] | _ => rfl
-@[simp] theorem evalBinOp_div_one (v : Val) : evalBinOp .div v (.u64 1) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_div_one (v : Val) : evalBinOp .div v (.u64 1) = .ok v := by unfold evalBinOp; cases v <;> simp
 theorem evalBinOp_div_two (v : Val) : evalBinOp .div v (.u64 2) = evalBinOp .shr v (.u64 1) := by
   unfold evalBinOp; cases v with | u64 _ => simp [uint64_div_two] | _ => rfl
 theorem evalBinOp_div_four (v : Val) : evalBinOp .div v (.u64 4) = evalBinOp .shr v (.u64 2) := by
   unfold evalBinOp; cases v with | u64 _ => simp [uint64_div_four] | _ => rfl
 theorem evalBinOp_div_eight (v : Val) : evalBinOp .div v (.u64 8) = evalBinOp .shr v (.u64 3) := by
   unfold evalBinOp; cases v with | u64 _ => simp [uint64_div_eight] | _ => rfl
-@[simp] theorem evalBinOp_shl_zero (v : Val) : evalBinOp .shl v (.u64 0) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
-@[simp] theorem evalBinOp_shr_zero (v : Val) : evalBinOp .shr v (.u64 0) = .ok v := by
-  unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_shl_zero (v : Val) : evalBinOp .shl v (.u64 0) = .ok v := by unfold evalBinOp; cases v <;> simp
+@[simp] theorem evalBinOp_shr_zero (v : Val) : evalBinOp .shr v (.u64 0) = .ok v := by unfold evalBinOp; cases v <;> simp
 
 /-! ## Verified Scalar Peephole Rewriter -/
 

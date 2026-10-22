@@ -790,39 +790,29 @@ def emitFastCheckPTX (m : LNIRModule) (smArch : String := "sm_90") : String :=
 
 /-- Emit a standalone C99 C-ABI verifier for non-negative (`u64`) and general (`i64`) Farkas linear combination certificates. -/
 def emitCABIFarkasCheckI64 : String :=
-  String.intercalate "\n" [
-    "uint64_t lean_native_cabi_check_farkas_u64(const uint64_t* __restrict__ weights, const uint64_t* __restrict__ matrix, const uint64_t* __restrict__ rhs, const uint64_t* __restrict__ obj, uint64_t num_rows, uint64_t num_cols, uint64_t bound) {",
-    "    for (uint64_t j = 0ULL; j < num_cols; ++j) {",
-    "        __uint128_t col_sum = 0;",
-    "        for (uint64_t i = 0ULL; i < num_rows; ++i) {",
-    "            col_sum += (__uint128_t)weights[i] * (__uint128_t)matrix[i * num_cols + j];",
-    "        }",
-    "        if ((__uint128_t)obj[j] > col_sum) return 0ULL;",
-    "    }",
-    "    __uint128_t rhs_dot = 0;",
-    "    for (uint64_t i = 0ULL; i < num_rows; ++i) {",
-    "        rhs_dot += (__uint128_t)weights[i] * (__uint128_t)rhs[i];",
-    "    }",
-    "    return rhs_dot <= (__uint128_t)bound ? 1ULL : 0ULL;",
-    "}",
-    "",
-    "uint64_t lean_native_cabi_check_farkas_i64(const int64_t* __restrict__ weights, const int64_t* __restrict__ matrix, const int64_t* __restrict__ rhs, const int64_t* __restrict__ obj, uint64_t num_rows, uint64_t num_cols, int64_t bound) {",
+  let mkFn (fnName cTy wideTy : String) (extraGuard : List String) : String :=
+    String.intercalate "\n" ([
+      s!"uint64_t {fnName}(const {cTy}* __restrict__ weights, const {cTy}* __restrict__ matrix, const {cTy}* __restrict__ rhs, const {cTy}* __restrict__ obj, uint64_t num_rows, uint64_t num_cols, {cTy} bound) \{"
+    ] ++ extraGuard ++ [
+      "    for (uint64_t j = 0ULL; j < num_cols; ++j) {",
+      s!"        {wideTy} col_sum = 0;",
+      "        for (uint64_t i = 0ULL; i < num_rows; ++i) {",
+      s!"            col_sum += ({wideTy})weights[i] * ({wideTy})matrix[i * num_cols + j];",
+      "        }",
+      s!"        if (({wideTy})obj[j] > col_sum) return 0ULL;",
+      "    }",
+      s!"    {wideTy} rhs_dot = 0;",
+      "    for (uint64_t i = 0ULL; i < num_rows; ++i) {",
+      s!"        rhs_dot += ({wideTy})weights[i] * ({wideTy})rhs[i];",
+      "    }",
+      s!"    return rhs_dot <= ({wideTy})bound ? 1ULL : 0ULL;",
+      "}"
+    ])
+  mkFn "lean_native_cabi_check_farkas_u64" "uint64_t" "__uint128_t" [] ++ "\n\n" ++
+  mkFn "lean_native_cabi_check_farkas_i64" "int64_t" "__int128" [
     "    for (uint64_t i = 0ULL; i < num_rows; ++i) {",
     "        if (weights[i] < 0LL) return 0ULL;",
-    "    }",
-    "    for (uint64_t j = 0ULL; j < num_cols; ++j) {",
-    "        __int128 col_sum = 0;",
-    "        for (uint64_t i = 0ULL; i < num_rows; ++i) {",
-    "            col_sum += (__int128)weights[i] * (__int128)matrix[i * num_cols + j];",
-    "        }",
-    "        if ((__int128)obj[j] > col_sum) return 0ULL;",
-    "    }",
-    "    __int128 rhs_dot = 0;",
-    "    for (uint64_t i = 0ULL; i < num_rows; ++i) {",
-    "        rhs_dot += (__int128)weights[i] * (__int128)rhs[i];",
-    "    }",
-    "    return rhs_dot <= (__int128)bound ? 1ULL : 0ULL;",
-    "}"
+    "    }"
   ]
 
 /-- Emit a standalone, zero-boxing C99/C11 SIMD FastCheck & cost-model source file (`--c-abi`)

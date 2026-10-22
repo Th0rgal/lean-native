@@ -793,35 +793,14 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   -- Step 2: /usr/lib/llvm-18/bin/opt with O3 + loop-vectorize + slp-vectorizer on both rawLlPath and lnirLlPath
   let optBin : System.FilePath := "/usr/lib/llvm-18/bin/opt"
   let optCmd ← if (← optBin.pathExists) then pure optBin.toString else pure "opt"
-  let optOut ← IO.Process.output {
-    cmd  := optCmd
-    args := #[
-      "-S",
-      "-passes=default<O3>,loop-vectorize,slp-vectorizer",
-      "-vectorize-loops",
-      "-vectorize-slp",
-      rawLlPath,
-      "-o",
-      optLlPath
-    ]
-  }
-  if optOut.exitCode != 0 then
-    IO.FS.writeFile optLlPath (← IO.FS.readFile rawLlPath)
-
-  let lnirOptOut ← IO.Process.output {
-    cmd  := optCmd
-    args := #[
-      "-S",
-      "-passes=default<O3>,loop-vectorize,slp-vectorizer",
-      "-vectorize-loops",
-      "-vectorize-slp",
-      lnirLlPath,
-      "-o",
-      lnirOptLlPath
-    ]
-  }
-  if lnirOptOut.exitCode != 0 then
-    IO.FS.writeFile lnirOptLlPath lnirLlText
+  let runOptPass (inLl outLl : String) (fallback : IO String) : IO Unit := do
+    let out ← IO.Process.output {
+      cmd  := optCmd
+      args := #["-S", "-passes=default<O3>,loop-vectorize,slp-vectorizer", "-vectorize-loops", "-vectorize-slp", inLl, "-o", outLl]
+    }
+    if out.exitCode != 0 then IO.FS.writeFile outLl (← fallback)
+  runOptPass rawLlPath optLlPath (IO.FS.readFile rawLlPath)
+  runOptPass lnirLlPath lnirOptLlPath (pure lnirLlText)
 
   -- Step 3: clang -O3 linking both optLlPath and lnirOptLlPath against libleanshared.so and runtime/lean_native_runtime.c
   let linkOut ← IO.Process.output {

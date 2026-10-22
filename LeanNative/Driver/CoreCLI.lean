@@ -73,20 +73,14 @@ def findFlagValue (args : List String) (flag : String) (defaultVal : String) : S
 def hasFlag (args : List String) (flag : String) : Bool :=
   args.contains flag
 
-def findFirstPositional (args : List String) : String :=
-  match args with
+def findFirstPositional : List String → String
   | [] => ""
-  | "--input" :: v :: _ => v
-  | "--lnir" :: v :: _ => v
-  | "-o" :: _ :: rest => findFirstPositional rest
-  | "--opt" :: _ :: rest => findFirstPositional rest
-  | "--arch" :: _ :: rest => findFirstPositional rest
-  | "--target" :: _ :: rest => findFirstPositional rest
-  | "--profile" :: _ :: rest => findFirstPositional rest
-  | "--sm" :: _ :: rest => findFirstPositional rest
-  | "--samples" :: _ :: rest => findFirstPositional rest
-  | a :: rest =>
-    if a.startsWith "-" then findFirstPositional rest else a
+  | "--input" :: v :: _ | "--lnir" :: v :: _ => v
+  | flag :: v :: rest =>
+    if ["-o", "--opt", "--arch", "--target", "--profile", "--sm", "--samples"].contains flag then
+      findFirstPositional rest
+    else if flag.startsWith "-" then findFirstPositional (v :: rest) else flag
+  | [a] => if a.startsWith "-" then "" else a
 
 structure CoreCLIOptions where
   inputPath        : String := ""
@@ -171,6 +165,10 @@ private def writeOrPrint (outPath text : String) (msg? : Option String := none) 
     IO.FS.writeFile outPath text
     if let some m := msg? then IO.println m
   return 0
+
+private def writeAndPrintJsonOrSummary (outPath jsonText summaryText : String) (jsonFlag : Bool) : IO Unit := do
+  if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
+  IO.println (if jsonFlag then jsonText else summaryText)
 
 def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let opts := parseCoreCLIOptions args
@@ -356,9 +354,7 @@ def runCompileFastCheck (tag : String) (elaborateHook? : Option (String → IO L
       (some s!"[{tag}] Wrote FastCheck Apple Metal 3.0 shader to {outPath}")
   else
     let report := runFastCheckModule mod numSamples useConstraintProp
-    let jsonText := report.toJson
-    if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
-    if jsonFlag then IO.println jsonText else IO.println report.formatSummary
+    writeAndPrintJsonOrSummary outPath report.toJson report.formatSummary jsonFlag
     return 0
 
 def runCompileHybrid (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
@@ -394,9 +390,7 @@ def runSuperopt (elaborateHook? : Option (String → IO LNIRModule)) (args : Lis
       | none => throw <| IO.userError s!"[lean-native] Failed to parse hardware cost profile from '{profilePath}'"
     else
       pure (superoptModule target baseMod)
-  let jsonText := report.toJson
-  if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
-  if jsonFlag then IO.println jsonText else IO.println report.formatSummary
+  writeAndPrintJsonOrSummary outPath report.toJson report.formatSummary jsonFlag
   return 0
 
 def runPlugins (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
@@ -409,9 +403,7 @@ def runPlugins (elaborateHook? : Option (String → IO LNIRModule)) (args : List
   let baseMod ← loadInputModule elaborateHook? args
   let _ ← emitModuleTelemetryEvents telCfg target testAdversarial baseMod
   let (_, report) := runSegregatedPluginPipeline target testAdversarial baseMod
-  let jsonText := report.toJson
-  if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
-  if jsonFlag then IO.println jsonText else IO.println report.formatSummary
+  writeAndPrintJsonOrSummary outPath report.toJson report.formatSummary jsonFlag
   let allTvOk := report.declAudits.all (fun a => a.tvVerified)
   let ok := allTvOk && (!testAdversarial || report.adversarialRejected)
   return if ok then 0 else 1
@@ -544,9 +536,7 @@ def runValidateTV (elaborateHook? : Option (String → IO LNIRModule)) (args : L
   let baseMod ← loadInputModule elaborateHook? args
   let (optMod, _) := runDefaultPipeline baseMod
   let tvReport := validateTranslationModule baseMod optMod
-  let jsonText := tvReport.toJson
-  if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
-  if jsonFlag then IO.println jsonText else IO.println tvReport.formatSummary
+  writeAndPrintJsonOrSummary outPath tvReport.toJson tvReport.formatSummary jsonFlag
   return if tvReport.allPassed then 0 else 1
 
 def runEmitLNIR (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
@@ -556,12 +546,8 @@ def runEmitLNIR (tag : String) (elaborateHook? : Option (String → IO LNIRModul
   let mod ← loadInputModule elaborateHook? args fastCheckFlag
   let useWire := wireFlag || outPath.endsWith ".lnir"
   let outText := if useWire then mod.toWire else mod.toJson
-  if outPath.isEmpty then
-    IO.println outText
-  else
-    IO.FS.writeFile outPath outText
-    IO.println s!"[{tag}] Emitted LNIR ({if useWire then "wire" else "json"}, decls={mod.decls.length}) to {outPath}"
-  return 0
+  writeOrPrint outPath outText
+    (some s!"[{tag}] Emitted LNIR ({if useWire then "wire" else "json"}, decls={mod.decls.length}) to {outPath}")
 
 def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"=== Lean Native ({tag} v0.5.0) Self-Test ==="
@@ -686,49 +672,35 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
 
 private abbrev escapeJsonWorker := LeanNative.IR.jsonEscape
 
-private def extractRpcId (line : String) : String :=
-  match line.splitOn "\"id\"" with
-  | _ :: afterId :: _ =>
-    match afterId.splitOn ":" with
-    | _ :: afterColon :: _ =>
-      let trimmed := afterColon.trimAscii.toString
-      let tokenChars := trimmed.toList.takeWhile (fun c => c != ',' && c != '}' && c != ' ')
-      let tok := String.ofList tokenChars
-      if tok.isEmpty then "1" else tok
-    | _ => "1"
-  | _ => "1"
-
-private def extractRpcStringField (line : String) (key : String) : Option String :=
-  let pat := "\"" ++ key ++ "\""
-  match line.splitOn pat with
+private def extractRpcAfterColon (line : String) (key : String) : Option String :=
+  match line.splitOn ("\"" ++ key ++ "\"") with
   | _ :: afterKey :: _ =>
     match afterKey.splitOn ":" with
-    | _ :: afterColon :: _ =>
-      let trimmed := afterColon.trimAscii.toString
-      match trimmed.splitOn "\"" with
-      | _ :: val :: _ => some val
-      | _ => none
+    | _ :: afterColon :: _ => some afterColon.trimAscii.toString
     | _ => none
+  | _ => none
+
+private def extractRpcId (line : String) : String :=
+  match extractRpcAfterColon line "id" with
+  | some trimmed =>
+    let tok := String.ofList (trimmed.toList.takeWhile (fun c => c != ',' && c != '}' && c != ' '))
+    if tok.isEmpty then "1" else tok
+  | none => "1"
+
+private def extractRpcStringField (line : String) (key : String) : Option String := do
+  let trimmed ← extractRpcAfterColon line key
+  match trimmed.splitOn "\"" with
+  | _ :: val :: _ => some val
   | _ => none
 
 private def hasRpcBoolField (line : String) (key : String) (expected : Bool) : Bool :=
   let bStr := if expected then "true" else "false"
-  let pat1 := s!"\"{key}\":{bStr}"
-  let pat2 := s!"\"{key}\": {bStr}"
-  (line.splitOn pat1).length > 1 || (line.splitOn pat2).length > 1
+  (line.splitOn s!"\"{key}\":{bStr}").length > 1 || (line.splitOn s!"\"{key}\": {bStr}").length > 1
 
 private def extractRpcNatField (line : String) (key : String) (defaultVal : Nat) : Nat :=
-  let pat := "\"" ++ key ++ "\""
-  match line.splitOn pat with
-  | _ :: afterKey :: _ =>
-    match afterKey.splitOn ":" with
-    | _ :: afterColon :: _ =>
-      let trimmed := afterColon.trimAscii.toString
-      let digits := trimmed.toList.takeWhile Char.isDigit
-      let tok := String.ofList digits
-      tok.toNat?.getD defaultVal
-    | _ => defaultVal
-  | _ => defaultVal
+  match extractRpcAfterColon line key with
+  | some trimmed => (String.ofList (trimmed.toList.takeWhile Char.isDigit)).toNat?.getD defaultVal
+  | none => defaultVal
 
 structure WorkerCache where
   baseMod          : LNIRModule

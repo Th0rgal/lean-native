@@ -123,30 +123,24 @@ def forTarget (t : SuperoptTarget) : HardwareCostProfile :=
       matmulTileDim := 16
     }
 
-private def extractJsonStringField (raw : String) (key : String) : Option String :=
-  let pat := "\"" ++ key ++ "\""
-  match raw.splitOn pat with
+private def extractJsonAfterColon (raw : String) (key : String) : Option String :=
+  match raw.splitOn ("\"" ++ key ++ "\"") with
   | _ :: afterKey :: _ =>
     match afterKey.splitOn ":" with
-    | _ :: afterColon :: _ =>
-      let trimmed := afterColon.trimAscii.toString
-      match trimmed.splitOn "\"" with
-      | _ :: val :: _ => some val
-      | _ => none
+    | _ :: afterColon :: _ => some afterColon.trimAscii.toString
     | _ => none
   | _ => none
 
-private def extractJsonNatField (raw : String) (key : String) : Option Nat :=
-  let pat := "\"" ++ key ++ "\""
-  match raw.splitOn pat with
-  | _ :: afterKey :: _ =>
-    match afterKey.splitOn ":" with
-    | _ :: afterColon :: _ =>
-      let trimmed := afterColon.trimAscii.toString
-      let digits := trimmed.toList.takeWhile (fun c => c.isDigit)
-      if digits.isEmpty then none else (String.ofList digits).toNat?
-    | _ => none
+private def extractJsonStringField (raw : String) (key : String) : Option String := do
+  let trimmed ← extractJsonAfterColon raw key
+  match trimmed.splitOn "\"" with
+  | _ :: val :: _ => some val
   | _ => none
+
+private def extractJsonNatField (raw : String) (key : String) : Option Nat := do
+  let trimmed ← extractJsonAfterColon raw key
+  let digits := trimmed.toList.takeWhile (fun c => c.isDigit)
+  if digits.isEmpty then none else (String.ofList digits).toNat?
 
 /-- Parse a `HardwareCostProfile` from a `profiles/*.json` file. -/
 def fromJson? (raw : String) : Option HardwareCostProfile := do
@@ -388,27 +382,17 @@ def superoptSynthRules : List SynthRule :=
 def synthesizeTopLevelTemplates (e : ScalarExpr) : List ScalarExpr :=
   superoptSynthRules.foldl (fun acc rule => acc ++ rule.apply e) []
 
+private def unionVars (xs ys : List VarId) : List VarId :=
+  xs ++ ys.filter (fun x => !xs.contains x)
+
 /-- Collect all variable IDs referenced in a `ScalarExpr`. -/
 def collectScalarVars : ScalarExpr → List VarId
   | .constU64 _ | .constBool _ => []
   | .var id => [id]
-  | .binOp _ l r =>
-    let vl := collectScalarVars l
-    let vr := collectScalarVars r
-    vl ++ vr.filter (fun x => !vl.contains x)
+  | .binOp _ l r => unionVars (collectScalarVars l) (collectScalarVars r)
   | .unaryOp _ a => collectScalarVars a
-  | .select c t e =>
-    let vc := collectScalarVars c
-    let vt := collectScalarVars t
-    let ve := collectScalarVars e
-    let vct := vc ++ vt.filter (fun x => !vc.contains x)
-    vct ++ ve.filter (fun x => !vct.contains x)
-  | .fma a b c =>
-    let va := collectScalarVars a
-    let vb := collectScalarVars b
-    let vc := collectScalarVars c
-    let vab := va ++ vb.filter (fun x => !va.contains x)
-    vab ++ vc.filter (fun x => !vab.contains x)
+  | .select c t e | .fma c t e =>
+    unionVars (unionVars (collectScalarVars c) (collectScalarVars t)) (collectScalarVars e)
 
 /-- Extended algebraic normalizer on `SymExpr` that also canonicalizes associative constants,
     distributive constant factoring, `(x + x) -> x <<< 1`, and shift/mask composition so
@@ -542,36 +526,18 @@ def symCheckScalarEquiv (e cand : ScalarExpr) : Bool :=
     3. Enumerative algebraic & bitwise synthesis templates over `e` and its optimized subexpressions. -/
 partial def synthesizeCandidates (target : SuperoptTarget) (e : ScalarExpr) : List ScalarExpr :=
   -- First recursively optimize children so multi-level templates trigger
+  let bestOf (x : ScalarExpr) : ScalarExpr := (synthesizeCandidates target x).head?.getD x
   let eRec : ScalarExpr :=
     match e with
-    | .binOp op l r =>
-      let lBest := match (synthesizeCandidates target l).head? with | some c => c | none => l
-      let rBest := match (synthesizeCandidates target r).head? with | some c => c | none => r
-      .binOp op lBest rBest
-    | .unaryOp op a =>
-      let aBest := match (synthesizeCandidates target a).head? with | some c => c | none => a
-      .unaryOp op aBest
-    | .select c t f =>
-      let cBest := match (synthesizeCandidates target c).head? with | some x => x | none => c
-      let tBest := match (synthesizeCandidates target t).head? with | some x => x | none => t
-      let fBest := match (synthesizeCandidates target f).head? with | some x => x | none => f
-      .select cBest tBest fBest
-    | .fma a b c =>
-      let aBest := match (synthesizeCandidates target a).head? with | some x => x | none => a
-      let bBest := match (synthesizeCandidates target b).head? with | some x => x | none => b
-      let cBest := match (synthesizeCandidates target c).head? with | some x => x | none => c
-      .fma aBest bBest cBest
+    | .binOp op l r => .binOp op (bestOf l) (bestOf r)
+    | .unaryOp op a => .unaryOp op (bestOf a)
+    | .select c t f => .select (bestOf c) (bestOf t) (bestOf f)
+    | .fma a b c => .fma (bestOf a) (bestOf b) (bestOf c)
     | other => other
   let peepCand1 := LeanNative.Proofs.rewriteScalarPeephole e
   let peepCand2 := LeanNative.Proofs.rewriteScalarPeephole eRec
-  let symCand1 :=
-    match symExprToScalarExpr? (normSymExpr (symEvalScalar default e).expr) with
-    | some sc => [sc]
-    | none => []
-  let symCand2 :=
-    match symExprToScalarExpr? (normSymSuperopt (symEvalScalar default e).expr) with
-    | some sc => [sc]
-    | none => []
+  let symCand1 := (symExprToScalarExpr? (normSymExpr (symEvalScalar default e).expr)).toList
+  let symCand2 := (symExprToScalarExpr? (normSymSuperopt (symEvalScalar default e).expr)).toList
   let tmplCands1 := synthesizeTopLevelTemplates e
   let tmplCands2 := synthesizeTopLevelTemplates eRec
   let tmplCands3 := tmplCands1.flatMap synthesizeTopLevelTemplates ++ tmplCands2.flatMap synthesizeTopLevelTemplates

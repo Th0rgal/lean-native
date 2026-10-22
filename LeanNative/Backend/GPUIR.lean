@@ -46,50 +46,26 @@ def isTypeGpuSupported (ty : LNIRType) : Bool :=
 /-- Inspect an `LNIRExpr` for constructs incompatible with GPU execution.
     Returns a list of diagnostic reasons if incompatible (empty list means compatible). -/
 def checkExprGpuCompatibility (e : LNIRExpr) : List String :=
+  let reqScalar (opName : String) (ty : LNIRType) : List String :=
+    if ty.isUnboxedScalar then [] else [s!"{opName} element type {reprStr ty} is not an unboxed scalar"]
   match e with
-  | .scalar _ => []
-  | .constU256 _ => []
-  | .mulDivDown _ _ _ => []
-  | .mulDivUp _ _ _ => []
-  | .storageLoad _ _ => []
-  | .storageStore _ _ _ => []
-  | .mkTuple _ => []
-  | .projTuple _ _ => []
-  | .allocCtor tag _ _ =>
-    [s!"heap constructor allocation (allocCtor tag={tag}) is not allowed on GPU"]
-  | .ctorGetObj _ _ =>
-    ["boxed object field projection (ctorGetObj) is not allowed on GPU"]
-  | .ctorGetScalar _ _ ty =>
-    if isTypeGpuSupported ty then []
-    else [s!"ctorGetScalar has non-GPU type {reprStr ty}"]
-  | .isExclusive _ =>
-    ["reference-count exclusivity check (isExclusive) is a host-only operation"]
-  | .sarrayLen _ => []
-  | .sarrayDataPtr _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"sarrayDataPtr element type {reprStr elemTy} is not an unboxed scalar"]
-  | .sarrayEnsureExclusive _ _ =>
-    ["COW buffer cloning (sarrayEnsureExclusive) must execute on host before kernel launch"]
-  | .sarrayGet _ _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"sarrayGet element type {reprStr elemTy} is not an unboxed scalar"]
-  | .sarraySet _ _ _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"sarraySet element type {reprStr elemTy} is not an unboxed scalar"]
-  | .rawLoad _ _ elemTy =>
-    if elemTy.isUnboxedScalar then []
-    else [s!"rawLoad element type {reprStr elemTy} is not an unboxed scalar"]
-  | .boxScalar _ _ =>
-    ["scalar boxing (boxScalar) allocates on the Lean heap and cannot run on GPU"]
-  | .unboxScalar _ _ =>
-    ["scalar unboxing (unboxScalar) accesses a boxed heap pointer and cannot run on GPU"]
+  | .scalar _ | .constU256 _ | .mulDivDown _ _ _ | .mulDivUp _ _ _
+  | .storageLoad _ _ | .storageStore _ _ _ | .mkTuple _ | .projTuple _ _ | .sarrayLen _ => []
+  | .allocCtor tag _ _ => [s!"heap constructor allocation (allocCtor tag={tag}) is not allowed on GPU"]
+  | .ctorGetObj _ _ => ["boxed object field projection (ctorGetObj) is not allowed on GPU"]
+  | .ctorGetScalar _ _ ty => if isTypeGpuSupported ty then [] else [s!"ctorGetScalar has non-GPU type {reprStr ty}"]
+  | .isExclusive _ => ["reference-count exclusivity check (isExclusive) is a host-only operation"]
+  | .sarrayDataPtr _ elemTy => reqScalar "sarrayDataPtr" elemTy
+  | .sarrayEnsureExclusive _ _ => ["COW buffer cloning (sarrayEnsureExclusive) must execute on host before kernel launch"]
+  | .sarrayGet _ _ elemTy => reqScalar "sarrayGet" elemTy
+  | .sarraySet _ _ _ elemTy => reqScalar "sarraySet" elemTy
+  | .rawLoad _ _ elemTy => reqScalar "rawLoad" elemTy
+  | .boxScalar _ _ => ["scalar boxing (boxScalar) allocates on the Lean heap and cannot run on GPU"]
+  | .unboxScalar _ _ => ["scalar unboxing (unboxScalar) accesses a boxed heap pointer and cannot run on GPU"]
   | .call fnName _ retTy isExtern =>
-    if isExtern then
-      [s!"external CPU FFI call '{fnName}' cannot be offloaded to GPU"]
-    else if !isTypeGpuSupported retTy then
-      [s!"call to '{fnName}' returns non-GPU type {reprStr retTy}"]
-    else
-      []
+    if isExtern then [s!"external CPU FFI call '{fnName}' cannot be offloaded to GPU"]
+    else if !isTypeGpuSupported retTy then [s!"call to '{fnName}' returns non-GPU type {reprStr retTy}"]
+    else []
 
 /-- Recursively check an `LNIRCode` block for GPU compatibility violations. -/
 partial def checkCodeGpuCompatibility (code : LNIRCode) : List String :=
@@ -135,33 +111,19 @@ partial def checkCodeGpuCompatibility (code : LNIRCode) : List String :=
 def codeHasGpuBlocker (code : LNIRCode) : Bool :=
   !(checkCodeGpuCompatibility code).isEmpty
 
-/-- Check whether an `LNIRCode` contains at least one `parFor` data-parallel region. -/
-partial def containsParFor (code : LNIRCode) : Bool :=
-  match code with
-  | .letBind _ _ _ k => containsParFor k
-  | .rawStore _ _ _ _ k => containsParFor k
-  | .incRef _ _ k => containsParFor k
-  | .decRef _ _ k => containsParFor k
-  | .ite _ t e => containsParFor t || containsParFor e
-  | .seqFor _ _ _ _ _ _ step k => containsParFor step || containsParFor k
-  | .parFor _ _ _ _ _ _ => true
-  | .ret _ => false
-  | .unreachable => false
-
 /-- Extract all `(outVar, lenVar, inputs, elemTy, kernel)` regions from an `LNIRCode` tree. -/
 partial def extractParForRegions (code : LNIRCode) :
     List (VarId × VarId × List VarId × LNIRType × ParallelKernelKind) :=
   match code with
-  | .letBind _ _ _ k => extractParForRegions k
-  | .rawStore _ _ _ _ k => extractParForRegions k
-  | .incRef _ _ k => extractParForRegions k
-  | .decRef _ _ k => extractParForRegions k
-  | .ite _ t e => extractParForRegions t ++ extractParForRegions e
-  | .seqFor _ _ _ _ _ _ step k => extractParForRegions step ++ extractParForRegions k
+  | .letBind _ _ _ k | .rawStore _ _ _ _ k | .incRef _ _ k | .decRef _ _ k => extractParForRegions k
+  | .ite _ t e | .seqFor _ _ _ _ _ _ t e => extractParForRegions t ++ extractParForRegions e
   | .parFor outVar lenVar inputs elemTy kernel k =>
     (outVar, lenVar, inputs, elemTy, kernel) :: extractParForRegions k
-  | .ret _ => []
-  | .unreachable => []
+  | .ret _ | .unreachable => []
+
+/-- Check whether an `LNIRCode` contains at least one `parFor` data-parallel region. -/
+def containsParFor (code : LNIRCode) : Bool :=
+  !(extractParForRegions code).isEmpty
 
 /-- Automatic GPU suitability analyzer for an `LNIRDecl` shared across PTX, MLIR/NVVM, and Metal.
     Checks parameter/return types (`isTypeGpuSupported`), verifies the absence of
@@ -184,80 +146,25 @@ def analyzeDeclGpuSuitability (d : LNIRDecl) : Bool × List String :=
   else
     (true, [])
 
+private def mkDesc (sym : String) (arch : GPUKernelArchetype) (bufs : Nat)
+    (shmem : Nat := 0) (u256 : Bool := false) : GPUKernelDescriptor :=
+  { symbolName := sym, archetype := arch, blockThreads := 256,
+    sharedMemBytes := shmem, uses256Bit := u256, bufferCount := bufs }
+
 /-- Built-in standard GPU kernel descriptors emitted for every module. -/
 def builtinGPUDescriptors : List GPUKernelDescriptor := [
-  { symbolName     := "lean_native_kernel_map_scale_add"
-    archetype      := .mapScaleAddU64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 5 },
-  { symbolName     := "lean_native_kernel_zip_add"
-    archetype      := .zipAddU64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 4 },
-  { symbolName     := "lean_native_kernel_zip_mul"
-    archetype      := .zipMulU64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 4 },
-  { symbolName     := "lean_native_kernel_saxpy"
-    archetype      := .saxpyU64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 5 },
-  { symbolName     := "lean_native_kernel_stencil1d"
-    archetype      := .stencil1D3PtU64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 6 },
-  { symbolName     := "lean_native_kernel_dot_reduce_u64"
-    archetype      := .dotReduceSharedU64
-    blockThreads   := 256
-    sharedMemBytes := 2048
-    uses256Bit     := false
-    bufferCount    := 4 },
-  { symbolName     := "lean_native_kernel_matmul_tiled_u64"
-    archetype      := .matmulTiled16x16U64
-    blockThreads   := 256
-    sharedMemBytes := 4096
-    uses256Bit     := false
-    bufferCount    := 4 },
-  { symbolName     := "lean_native_kernel_saxpy_f64"
-    archetype      := .saxpyF64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 5 },
-  { symbolName     := "lean_native_kernel_map_scale_add_f64"
-    archetype      := .mapScaleAddF64
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 5 },
-  { symbolName     := "lean_native_kernel_fma_f32"
-    archetype      := .fmaF32
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := false
-    bufferCount    := 5 },
-  { symbolName     := "lean_native_kernel_evm_u256_batch"
-    archetype      := .evmU256Batch
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := true
-    bufferCount    := 4 },
-  { symbolName     := "lean_native_fastcheck_metal_kernel"
-    archetype      := .fastCheckFuzzU256
-    blockThreads   := 256
-    sharedMemBytes := 0
-    uses256Bit     := true
-    bufferCount    := 5 }
+  mkDesc "lean_native_kernel_map_scale_add" .mapScaleAddU64 5,
+  mkDesc "lean_native_kernel_zip_add" .zipAddU64 4,
+  mkDesc "lean_native_kernel_zip_mul" .zipMulU64 4,
+  mkDesc "lean_native_kernel_saxpy" .saxpyU64 5,
+  mkDesc "lean_native_kernel_stencil1d" .stencil1D3PtU64 6,
+  mkDesc "lean_native_kernel_dot_reduce_u64" .dotReduceSharedU64 4 2048,
+  mkDesc "lean_native_kernel_matmul_tiled_u64" .matmulTiled16x16U64 4 4096,
+  mkDesc "lean_native_kernel_saxpy_f64" .saxpyF64 5,
+  mkDesc "lean_native_kernel_map_scale_add_f64" .mapScaleAddF64 5,
+  mkDesc "lean_native_kernel_fma_f32" .fmaF32 5,
+  mkDesc "lean_native_kernel_evm_u256_batch" .evmU256Batch 4 0 true,
+  mkDesc "lean_native_fastcheck_metal_kernel" .fastCheckFuzzU256 5 0 true
 ]
 
 /-- Lower an `LNIRModule` into a list of unified `GPUKernelDescriptor` records covering all

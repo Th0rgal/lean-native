@@ -280,16 +280,12 @@ def symEvalScalar (st : SymExecState) : ScalarExpr → SymStateVal
     let sc := symEvalScalar st cond
     let sthen := symEvalScalar st t
     let selse := symEvalScalar st e
+    let mkBranch (sv : SymStateVal) : SymStateVal :=
+      { expr := sv.expr, nonPoison := sc.nonPoison && sv.nonPoison, noUB := sc.noUB && sv.noUB }
     match sc.expr with
-    | .constBool true =>
-      { expr := sthen.expr, nonPoison := sc.nonPoison && sthen.nonPoison, noUB := sc.noUB && sthen.noUB }
-    | .constBool false =>
-      { expr := selse.expr, nonPoison := sc.nonPoison && selse.nonPoison, noUB := sc.noUB && selse.noUB }
-    | .constU64 n =>
-      if n != 0 then
-        { expr := sthen.expr, nonPoison := sc.nonPoison && sthen.nonPoison, noUB := sc.noUB && sthen.noUB }
-      else
-        { expr := selse.expr, nonPoison := sc.nonPoison && selse.nonPoison, noUB := sc.noUB && selse.noUB }
+    | .constBool true => mkBranch sthen
+    | .constBool false => mkBranch selse
+    | .constU64 n => if n != 0 then mkBranch sthen else mkBranch selse
     | _ =>
       { expr := normSymIteStep sc.expr sthen.expr selse.expr
         nonPoison := sc.nonPoison && sthen.nonPoison && selse.nonPoison
@@ -318,29 +314,18 @@ def symEvalExpr (st : SymExecState) (dst : VarId) (e : LNIRExpr) : SymExecState 
       else
         .tuple [.constU64 val.lo0, .constU64 val.lo1, .constU64 val.hi0, .constU64 val.hi1]
     st.bindVar dst { expr := symVal, nonPoison := true, noUB := true }
-  | .mulDivDown aVar bVar denomVar =>
+  | .mulDivDown aVar bVar denomVar | .mulDivUp aVar bVar denomVar =>
     let sa := st.lookupVar aVar
     let sb := st.lookupVar bVar
     let sd := st.lookupVar denomVar
     let divZero := sd.expr == .constU64 0
     let mulExpr := normSymBinOpStep .mul sa.expr sb.expr
-    let divExpr := normSymBinOpStep .div mulExpr sd.expr
+    let numExpr :=
+      match e with
+      | .mulDivUp _ _ _ => normSymBinOpStep .add mulExpr (normSymBinOpStep .sub sd.expr (.constU64 1))
+      | _ => mulExpr
     st.bindVar dst {
-      expr := divExpr
-      nonPoison := sa.nonPoison && sb.nonPoison && sd.nonPoison
-      noUB := sa.noUB && sb.noUB && sd.noUB && !divZero
-    }
-  | .mulDivUp aVar bVar denomVar =>
-    let sa := st.lookupVar aVar
-    let sb := st.lookupVar bVar
-    let sd := st.lookupVar denomVar
-    let divZero := sd.expr == .constU64 0
-    let mulExpr := normSymBinOpStep .mul sa.expr sb.expr
-    let denomMinusOne := normSymBinOpStep .sub sd.expr (.constU64 1)
-    let roundedNum := normSymBinOpStep .add mulExpr denomMinusOne
-    let divExpr := normSymBinOpStep .div roundedNum sd.expr
-    st.bindVar dst {
-      expr := divExpr
+      expr := normSymBinOpStep .div numExpr sd.expr
       nonPoison := sa.nonPoison && sb.nonPoison && sd.nonPoison
       noUB := sa.noUB && sb.noUB && sd.noUB && !divZero
     }
@@ -717,20 +702,13 @@ theorem sound_of_checkSingleSample_eq_true (fuel : Nat) (env : VarEnv) (st : Hea
     (hcheck : checkSingleSample fuel env st src tgt = true)
     (hsrc : evalCode fuel env st src = .ok (v, st')) :
     ∃ vTgt, evalCode fuel env st tgt = .ok (vTgt, st') ∧ (v == vTgt) = true := by
-  unfold checkSingleSample at hcheck
-  rw [hsrc] at hcheck
-  simp only at hcheck
+  unfold checkSingleSample at hcheck; rw [hsrc] at hcheck
   cases htgt : evalCode fuel env st tgt with
-  | error err =>
-    rw [htgt] at hcheck
-    contradiction
+  | error _ => rw [htgt] at hcheck; contradiction
   | ok pair =>
-    rcases pair with ⟨vTgt, stTgt⟩
-    rw [htgt] at hcheck
+    rcases pair with ⟨vTgt, stTgt⟩; rw [htgt] at hcheck
     simp only [Bool.and_eq_true, decide_eq_true_eq] at hcheck
-    rcases hcheck with ⟨hv, hst⟩
-    subst hst
-    exact ⟨vTgt, rfl, hv⟩
+    exact ⟨vTgt, hcheck.2 ▸ rfl, hcheck.1⟩
 
 /-- Reflexive soundness of symbolic translation validation (`symbolicTV_refl_sound`). -/
 theorem symbolicTV_refl_sound (c : LNIRCode) (fuel : Nat) (samples : List (VarEnv × HeapState)) :

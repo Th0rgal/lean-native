@@ -378,12 +378,7 @@ theorem unboxNestedTupleDeadElim_refines
 
 theorem varEnv_bind_idem (env : VarEnv) (x : VarId) (v : Val) :
     (env.bind x v).bind x v = env.bind x v := by
-  funext y
-  simp only [VarEnv.bind]
-  by_cases h : (y == x) = true
-  · simp [h]
-  · have hf : (y == x) = false := Bool.eq_false_iff.mpr h
-    simp [hf]
+  funext y; simp only [VarEnv.bind]; cases y == x <;> rfl
 
 /-- End-to-end `CodeRefines` theorem for Preheader Exclusivity Hoisting (`hoistExclusivityPreheader_refines`):
     Once `sarrayEnsureExclusive arrVar elemTy` is bound to `exclVar` in the loop preheader,

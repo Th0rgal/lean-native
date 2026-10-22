@@ -834,30 +834,33 @@ def evalU64 (e : Expr) (v0 v1 v2 v3 : UInt64) : UInt64 :=
   | .varSlot _  => v3
   | .unary op a =>
     let va := evalU64 a v0 v1 v2 v3
-    if op == "~" then ~~~va
-    else if op == "-" then 0 - va
-    else if op == "!" then (if va == 0 then 1 else 0)
-    else va
+    match op with
+    | "~" => ~~~va
+    | "-" => 0 - va
+    | "!" => if va == 0 then 1 else 0
+    | _   => va
   | .bin op l r =>
     let vl := evalU64 l v0 v1 v2 v3
     let vr := evalU64 r v0 v1 v2 v3
-    if op == "+" then vl + vr
-    else if op == "-" then vl - vr
-    else if op == "*" then vl * vr
-    else if op == "/" then (if vr == 0 then 0 else vl / vr)
-    else if op == "%" then (if vr == 0 then 0 else vl % vr)
-    else if op == "&" then vl &&& vr
-    else if op == "|" then vl ||| vr
-    else if op == "^" then vl ^^^ vr
-    else if op == "<<" then (if vr >= 64 then 0 else vl <<< vr)
-    else if op == ">>" then (if vr >= 64 then 0 else vl >>> vr)
-    else if op == "==" then (if vl == vr then 1 else 0)
-    else if op == "!=" then (if vl != vr then 1 else 0)
-    else if op == "<" then (if decide (vl < vr) then 1 else 0)
-    else if op == "<=" then (if decide (vl ≤ vr) then 1 else 0)
-    else if op == ">" then (if decide (vr < vl) then 1 else 0)
-    else if op == ">=" then (if decide (vr ≤ vl) then 1 else 0)
-    else 0
+    let b2u (b : Bool) : UInt64 := if b then 1 else 0
+    match op with
+    | "+"  => vl + vr
+    | "-"  => vl - vr
+    | "*"  => vl * vr
+    | "/"  => if vr == 0 then 0 else vl / vr
+    | "%"  => if vr == 0 then 0 else vl % vr
+    | "&"  => vl &&& vr
+    | "|"  => vl ||| vr
+    | "^"  => vl ^^^ vr
+    | "<<" => if vr >= 64 then 0 else vl <<< vr
+    | ">>" => if vr >= 64 then 0 else vl >>> vr
+    | "==" => b2u (vl == vr)
+    | "!=" => b2u (vl != vr)
+    | "<"  => b2u (decide (vl < vr))
+    | "<=" => b2u (decide (vl ≤ vr))
+    | ">"  => b2u (decide (vr < vl))
+    | ">=" => b2u (decide (vr ≤ vl))
+    | _    => 0
 
 /-- Evaluate an `Expr` on four 256-bit EVM words `(v0, v1, v2, v3)`. -/
 def evalU256 (e : Expr) (v0 v1 v2 v3 : UInt256) : UInt256 :=
@@ -869,30 +872,33 @@ def evalU256 (e : Expr) (v0 v1 v2 v3 : UInt256) : UInt256 :=
   | .varSlot _  => v3
   | .unary op a =>
     let va := evalU256 a v0 v1 v2 v3
-    if op == "~" then UInt256.bitNot va
-    else if op == "-" then UInt256.sub UInt256.zero va
-    else if op == "!" then (if va == UInt256.zero then UInt256.one else UInt256.zero)
-    else va
+    match op with
+    | "~" => UInt256.bitNot va
+    | "-" => UInt256.sub UInt256.zero va
+    | "!" => if va == UInt256.zero then UInt256.one else UInt256.zero
+    | _   => va
   | .bin op l r =>
     let vl := evalU256 l v0 v1 v2 v3
     let vr := evalU256 r v0 v1 v2 v3
-    if op == "+" then UInt256.add vl vr
-    else if op == "-" then UInt256.sub vl vr
-    else if op == "*" then UInt256.mul vl vr
-    else if op == "/" then (UInt256.div vl vr).getD UInt256.zero
-    else if op == "%" then (UInt256.mod vl vr).getD UInt256.zero
-    else if op == "&" then UInt256.bitAnd vl vr
-    else if op == "|" then UInt256.bitOr vl vr
-    else if op == "^" then UInt256.bitXor vl vr
-    else if op == "<<" then UInt256.shl vl vr.toNat
-    else if op == ">>" then UInt256.shr vl vr.toNat
-    else if op == "==" then (if vl == vr then UInt256.one else UInt256.zero)
-    else if op == "!=" then (if vl != vr then UInt256.one else UInt256.zero)
-    else if op == "<" then (if UInt256.lt vl vr then UInt256.one else UInt256.zero)
-    else if op == "<=" then (if UInt256.le vl vr then UInt256.one else UInt256.zero)
-    else if op == ">" then (if UInt256.lt vr vl then UInt256.one else UInt256.zero)
-    else if op == ">=" then (if UInt256.le vr vl then UInt256.one else UInt256.zero)
-    else UInt256.zero
+    let b2u (b : Bool) : UInt256 := if b then UInt256.one else UInt256.zero
+    match op with
+    | "+"  => UInt256.add vl vr
+    | "-"  => UInt256.sub vl vr
+    | "*"  => UInt256.mul vl vr
+    | "/"  => (UInt256.div vl vr).getD UInt256.zero
+    | "%"  => (UInt256.mod vl vr).getD UInt256.zero
+    | "&"  => UInt256.bitAnd vl vr
+    | "|"  => UInt256.bitOr vl vr
+    | "^"  => UInt256.bitXor vl vr
+    | "<<" => UInt256.shl vl vr.toNat
+    | ">>" => UInt256.shr vl vr.toNat
+    | "==" => b2u (vl == vr)
+    | "!=" => b2u (vl != vr)
+    | "<"  => b2u (UInt256.lt vl vr)
+    | "<=" => b2u (UInt256.le vl vr)
+    | ">"  => b2u (UInt256.lt vr vl)
+    | ">=" => b2u (UInt256.le vr vl)
+    | _    => UInt256.zero
 
 def boundaryU64 : Array UInt64 := #[
   0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64,
