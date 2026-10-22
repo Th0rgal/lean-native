@@ -169,72 +169,49 @@ def _fallback_rpn_eval_batch(
         acc = (x0 | np.uint64(1000000)) if arg1 > 0 else x0
         rhs = (acc + a0) if arg1 == 0 else a1
 
+        _RPN_NP_FN = {
+            RPN_OP_ADD: lambda acc, a0, rhs: acc + a0,
+            RPN_OP_SUB_SAT: lambda acc, a0, rhs: np.where(acc >= rhs, acc - rhs, np.uint64(0)),
+            RPN_OP_MUL: lambda acc, a0, rhs: acc * rhs,
+            RPN_OP_XOR: lambda acc, a0, rhs: acc ^ rhs,
+            RPN_OP_AND: lambda acc, a0, rhs: acc & rhs,
+            RPN_OP_OR: lambda acc, a0, rhs: acc | rhs,
+            RPN_OP_EQ: lambda acc, a0, rhs: np.where(acc == rhs, np.uint64(1), np.uint64(0)),
+            RPN_OP_LT: lambda acc, a0, rhs: np.where(acc < rhs, np.uint64(1), np.uint64(0)),
+            RPN_OP_LE: lambda acc, a0, rhs: np.where(acc <= rhs, np.uint64(1), np.uint64(0)),
+            RPN_OP_NE: lambda acc, a0, rhs: np.where(acc != rhs, np.uint64(1), np.uint64(0)),
+        }
         for step in range(RPN_PROGRAM_LEN):
-            op = int(opcodes[step])
-            if op == RPN_OP_NOP:
-                continue
-            elif op == RPN_OP_ADD:
-                acc = acc + a0
-            elif op == RPN_OP_SUB_SAT:
-                acc = np.where(acc >= rhs, acc - rhs, np.uint64(0))
-            elif op == RPN_OP_MUL:
-                acc = acc * rhs
-            elif op == RPN_OP_XOR:
-                acc = acc ^ rhs
-            elif op == RPN_OP_AND:
-                acc = acc & rhs
-            elif op == RPN_OP_OR:
-                acc = acc | rhs
-            elif op == RPN_OP_EQ:
-                acc = np.where(acc == rhs, np.uint64(1), np.uint64(0))
-            elif op == RPN_OP_LT:
-                acc = np.where(acc < rhs, np.uint64(1), np.uint64(0))
-            elif op == RPN_OP_LE:
-                acc = np.where(acc <= rhs, np.uint64(1), np.uint64(0))
-            elif op == RPN_OP_NE:
-                acc = np.where(acc != rhs, np.uint64(1), np.uint64(0))
+            fn = _RPN_NP_FN.get(int(opcodes[step]))
+            if fn is not None:
+                acc = fn(acc, a0, rhs)
 
-        bad_mask = acc == np.uint64(0)
-        bad_count = int(np.sum(bad_mask))
-        if bad_count > 0:
-            return bad_count, int(1000000 + arg0), 1000000
-        return 0, 0, 0
+        bad_count = int(np.sum(acc == np.uint64(0)))
+        return (bad_count, int(1000000 + arg0), 1000000) if bad_count > 0 else (0, 0, 0)
 
     # Pure-Python fast fixed-length 8-opcode RPN evaluation over pre-allocated uint64 seed words
     mask64 = 0xFFFFFFFFFFFFFFFF
-    a0 = arg0 & mask64
-    a1 = arg1 & mask64
-    base_x1 = 1000000 if a1 > 0 else (int(seeds[0]) & mask64 if seeds else 0)
-    acc = base_x1
+    a0, a1 = arg0 & mask64, arg1 & mask64
+    acc = 1000000 if a1 > 0 else (int(seeds[0]) & mask64 if seeds else 0)
     rhs = ((acc + a0) & mask64) if a1 == 0 else a1
+    _RPN_PY_FN = {
+        RPN_OP_ADD: lambda acc: (acc + a0) & mask64,
+        RPN_OP_SUB_SAT: lambda acc: (acc - rhs) if acc >= rhs else 0,
+        RPN_OP_MUL: lambda acc: (acc * rhs) & mask64,
+        RPN_OP_XOR: lambda acc: acc ^ rhs,
+        RPN_OP_AND: lambda acc: acc & rhs,
+        RPN_OP_OR: lambda acc: acc | rhs,
+        RPN_OP_EQ: lambda acc: 1 if acc == rhs else 0,
+        RPN_OP_LT: lambda acc: 1 if acc < rhs else 0,
+        RPN_OP_LE: lambda acc: 1 if acc <= rhs else 0,
+        RPN_OP_NE: lambda acc: 1 if acc != rhs else 0,
+    }
     for step in range(RPN_PROGRAM_LEN):
-        op = int(opcodes[step])
-        if op == RPN_OP_NOP:
-            continue
-        elif op == RPN_OP_ADD:
-            acc = (acc + a0) & mask64
-        elif op == RPN_OP_SUB_SAT:
-            acc = (acc - rhs) if acc >= rhs else 0
-        elif op == RPN_OP_MUL:
-            acc = (acc * rhs) & mask64
-        elif op == RPN_OP_XOR:
-            acc = acc ^ rhs
-        elif op == RPN_OP_AND:
-            acc = acc & rhs
-        elif op == RPN_OP_OR:
-            acc = acc | rhs
-        elif op == RPN_OP_EQ:
-            acc = 1 if acc == rhs else 0
-        elif op == RPN_OP_LT:
-            acc = 1 if acc < rhs else 0
-        elif op == RPN_OP_LE:
-            acc = 1 if acc <= rhs else 0
-        elif op == RPN_OP_NE:
-            acc = 1 if acc != rhs else 0
+        fn = _RPN_PY_FN.get(int(opcodes[step]))
+        if fn is not None:
+            acc = fn(acc)
 
-    if acc == 0:
-        return len(seeds) if seeds else 1, (1000000 + a0) & mask64, 1000000
-    return 0, 0, 0
+    return (len(seeds) if seeds else 1, (1000000 + a0) & mask64, 1000000) if acc == 0 else (0, 0, 0)
 
 
 def _prewarm_jax_rpn_kernel() -> None:
@@ -270,44 +247,28 @@ def _prewarm_jax_rpn_kernel() -> None:
 
             def body_fn(step: Any, acc: Any) -> Any:
                 op = opcodes[step]
-                acc_add = acc + arg0
-                acc_sub = jnp.where(acc >= rhs, acc - rhs, jnp.uint64(0))
-                acc_mul = acc * rhs
-                acc_xor = acc ^ rhs
-                acc_and = acc & rhs
-                acc_or = acc | rhs
-                acc_eq = jnp.where(acc == rhs, jnp.uint64(1), jnp.uint64(0))
-                acc_lt = jnp.where(acc < rhs, jnp.uint64(1), jnp.uint64(0))
-                acc_le = jnp.where(acc <= rhs, jnp.uint64(1), jnp.uint64(0))
-                acc_ne = jnp.where(acc != rhs, jnp.uint64(1), jnp.uint64(0))
-
                 res = acc
-                res = jnp.where(op == RPN_OP_ADD, acc_add, res)
-                res = jnp.where(op == RPN_OP_SUB_SAT, acc_sub, res)
-                res = jnp.where(op == RPN_OP_MUL, acc_mul, res)
-                res = jnp.where(op == RPN_OP_XOR, acc_xor, res)
-                res = jnp.where(op == RPN_OP_AND, acc_and, res)
-                res = jnp.where(op == RPN_OP_OR, acc_or, res)
-                res = jnp.where(op == RPN_OP_EQ, acc_eq, res)
-                res = jnp.where(op == RPN_OP_LT, acc_lt, res)
-                res = jnp.where(op == RPN_OP_LE, acc_le, res)
-                res = jnp.where(op == RPN_OP_NE, acc_ne, res)
+                for code, expr in (
+                    (RPN_OP_ADD, acc + arg0),
+                    (RPN_OP_SUB_SAT, jnp.where(acc >= rhs, acc - rhs, jnp.uint64(0))),
+                    (RPN_OP_MUL, acc * rhs),
+                    (RPN_OP_XOR, acc ^ rhs),
+                    (RPN_OP_AND, acc & rhs),
+                    (RPN_OP_OR, acc | rhs),
+                    (RPN_OP_EQ, jnp.where(acc == rhs, jnp.uint64(1), jnp.uint64(0))),
+                    (RPN_OP_LT, jnp.where(acc < rhs, jnp.uint64(1), jnp.uint64(0))),
+                    (RPN_OP_LE, jnp.where(acc <= rhs, jnp.uint64(1), jnp.uint64(0))),
+                    (RPN_OP_NE, jnp.where(acc != rhs, jnp.uint64(1), jnp.uint64(0))),
+                ):
+                    res = jnp.where(op == code, expr, res)
                 return res
 
             final_acc = jax.lax.fori_loop(0, RPN_PROGRAM_LEN, body_fn, init_acc)
-            bad_mask = final_acc == jnp.uint64(0)
-            bad_count = jnp.sum(bad_mask.astype(jnp.int32))
-            return bad_count
+            return jnp.sum((final_acc == jnp.uint64(0)).astype(jnp.int32))
 
         _PREWARMED_SEEDS_JAX = jnp.arange(PREWARM_RPN_BATCH_SIZE, dtype=jnp.uint64)
         warm_opcodes = jnp.zeros((RPN_PROGRAM_LEN,), dtype=jnp.int32)
-        warm_out = _jit_rpn_kernel(
-            _PREWARMED_SEEDS_JAX,
-            warm_opcodes,
-            jnp.uint64(0),
-            jnp.uint64(0),
-        )
-        warm_out.block_until_ready()
+        _jit_rpn_kernel(_PREWARMED_SEEDS_JAX, warm_opcodes, jnp.uint64(0), jnp.uint64(0)).block_until_ready()
         _jax_rpn_eval_batch_jit = _jit_rpn_kernel
         _JAX_AVAILABLE = True
         devs = jax.devices()
@@ -1244,10 +1205,17 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
 
         ttl = max(0, int(req.get("ttl", 2)))
 
+        local_jobs = {
+            "/verify-ptx": lambda: NODE_STATE.run_hardware_job(lambda: _verify_ptx_local(req)),
+            "/run-tpu-bench": lambda: NODE_STATE.run_hardware_job(lambda: run_local_tpu_xla_bench(req)),
+            "/run-tpu-fastcheck": lambda: run_local_tpu_fastcheck(req),
+            "/run-tpu-batch-fastcheck": lambda: run_local_tpu_batch_fastcheck(req),
+            "/train-tactic-model": lambda: NODE_STATE.run_hardware_job(lambda: run_local_tactic_model_training(req)),
+        }
         if self.path == "/v1/compute":
             self._send_json(200, run_unified_v1_compute(req))
-        elif self.path == "/verify-ptx":
-            self._send_local_job(NODE_STATE.run_hardware_job(lambda: _verify_ptx_local(req)), ttl)
+        elif self.path in local_jobs:
+            self._send_local_job(local_jobs[self.path](), ttl)
         elif self.path == "/tune-profile":
             profile_id = req.get("profile_id", "colab_gpu_auto")
             target = req.get("target", "cuda_ptx")
@@ -1256,16 +1224,7 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
             try:
                 tuner = REPO_ROOT / "scripts" / "tune_hardware_profile.py"
                 proc = subprocess.run(
-                    [
-                        sys.executable,
-                        str(tuner),
-                        "--profile-id",
-                        profile_id,
-                        "--target",
-                        target,
-                        "--output",
-                        out_path,
-                    ],
+                    [sys.executable, str(tuner), "--profile-id", profile_id, "--target", target, "--output", out_path],
                     capture_output=True,
                     text=True,
                     timeout=60,
@@ -1273,24 +1232,11 @@ class ColabGPUHandler(http.server.BaseHTTPRequestHandler):
                 profile_data = json.loads(Path(out_path).read_text()) if proc.returncode == 0 else None
                 self._send_json(
                     200,
-                    {
-                        "ok": proc.returncode == 0,
-                        "profile": profile_data,
-                        "stdout": proc.stdout,
-                        "stderr": proc.stderr,
-                    },
+                    {"ok": proc.returncode == 0, "profile": profile_data, "stdout": proc.stdout, "stderr": proc.stderr},
                 )
             finally:
                 if os.path.exists(out_path):
                     os.unlink(out_path)
-        elif self.path == "/run-tpu-bench":
-            self._send_local_job(NODE_STATE.run_hardware_job(lambda: run_local_tpu_xla_bench(req)), ttl)
-        elif self.path == "/run-tpu-fastcheck":
-            self._send_local_job(run_local_tpu_fastcheck(req), ttl)
-        elif self.path == "/run-tpu-batch-fastcheck":
-            self._send_local_job(run_local_tpu_batch_fastcheck(req), ttl)
-        elif self.path == "/train-tactic-model":
-            self._send_local_job(NODE_STATE.run_hardware_job(lambda: run_local_tactic_model_training(req)), ttl)
         elif self.path == "/run-cuda-bench":
             cuda_src = req.get("cuda_src", "")
             nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
@@ -1585,75 +1531,24 @@ def main() -> int:
     if args.status:
         return _cli_json(client_request(args.api_url, args.token, "GET", "/status"), True)
 
+    def _post_job(path: str, body: Dict[str, Any]) -> int:
+        payload = {"ttl": args.ttl, "project_id": args.project_id, **body}
+        return _cli_json(client_request(args.api_url, args.token, "POST", path, payload), True)
+
     if args.run_tpu_bench:
-        return _cli_json(
-            client_request(
-                args.api_url,
-                args.token,
-                "POST",
-                "/run-tpu-bench",
-                {"n_elements": 262144, "matmul_dim": 128, "ttl": args.ttl, "project_id": args.project_id},
-            ),
-            True,
-        )
-
+        return _post_job("/run-tpu-bench", {"n_elements": 262144, "matmul_dim": 128})
     if args.run_tpu_fastcheck:
-        return _cli_json(
-            client_request(
-                args.api_url,
-                args.token,
-                "POST",
-                "/run-tpu-fastcheck",
-                {
-                    "samples": 65536,
-                    "decl_name": args.decl_name,
-                    "stmt_src": args.stmt_src,
-                    "ttl": args.ttl,
-                    "project_id": args.project_id,
-                },
-            ),
-            True,
-        )
-
+        return _post_job("/run-tpu-fastcheck", {"samples": 65536, "decl_name": args.decl_name, "stmt_src": args.stmt_src})
     if args.run_tpu_batch_fastcheck:
-        return _cli_json(
-            client_request(
-                args.api_url,
-                args.token,
-                "POST",
-                "/run-tpu-batch-fastcheck",
-                {"samples": 65536, "ttl": args.ttl, "project_id": args.project_id},
-            ),
-            True,
-        )
-
+        return _post_job("/run-tpu-batch-fastcheck", {"samples": 65536})
     if args.train_tactic_model:
-        return _cli_json(
-            client_request(
-                args.api_url,
-                args.token,
-                "POST",
-                "/train-tactic-model",
-                {"arch": "recursive_modded_nanogpt_trm", "steps": 64, "ttl": args.ttl, "project_id": args.project_id},
-            ),
-            True,
-        )
-
+        return _post_job("/train-tactic-model", {"arch": "recursive_modded_nanogpt_trm", "steps": 64})
     if args.verify_ptx:
         raw = Path(args.verify_ptx).read_text()
         if "#define" in raw or "EMBEDDED_PTX_MODULE" in raw:
             strings = re.findall(r'"([^"]*)"', raw)
             raw = "".join(s.encode("utf-8").decode("unicode_escape") for s in strings)
-        return _cli_json(
-            client_request(
-                args.api_url,
-                args.token,
-                "POST",
-                "/verify-ptx",
-                {"ptx": raw, "ttl": args.ttl, "project_id": args.project_id},
-            ),
-            True,
-        )
+        return _post_job("/verify-ptx", {"ptx": raw})
 
     if args.tune_profile:
         res = client_request(

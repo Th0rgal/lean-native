@@ -255,36 +255,15 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
   let tmpLl := outPath ++ ".tmp.ll"
   let tmpObj := outPath ++ ".tmp.o"
   IO.FS.writeFile tmpLl irText
-  let mut builtArchive := false
-  let mut clangOk := false
-  try
-    let clangRes ← IO.Process.output {
-      cmd := "clang"
-      args := #["-O3", "-fPIC", "-c", tmpLl, "-o", tmpObj]
-    }
-    clangOk := clangRes.exitCode == 0
-  catch _ =>
-    pure ()
-  if clangOk then
-    try
-      let arRes ← IO.Process.output {
-        cmd := "llvm-ar"
-        args := #["rcs", outPath, tmpObj]
-      }
-      if arRes.exitCode == 0 then builtArchive := true
-    catch _ =>
-      pure ()
-    if !builtArchive then
-      try
-        let arRes2 ← IO.Process.output {
-          cmd := "ar"
-          args := #["rcs", outPath, tmpObj]
-        }
-        if arRes2.exitCode == 0 then builtArchive := true
-      catch _ =>
-        pure ()
-  if !builtArchive then
-    IO.FS.writeFile outPath irText
+  let runCmdOk (cmd : String) (cmdArgs : Array String) : IO Bool := do
+    try return (← IO.Process.output { cmd, args := cmdArgs }).exitCode == 0
+    catch _ => return false
+  let clangOk ← runCmdOk "clang" #["-O3", "-fPIC", "-c", tmpLl, "-o", tmpObj]
+  let builtArchive ← if clangOk then do
+    if ← runCmdOk "llvm-ar" #["rcs", outPath, tmpObj] then pure true
+    else runCmdOk "ar" #["rcs", outPath, tmpObj]
+  else pure false
+  if !builtArchive then IO.FS.writeFile outPath irText
   if jsonFlag then
     IO.println s!"\{\"status\":\"compiled_static_lib\",\"archive\":{if builtArchive then "true" else "false"},\"library\":\"{outPath}\",\"header\":\"{headerPath}\",\"decls\":{optMod.decls.length}}"
   else
@@ -919,32 +898,36 @@ def runWorker (engineName : String) : IO UInt32 := do
   workerLoop engineName (← IO.getStdin) (← IO.getStdout) (← IO.mkRef none)
 
 def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
-  IO.println s!"{tag} v0.5.0 — Formally Validated Lean 4 Optimizer, Segregated Plugin Engine, Superoptimizer, TV, FastCheck & Multi-Target Codegen"
-  IO.println ""
-  IO.println s!"Usage: {tag} <command> [options]"
-  IO.println ""
-  IO.println "Commands:"
-  if hasFrontend then
-    IO.println "  build-exe          Compile a .lean source file directly to a native executable (<file.lean> -o <bin>)"
-  IO.println "  compile-llvm       Emit baseline or optimized LLVM 18 IR (--input <file>, --arch x86_64|arm64, --baseline, -o <path>)"
-  IO.println "  compile-static-lib Emit C-ABI static library (.a) + C header (.h) for zero-copy FFI (--input <file>, -o <lib.a>, --header <lib.h>)"
-  IO.println "  compile-mlir       Emit GPU MLIR module (--input <file>, -o <path>)"
-  IO.println "  compile-ptx        Emit NVIDIA PTX 8.0 assembly (--input <file>, --sm sm_90, --fastcheck, -o <path>)"
-  IO.println "  compile-metal      Emit Apple Metal Shading Language 3.0 (--input <file>, --fastcheck, -o <path>)"
-  IO.println "  compile-fastcheck  Run Constraint-Propagating FastCheck or emit SIMD/PTX/Metal kernels (--samples N, --emit-llvm, --emit-ptx, --emit-metal, --json, -o <path>)"
-  IO.println "  compile-hybrid     Partition module into CPU/GPU and emit hybrid host dispatch glue (--input <file>, -o <path>)"
-  IO.println "  superopt           Run cost-guided enumerative superoptimizer (--target x86_64|arm64|cuda_ptx|apple_metal, --json, -o <path>)"
-  IO.println "  plugins            Run segregated optimization plugins under Law 1 TV/Cost Gate (--target <arch>, --test-adversarial, --json)"
-  IO.println "  pr-verify          Run Law 5 PR & Spec-Pinning Gate + Season 8 turbo-lean pr-verify/audit-spec (--base <ref>, --disallow-spec-changes, --json)"
-  IO.println "  turbo-plugin       Run JSONL-stdio external accelerator plugin for turbo-lean (ExternalProcessAccelerator protocol)"
-  IO.println "  verify-certs       Run optimization pipeline and verify translation certificates (--input <file>, --json, -o <path>)"
-  IO.println "  validate-tv        Run Alive2-style symbolic translation validation (--input <file>, --json, -o <path>)"
-  IO.println "  emit-lnir          Emit LNIR module in wire/JSON format (--wire, --json, --fastcheck, -o <path>)"
-  if hasFrontend then
-    IO.println "  audit-axioms       Run in-kernel transitive axiom audit over all 134 soundness theorems (--json)"
-    IO.println "  turbo-status       Probe Turbo Lean integration, verify BLAKE3 vectors, and emit/verify receipt"
-  IO.println "  self-test          Run end-to-end Core, Spec (Laws 1-5), Plugins, Codec, FastCheck, Superopt, SymbolicTV, LLVM/PTX/Metal self-tests"
-  IO.println "  worker             Run persistent sub-millisecond JSON-RPC worker loop over stdin/stdout"
+  let fe (xs : List String) : List String := if hasFrontend then xs else []
+  let lines := [
+    s!"{tag} v0.5.0 — Formally Validated Lean 4 Optimizer, Segregated Plugin Engine, Superoptimizer, TV, FastCheck & Multi-Target Codegen",
+    "",
+    s!"Usage: {tag} <command> [options]",
+    "",
+    "Commands:"
+  ] ++ fe ["  build-exe          Compile a .lean source file directly to a native executable (<file.lean> -o <bin>)"] ++ [
+    "  compile-llvm       Emit baseline or optimized LLVM 18 IR (--input <file>, --arch x86_64|arm64, --baseline, -o <path>)",
+    "  compile-static-lib Emit C-ABI static library (.a) + C header (.h) for zero-copy FFI (--input <file>, -o <lib.a>, --header <lib.h>)",
+    "  compile-mlir       Emit GPU MLIR module (--input <file>, -o <path>)",
+    "  compile-ptx        Emit NVIDIA PTX 8.0 assembly (--input <file>, --sm sm_90, --fastcheck, -o <path>)",
+    "  compile-metal      Emit Apple Metal Shading Language 3.0 (--input <file>, --fastcheck, -o <path>)",
+    "  compile-fastcheck  Run Constraint-Propagating FastCheck or emit SIMD/PTX/Metal kernels (--samples N, --emit-llvm, --emit-ptx, --emit-metal, --json, -o <path>)",
+    "  compile-hybrid     Partition module into CPU/GPU and emit hybrid host dispatch glue (--input <file>, -o <path>)",
+    "  superopt           Run cost-guided enumerative superoptimizer (--target x86_64|arm64|cuda_ptx|apple_metal, --json, -o <path>)",
+    "  plugins            Run segregated optimization plugins under Law 1 TV/Cost Gate (--target <arch>, --test-adversarial, --json)",
+    "  pr-verify          Run Law 5 PR & Spec-Pinning Gate + Season 8 turbo-lean pr-verify/audit-spec (--base <ref>, --disallow-spec-changes, --json)",
+    "  turbo-plugin       Run JSONL-stdio external accelerator plugin for turbo-lean (ExternalProcessAccelerator protocol)",
+    "  verify-certs       Run optimization pipeline and verify translation certificates (--input <file>, --json, -o <path>)",
+    "  validate-tv        Run Alive2-style symbolic translation validation (--input <file>, --json, -o <path>)",
+    "  emit-lnir          Emit LNIR module in wire/JSON format (--wire, --json, --fastcheck, -o <path>)"
+  ] ++ fe [
+    "  audit-axioms       Run in-kernel transitive axiom audit over all 134 soundness theorems (--json)",
+    "  turbo-status       Probe Turbo Lean integration, verify BLAKE3 vectors, and emit/verify receipt"
+  ] ++ [
+    "  self-test          Run end-to-end Core, Spec (Laws 1-5), Plugins, Codec, FastCheck, Superopt, SymbolicTV, LLVM/PTX/Metal self-tests",
+    "  worker             Run persistent sub-millisecond JSON-RPC worker loop over stdin/stdout"
+  ]
+  IO.println (String.intercalate "\n" lines)
 
 /-- Shared CLI dispatcher for both `lean-native-core` (`elaborateHook? = none`) and `lean-native` (`elaborateHook? = some ...`). -/
 def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO LNIRModule))
