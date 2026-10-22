@@ -263,25 +263,16 @@ def runCompileFastCheck (tag : String) (elaborateHook? : Option (String → IO L
   let smArch := findFlagValue args "--sm" "sm_90"
   let numSamples := (findFlagValue args "--samples" "4096").toNat?.getD 4096
   let useConstraintProp := !(hasFlag args "--no-constraint-prop")
-  let emitLlvmFlag := hasFlag args "--emit-llvm"
-  let emitPtxFlag := hasFlag args "--emit-ptx"
-  let emitMetalFlag := hasFlag args "--emit-metal"
-  let emitCAbiFlag := hasFlag args "--c-abi" || hasFlag args "--emit-c-abi"
   let jsonFlag := hasFlag args "--json"
-  let useCanonical := hasFlag args "--canonical"
-  let mod ← loadInputModule elaborateHook? args (!useCanonical)
-  if emitCAbiFlag then
-    writeOrPrint outPath (LeanNative.Backend.emitFastCheckCABI mod)
-      (some s!"[{tag}] Wrote FastCheck Zero-Boxing C-ABI SIMD source to {outPath}")
-  else if emitLlvmFlag then
-    writeOrPrint outPath (emitFastCheckLLVM mod)
-      (some s!"[{tag}] Wrote FastCheck SIMD LLVM 18 IR to {outPath}")
-  else if emitPtxFlag then
-    writeOrPrint outPath (emitFastCheckPTX mod smArch)
-      (some s!"[{tag}] Wrote FastCheck NVIDIA PTX 8.0 ({smArch}) to {outPath}")
-  else if emitMetalFlag then
-    writeOrPrint outPath (emitFastCheckMetal mod)
-      (some s!"[{tag}] Wrote FastCheck Apple Metal 3.0 shader to {outPath}")
+  let mod ← loadInputModule elaborateHook? args (!(hasFlag args "--canonical"))
+  if hasFlag args "--c-abi" || hasFlag args "--emit-c-abi" then
+    writeOrPrint outPath (LeanNative.Backend.emitFastCheckCABI mod) (some s!"[{tag}] Wrote FastCheck Zero-Boxing C-ABI SIMD source to {outPath}")
+  else if hasFlag args "--emit-llvm" then
+    writeOrPrint outPath (emitFastCheckLLVM mod) (some s!"[{tag}] Wrote FastCheck SIMD LLVM 18 IR to {outPath}")
+  else if hasFlag args "--emit-ptx" then
+    writeOrPrint outPath (emitFastCheckPTX mod smArch) (some s!"[{tag}] Wrote FastCheck NVIDIA PTX 8.0 ({smArch}) to {outPath}")
+  else if hasFlag args "--emit-metal" then
+    writeOrPrint outPath (emitFastCheckMetal mod) (some s!"[{tag}] Wrote FastCheck Apple Metal 3.0 shader to {outPath}")
   else
     let report := runFastCheckModule mod numSamples useConstraintProp
     writeAndPrintJsonOrSummary outPath report.toJson report.formatSummary jsonFlag
@@ -412,14 +403,14 @@ def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
     s!"  \"turboLeanAuditSpecPassed\": {turboSpecOk}",
     "}"
   ]
-  if !outPath.isEmpty then IO.FS.writeFile outPath jsonOut
-  if jsonFlag then IO.println jsonOut
-  else
-    IO.println s!"[{tag}] PR & Spec-Pinning Verification Gate (base={baseRef}):"
-    IO.println s!"  Law 1 Untrusted Plugin & Adversarial Gate : {if pluginReport.adversarialRejected && allDeclTvOk then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})"
-    IO.println s!"  Law 5 Spec & Test Suite Pinning Gate      : {if law5Passed then "PASSED" else "FAILED"} (Spec={specHashHex.take 16}..., Tests={testHashHex.take 16}...)"
-    IO.println s!"  Alive2 Symbolic Translation Validation    : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)"
-    IO.println s!"  Season 8 turbo-lean pr-verify/audit-spec  : {if turboPrOk && turboSpecOk then "PASSED" else "FAILED"} (mode={cfg.mode})"
+  let summaryText := String.intercalate "\n" [
+    s!"[{tag}] PR & Spec-Pinning Verification Gate (base={baseRef}):",
+    s!"  Law 1 Untrusted Plugin & Adversarial Gate : {if pluginReport.adversarialRejected && allDeclTvOk then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})",
+    s!"  Law 5 Spec & Test Suite Pinning Gate      : {if law5Passed then "PASSED" else "FAILED"} (Spec={specHashHex.take 16}..., Tests={testHashHex.take 16}...)",
+    s!"  Alive2 Symbolic Translation Validation    : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)",
+    s!"  Season 8 turbo-lean pr-verify/audit-spec  : {if turboPrOk && turboSpecOk then "PASSED" else "FAILED"} (mode={cfg.mode})"
+  ]
+  writeAndPrintJsonOrSummary outPath jsonOut summaryText jsonFlag
   return if overallOk then 0 else 1
 
 def runVerifyCerts (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
@@ -428,15 +419,14 @@ def runVerifyCerts (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let baseMod ← loadInputModule elaborateHook? args
   let (_, stepCerts) := runDefaultPipeline baseMod
   let report := verifyModuleCerts baseMod.moduleName (stepCerts.map toOptimizationCert)
-  let jsonText := report.toJson
-  if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
-  if jsonFlag then IO.println jsonText
-  else
-    IO.println s!"[{tag}] Certificate Verification for {report.moduleName}:"
-    IO.println s!"  Total pass certificates : {report.certs.length}"
-    IO.println s!"  Declarations verified   : {report.declSummaries.length}"
-    IO.println s!"  Overall assurance level : {report.overallAssurance}"
-    IO.println s!"  Hash chains & theorems  : {if report.verified then "VALID" else "FAILED"}"
+  let summaryText := String.intercalate "\n" [
+    s!"[{tag}] Certificate Verification for {report.moduleName}:",
+    s!"  Total pass certificates : {report.certs.length}",
+    s!"  Declarations verified   : {report.declSummaries.length}",
+    s!"  Overall assurance level : {report.overallAssurance}",
+    s!"  Hash chains & theorems  : {if report.verified then "VALID" else "FAILED"}"
+  ]
+  writeAndPrintJsonOrSummary outPath report.toJson summaryText jsonFlag
   return if report.verified then 0 else 1
 
 def runValidateTV (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do

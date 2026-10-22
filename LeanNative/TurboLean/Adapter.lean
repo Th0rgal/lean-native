@@ -938,52 +938,32 @@ def runAdapterSelfTest (receiptPath : System.FilePath := "/tmp/lean_native_test_
 
 /-! ## 5. Season 8 `turbo-lean` Direct CLI Integration (`pr-verify`, `audit-spec`, `agent-step`) -/
 
+private def runTurboSubcmd (cfg : TurboLeanConfig) (args : Array String) (fallbackJson : String) : IO (Bool × String) := do
+  if let some bin := cfg.turboBin then
+    try
+      let out ← IO.Process.output { cmd := bin, args := #["--json"] ++ args }
+      return (out.exitCode == 0, trimStr out.stdout)
+    catch _ => pure ()
+  return (true, fallbackJson)
+
 /-- Run `turbo-lean pr-verify --base <baseRef> --mode untrusted --disallow-statement-changes`
     when `turbo-lean` is installed, or fall back to pure-Lean BLAKE3 interface verification. -/
-def runTurboLeanPRVerify
-    (cfg : TurboLeanConfig)
-    (projectDir : String := ".")
-    (baseRef : String := "HEAD")
-    (disallowStatementChanges : Bool := true)
-    (receiptOut : String := "/tmp/lean_native_pr_receipt.json") : IO (Bool × String) := do
-  if let some bin := cfg.turboBin then
-    let mut args := #["--json", "pr-verify", "--project-dir", projectDir, "--base", baseRef, "--mode", "untrusted", "--receipt", receiptOut]
-    if disallowStatementChanges then
-      args := args.push "--disallow-statement-changes"
-    try
-      let out ← IO.Process.output { cmd := bin, args := args }
-      let ok := out.exitCode == 0
-      return (ok, trimStr out.stdout)
-    catch _ =>
-      pure ()
-  return (true, "{\"status\":\"standalone_fallback_ok\",\"mode\":\"untrusted\"}")
+def runTurboLeanPRVerify (cfg : TurboLeanConfig) (projectDir : String := ".") (baseRef : String := "HEAD")
+    (disallowStatementChanges : Bool := true) (receiptOut : String := "/tmp/lean_native_pr_receipt.json") : IO (Bool × String) :=
+  let baseArgs := #["pr-verify", "--project-dir", projectDir, "--base", baseRef, "--mode", "untrusted", "--receipt", receiptOut]
+  runTurboSubcmd cfg (if disallowStatementChanges then baseArgs.push "--disallow-statement-changes" else baseArgs)
+    "{\"status\":\"standalone_fallback_ok\",\"mode\":\"untrusted\"}"
 
 /-- Run `turbo-lean audit-spec <file.lean>` via the installed Season 8 `turbo-lean` binary. -/
-def runTurboLeanAuditSpec (cfg : TurboLeanConfig) (filePath : String) : IO (Bool × String) := do
-  if let some bin := cfg.turboBin then
-    try
-      let out ← IO.Process.output { cmd := bin, args := #["--json", "audit-spec", filePath] }
-      return (out.exitCode == 0, trimStr out.stdout)
-    catch _ =>
-      pure ()
-  return (true, s!"\{\"status\":\"standalone_audit_ok\",\"file\":\"{filePath}\"}")
+def runTurboLeanAuditSpec (cfg : TurboLeanConfig) (filePath : String) : IO (Bool × String) :=
+  runTurboSubcmd cfg #["audit-spec", filePath] s!"\{\"status\":\"standalone_audit_ok\",\"file\":\"{filePath}\"}"
 
 /-- Run `turbo-lean agent-step <file.lean>` via the installed Season 8 `turbo-lean` binary. -/
-def runTurboLeanAgentStep
-    (cfg : TurboLeanConfig)
-    (filePath : String)
-    (declFilter? : Option String := none)
-    (projectDir : String := ".") : IO (Bool × String) := do
-  if let some bin := cfg.turboBin then
-    let mut args := #["--json", "agent-step", filePath, "--project-dir", projectDir]
-    if let some d := declFilter? then
-      args := args ++ #["--decl", d]
-    try
-      let out ← IO.Process.output { cmd := bin, args := args }
-      return (out.exitCode == 0, trimStr out.stdout)
-    catch _ =>
-      pure ()
-  return (true, s!"\{\"status\":\"standalone_agent_step_ok\",\"file\":\"{filePath}\"}")
+def runTurboLeanAgentStep (cfg : TurboLeanConfig) (filePath : String)
+    (declFilter? : Option String := none) (projectDir : String := ".") : IO (Bool × String) :=
+  let baseArgs := #["agent-step", filePath, "--project-dir", projectDir]
+  runTurboSubcmd cfg (match declFilter? with | some d => baseArgs ++ #["--decl", d] | none => baseArgs)
+    s!"\{\"status\":\"standalone_agent_step_ok\",\"file\":\"{filePath}\"}"
 
 /-! ## 6. Unified Content-Addressed Telemetry Spooler (`lean-native.telemetry.v1`) -/
 

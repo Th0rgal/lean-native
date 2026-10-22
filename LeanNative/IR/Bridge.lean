@@ -149,42 +149,24 @@ def toImpureParams (params : Array (Lean.Compiler.LCNF.Param pu)) : Array (Lean.
 /-- Check whether `code` contains a tail-recursive `.jmp` referencing `targetFVar`. -/
 partial def codeHasRecursiveJmp (targetFVar : Lean.FVarId) (code : Lean.Compiler.LCNF.Code pu) : Bool :=
   match code with
-  | .let _ k => codeHasRecursiveJmp targetFVar k
-  | .fun _ k _ => codeHasRecursiveJmp targetFVar k
+  | .let _ k | .fun _ k _ | .inc _ _ _ _ k _ | .dec _ _ _ _ _ k _
+  | .del _ k _ | .oset _ _ _ k _ | .uset _ _ _ k _ | .sset _ _ _ _ _ k _ | .setTag _ _ k _ =>
+    codeHasRecursiveJmp targetFVar k
   | .jp decl k => codeHasRecursiveJmp targetFVar decl.value || codeHasRecursiveJmp targetFVar k
   | .jmp fvarId _ => fvarId == targetFVar
   | .cases c => c.alts.any (fun alt => codeHasRecursiveJmp targetFVar alt.getCode)
-  | .inc _ _ _ _ k _ => codeHasRecursiveJmp targetFVar k
-  | .dec _ _ _ _ _ k _ => codeHasRecursiveJmp targetFVar k
-  | .del _ k _ => codeHasRecursiveJmp targetFVar k
-  | .oset _ _ _ k _ => codeHasRecursiveJmp targetFVar k
-  | .uset _ _ _ k _ => codeHasRecursiveJmp targetFVar k
-  | .sset _ _ _ _ _ k _ => codeHasRecursiveJmp targetFVar k
-  | .setTag _ _ k _ => codeHasRecursiveJmp targetFVar k
   | .return _ | .unreach _ => false
 
 /-- Check whether `code` contains a tail-recursive self call to `targetName`. -/
 partial def codeHasSelfTailCall (targetName : Lean.Name) (code : Lean.Compiler.LCNF.Code pu) : Bool :=
   match code with
   | .let decl (.return retFVar) =>
-    if decl.fvarId == retFVar then
-      match decl.value with
-      | .fap fnName _ _ => fnName == targetName
-      | .const fnName _ _ _ => fnName == targetName
-      | _ => false
-    else
-      false
-  | .let _ k => codeHasSelfTailCall targetName k
-  | .fun _ k _ => codeHasSelfTailCall targetName k
+    decl.fvarId == retFVar && (match decl.value with | .fap fn _ _ | .const fn _ _ _ => fn == targetName | _ => false)
+  | .let _ k | .fun _ k _ | .inc _ _ _ _ k _ | .dec _ _ _ _ _ k _
+  | .del _ k _ | .oset _ _ _ k _ | .uset _ _ _ k _ | .sset _ _ _ _ _ k _ | .setTag _ _ k _ =>
+    codeHasSelfTailCall targetName k
   | .jp decl k => codeHasSelfTailCall targetName decl.value || codeHasSelfTailCall targetName k
   | .cases c => c.alts.any (fun alt => codeHasSelfTailCall targetName alt.getCode)
-  | .inc _ _ _ _ k _ => codeHasSelfTailCall targetName k
-  | .dec _ _ _ _ _ k _ => codeHasSelfTailCall targetName k
-  | .del _ k _ => codeHasSelfTailCall targetName k
-  | .oset _ _ _ k _ => codeHasSelfTailCall targetName k
-  | .uset _ _ _ k _ => codeHasSelfTailCall targetName k
-  | .sset _ _ _ _ _ k _ => codeHasSelfTailCall targetName k
-  | .setTag _ _ k _ => codeHasSelfTailCall targetName k
   | .jmp _ _ | .return _ | .unreach _ => false
 
 /-- Bind each join-point parameter `param_i := arg_i` via `.letBind` and splice the continuation `jpBody`. -/
@@ -399,10 +381,8 @@ partial def lowerImpureCode (code : Lean.Compiler.LCNF.Code .impure) : BridgeM L
   | .inc fvarId n _ _ k _ => return .incRef (← internFVar fvarId) n (← lowerImpureCode k)
   | .dec fvarId n _ _ _ k _ => return .decRef (← internFVar fvarId) n (← lowerImpureCode k)
   | .del fvarId k _ => return .decRef (← internFVar fvarId) 1 (← lowerImpureCode k)
-  | .oset fvarId idx arg k _ =>
-    lowerIndexedSet fvarId idx (← lowerArg arg) .objPtr (← lowerImpureCode k)
-  | .uset fvarId idx valFVar k _ =>
-    lowerIndexedSet fvarId idx (← internFVar valFVar .usize) .usize (← lowerImpureCode k)
+  | .oset fvarId idx arg k _ => lowerIndexedSet fvarId idx (← lowerArg arg) .objPtr (← lowerImpureCode k)
+  | .uset fvarId idx valFVar k _ => lowerIndexedSet fvarId idx (← internFVar valFVar .usize) .usize (← lowerImpureCode k)
   | .sset fvarId idx _ valFVar tyExpr k _ =>
     let elemTy := lowerImpureType tyExpr
     lowerIndexedSet fvarId idx (← internFVar valFVar elemTy) elemTy (← lowerImpureCode k)
@@ -422,20 +402,21 @@ def lowerPureLetValue (lv : Lean.Compiler.LCNF.LetValue .pure) (retTy : LNIRType
   | .const declName _ args _ =>
     if declName == ``Prod.mk || declName == ``MProd.mk || declName == ``PProd.mk then
       return .mkTuple (← args.toList.mapM lowerArg)
-    else
-      lowerNamedCall declName args retTy
+    else lowerNamedCall declName args retTy
   | .fvar fvarId args => lowerFVarCall fvarId args retTy
 
 /-- Lookup the constructor tag index `cidx` for `ctorName` in the Lean environment, falling back to `fallbackIdx`. -/
 def lookupCtorIdx (ctorName : Lean.Name) (fallbackIdx : Nat) : BridgeM Nat := do
-  match (← getEnv).find? ctorName with
-  | some (.ctorInfo cval) => return cval.cidx
-  | _ => return fallbackIdx
+  match (← getEnv).find? ctorName with | some (.ctorInfo cval) => return cval.cidx | _ => return fallbackIdx
 
 mutual
 
 /-- Recursively lower all pure `cases` alternatives into a complete nested `ite` tag-dispatch chain. -/
 partial def lowerPureAlts (condVar : VarId) (idx : Nat) (alts : List (Lean.Compiler.LCNF.Alt .pure)) : BridgeM LNIRCode := do
+  let emitTagBranch (cidx : Nat) (code : Lean.Compiler.LCNF.Code .pure) (rest : List (Lean.Compiler.LCNF.Alt .pure)) : BridgeM LNIRCode := do
+    let cmpVar ← freshBridgeVar .i64
+    return .letBind cmpVar .i64 (.scalar (.binOp .eq (.var condVar) (.constU64 cidx.toUInt64)))
+      (.ite cmpVar (← lowerPureCode code) (← lowerPureAlts condVar (idx + 1) rest))
   match alts with
   | [] => return .unreachable
   | [singleAlt] =>
@@ -443,18 +424,8 @@ partial def lowerPureAlts (condVar : VarId) (idx : Nat) (alts : List (Lean.Compi
     lowerPureCode singleAlt.getCode
   | alt :: rest =>
     match alt with
-    | .alt ctorName params code _ =>
-      internParams params
-      let cidx ← lookupCtorIdx ctorName idx
-      let cmpVar ← freshBridgeVar .i64
-      return .letBind cmpVar .i64
-        (.scalar (.binOp .eq (.var condVar) (.constU64 cidx.toUInt64)))
-        (.ite cmpVar (← lowerPureCode code) (← lowerPureAlts condVar (idx + 1) rest))
-    | .ctorAlt info code _ =>
-      let cmpVar ← freshBridgeVar .i64
-      return .letBind cmpVar .i64
-        (.scalar (.binOp .eq (.var condVar) (.constU64 info.cidx.toUInt64)))
-        (.ite cmpVar (← lowerPureCode code) (← lowerPureAlts condVar (idx + 1) rest))
+    | .alt ctorName params code _ => internParams params; emitTagBranch (← lookupCtorIdx ctorName idx) code rest
+    | .ctorAlt info code _ => emitTagBranch info.cidx code rest
     | .default code => lowerPureCode code
 
 /-- Lower a stage-1 `Code .pure` block into structured `LNIRCode`. -/
@@ -610,12 +581,9 @@ partial def maxVarIdInCode : LNIRCode → VarId
 /-- Check whether `code` contains a recursive call to `fnName`. -/
 partial def codeCallsDecl (fnName : String) : LNIRCode → Bool
   | .letBind _ _ (.call callee _ _ _) k => callee == fnName || codeCallsDecl fnName k
-  | .letBind _ _ _ k => codeCallsDecl fnName k
-  | .rawStore _ _ _ _ k => codeCallsDecl fnName k
-  | .incRef _ _ k | .decRef _ _ k => codeCallsDecl fnName k
-  | .ite _ t e => codeCallsDecl fnName t || codeCallsDecl fnName e
-  | .seqFor _ _ _ _ _ _ s k => codeCallsDecl fnName s || codeCallsDecl fnName k
-  | .parFor _ _ _ _ _ k => codeCallsDecl fnName k
+  | .letBind _ _ _ k | .rawStore _ _ _ _ k | .incRef _ _ k | .decRef _ _ k | .parFor _ _ _ _ _ k =>
+    codeCallsDecl fnName k
+  | .ite _ t e | .seqFor _ _ _ _ _ _ t e => codeCallsDecl fnName t || codeCallsDecl fnName e
   | .ret _ | .unreachable => false
 
 /-- Check whether `code` is a simple straight-line/ite non-looping helper body suitable for
@@ -631,10 +599,7 @@ partial def isSimpleInlinableBody (selfName : String) : LNIRCode → Bool
 def renameScalarExpr (paramMap : List (VarId × VarId)) (offset : VarId) : ScalarExpr → ScalarExpr
   | .constU64 v => .constU64 v
   | .constBool b => .constBool b
-  | .var id =>
-    match paramMap.lookup id with
-    | some argVar => .var argVar
-    | none => .var (id + offset)
+  | .var id => .var ((paramMap.lookup id).getD (id + offset))
   | .binOp op l r => .binOp op (renameScalarExpr paramMap offset l) (renameScalarExpr paramMap offset r)
   | .unaryOp op a => .unaryOp op (renameScalarExpr paramMap offset a)
   | .select c t f =>
@@ -661,39 +626,26 @@ partial def spliceInlinedBody (paramMap : List (VarId × VarId)) (offset : VarId
     .ite (renameVarId paramMap offset cv)
       (spliceInlinedBody paramMap offset dst dstTy cont t)
       (spliceInlinedBody paramMap offset dst dstTy cont e)
-  | .ret rv =>
-    .letBind dst dstTy (.scalar (.var (renameVarId paramMap offset rv))) cont
+  | .ret rv => .letBind dst dstTy (.scalar (.var (renameVarId paramMap offset rv))) cont
   | _ => cont
 
 /-- Inline non-recursive local helper calls (`Inv`, `ValidSszContainerHeader`, `declaredGasLimit`) inside `code`. -/
 partial def inlineLocalHelperCalls (helpers : List LNIRDecl) (nextOffset : VarId) : LNIRCode → LNIRCode
   | .letBind dst ty (.call callee args retTy isExt) k =>
     let k' := inlineLocalHelperCalls helpers (nextOffset + 128) k
-    if isExt then
-      .letBind dst ty (.call callee args retTy isExt) k'
+    if isExt then .letBind dst ty (.call callee args retTy isExt) k'
     else
       match helpers.find? (fun h => h.name == callee && h.params.length == args.length) with
-      | some hDecl =>
-        let paramMap := (hDecl.params.map (·.id)).zip args
-        spliceInlinedBody paramMap nextOffset dst ty k' hDecl.body
-      | none =>
-        .letBind dst ty (.call callee args retTy isExt) k'
-  | .letBind dst ty val k =>
-    .letBind dst ty val (inlineLocalHelperCalls helpers nextOffset k)
-  | .rawStore pv iv vv ty k =>
-    .rawStore pv iv vv ty (inlineLocalHelperCalls helpers nextOffset k)
-  | .incRef ov c k =>
-    .incRef ov c (inlineLocalHelperCalls helpers nextOffset k)
-  | .decRef ov c k =>
-    .decRef ov c (inlineLocalHelperCalls helpers nextOffset k)
-  | .ite cv t e =>
-    .ite cv (inlineLocalHelperCalls helpers nextOffset t) (inlineLocalHelperCalls helpers (nextOffset + 256) e)
+      | some hDecl => spliceInlinedBody ((hDecl.params.map (·.id)).zip args) nextOffset dst ty k' hDecl.body
+      | none => .letBind dst ty (.call callee args retTy isExt) k'
+  | .letBind dst ty val k => .letBind dst ty val (inlineLocalHelperCalls helpers nextOffset k)
+  | .rawStore pv iv vv ty k => .rawStore pv iv vv ty (inlineLocalHelperCalls helpers nextOffset k)
+  | .incRef ov c k => .incRef ov c (inlineLocalHelperCalls helpers nextOffset k)
+  | .decRef ov c k => .decRef ov c (inlineLocalHelperCalls helpers nextOffset k)
+  | .ite cv t e => .ite cv (inlineLocalHelperCalls helpers nextOffset t) (inlineLocalHelperCalls helpers (nextOffset + 256) e)
   | .seqFor iv lv hv av ai aty step k =>
-    .seqFor iv lv hv av ai aty
-      (inlineLocalHelperCalls helpers nextOffset step)
-      (inlineLocalHelperCalls helpers (nextOffset + 256) k)
-  | .parFor ov lv ins ety kern k =>
-    .parFor ov lv ins ety kern (inlineLocalHelperCalls helpers nextOffset k)
+    .seqFor iv lv hv av ai aty (inlineLocalHelperCalls helpers nextOffset step) (inlineLocalHelperCalls helpers (nextOffset + 256) k)
+  | .parFor ov lv ins ety kern k => .parFor ov lv ins ety kern (inlineLocalHelperCalls helpers nextOffset k)
   | .ret v => .ret v
   | .unreachable => .unreachable
 

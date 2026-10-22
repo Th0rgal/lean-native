@@ -63,16 +63,7 @@ PREWARM_RPN_BATCH_SIZE = 65536
 FALLBACK_SIMD_BATCH_SIZE = 4096
 
 TPU_BOUNDARY_SWEEP_U64 = [
-    0,
-    1,
-    2,
-    7,
-    42,
-    255,
-    65535,
-    0xFFFFFFFF,
-    0x8000000000000000,
-    0xFFFFFFFFFFFFFFFF,
+    0, 1, 2, 7, 42, 255, 65535, 0xFFFFFFFF, 0x8000000000000000, 0xFFFFFFFFFFFFFFFF,
 ]
 
 # Pre-warmed JAX/XLA state initialized once at module load
@@ -319,12 +310,7 @@ def run_prewarmed_jax_rpn_fastcheck(
 
         op_arr = jnp.asarray(opcodes_list, dtype=jnp.int32)
         seeds = _PREWARMED_SEEDS_JAX ^ jnp.uint64(base_seed & 0xFFFFFFFFFFFFFFFF)
-        bad_count_dev = _jax_rpn_eval_batch(
-            seeds,
-            op_arr,
-            jnp.uint64(arg0),
-            jnp.uint64(arg1),
-        )
+        bad_count_dev = _jax_rpn_eval_batch(seeds, op_arr, jnp.uint64(arg0), jnp.uint64(arg1))
         bad_count_dev.block_until_ready()
         bad_count = int(bad_count_dev)
         witness_x0 = int(1000000 + arg0) if bad_count > 0 else 0
@@ -335,12 +321,7 @@ def run_prewarmed_jax_rpn_fastcheck(
         seeds = _PREWARMED_SEEDS_NP ^ np.uint64(base_seed & 0xFFFFFFFFFFFFFFFF)
         bad_count, witness_x0, witness_x1 = _fallback_rpn_eval_batch(seeds, opcodes_list, arg0, arg1)
     else:
-        bad_count, witness_x0, witness_x1 = _fallback_rpn_eval_batch(
-            _PREWARMED_SEEDS_ARR,
-            opcodes_list,
-            arg0,
-            arg1,
-        )
+        bad_count, witness_x0, witness_x1 = _fallback_rpn_eval_batch(_PREWARMED_SEEDS_ARR, opcodes_list, arg0, arg1)
 
     xla_kernel_ms = (time.perf_counter() - t_k0) * 1000.0
     return {
@@ -965,6 +946,16 @@ def run_local_tactic_model_training(req: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _supports_preferred_backend(preferred_backend: str, hw: Dict[str, Any], targets: List[str]) -> bool:
+    if not preferred_backend:
+        return True
+    if preferred_backend in ("gpu_cuda", "cuda_ptx"):
+        return bool(hw.get("cuda_available"))
+    if preferred_backend in ("tpu_xla", "mlir_stablehlo"):
+        return bool(hw.get("tpu_available"))
+    return preferred_backend in targets
+
+
 def _select_best_peer_for_delegation(
     req: Dict[str, Any],
     token: str,
@@ -972,13 +963,6 @@ def _select_best_peer_for_delegation(
 ) -> Optional[str]:
     """
     Determine whether this node should delegate `req` to one of its configured `--peers`.
-    Rules:
-    1. If `ttl <= 0`, NEVER forward to any peer (strict loop/cycle prevention).
-    2. If `ttl > 0` and `NODE_STATE.peers` is non-empty, delegate when:
-       a) `queue_depth >= max_queue` (this server is busy) and a healthy peer has lower cost, OR
-       b) `preferred_backend` is requested that this node lacks natively, OR
-       c) this node is a CPU-only gateway (`accelerator_backend == "cpu_simd"`) with healthy
-          sub-server `--peers` configured.
     """
     ttl = int(req.get("ttl", 2))
     if ttl <= 0:
@@ -997,29 +981,14 @@ def _select_best_peer_for_delegation(
     local_ewma = max(float(snap["ewma_exec_ms"]), 0.1)
 
     preferred_backend = str(req.get("preferred_backend", "")).strip()
-    local_has_preferred = True
-    if preferred_backend:
-        if preferred_backend in ("gpu_cuda", "cuda_ptx") and not hw.get("cuda_available"):
-            local_has_preferred = False
-        elif preferred_backend in ("tpu_xla", "mlir_stablehlo") and not hw.get("tpu_available"):
-            local_has_preferred = False
-        elif preferred_backend not in snap["supported_targets"]:
-            local_has_preferred = False
+    local_has_preferred = _supports_preferred_backend(preferred_backend, hw, snap["supported_targets"])
 
     is_busy = local_queue >= local_max_queue
     is_cpu_gateway_with_peers = local_backend == "cpu_simd" and len(peers) > 0
-    should_consider_peers = is_busy or (not local_has_preferred) or is_cpu_gateway_with_peers or bool(req.get("force_delegate"))
-    if not should_consider_peers:
+    if not (is_busy or (not local_has_preferred) or is_cpu_gateway_with_peers or bool(req.get("force_delegate"))):
         return None
 
-    local_cost = (local_queue + local_active) * local_ewma
-    if is_busy:
-        local_cost += 1000.0
-    if not local_has_preferred:
-        local_cost += 500.0
-    if is_cpu_gateway_with_peers:
-        local_cost += 50.0
-
+    local_cost = (local_queue + local_active) * local_ewma + (1000.0 if is_busy else 0.0) + (500.0 if not local_has_preferred else 0.0) + (50.0 if is_cpu_gateway_with_peers else 0.0)
     best_peer: Optional[str] = None
     best_peer_cost = local_cost
 
@@ -1034,13 +1003,8 @@ def _select_best_peer_for_delegation(
         p_hw = st.get("hardware") or {}
 
         peer_cost = (p_queue + p_active) * p_ewma
-        if preferred_backend:
-            if (
-                (preferred_backend in ("gpu_cuda", "cuda_ptx") and p_hw.get("cuda_available"))
-                or (preferred_backend in ("tpu_xla", "mlir_stablehlo") and p_hw.get("tpu_available"))
-                or (preferred_backend in p_targets)
-            ):
-                peer_cost -= 25.0
+        if preferred_backend and _supports_preferred_backend(preferred_backend, p_hw, p_targets):
+            peer_cost -= 25.0
 
         if peer_cost < best_peer_cost:
             best_peer_cost = peer_cost
@@ -1327,24 +1291,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8765, help="Port for --serve (default: 8765)")
     parser.add_argument("--token", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_TOKEN", "fCiXWLdlEhfaImpQUDBA5OOXEYngnGwn"), help="Bearer token")
     parser.add_argument("--api-url", type=str, default=os.environ.get("LEAN_NATIVE_COLAB_API_URL", "https://sell-exist-blues-banners.trycloudflare.com"), help="Remote Colab URL")
-    parser.add_argument(
-        "--peers",
-        type=str,
-        default=os.environ.get("LEAN_NATIVE_PEERS", ""),
-        help="Comma-separated list of sub-server peer URLs for hierarchical delegation",
-    )
-    parser.add_argument(
-        "--max-queue",
-        type=int,
-        default=int(os.environ.get("LEAN_NATIVE_MAX_QUEUE", "4")),
-        help="Maximum local hardware queue depth before delegating to peers (default: 4)",
-    )
-    parser.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=int(os.environ.get("LEAN_NATIVE_MAX_CONCURRENCY", "2")),
-        help="Maximum concurrent hardware executions per node (default: 2)",
-    )
+    parser.add_argument("--peers", type=str, default=os.environ.get("LEAN_NATIVE_PEERS", ""), help="Comma-separated list of sub-server peer URLs for hierarchical delegation")
+    parser.add_argument("--max-queue", type=int, default=int(os.environ.get("LEAN_NATIVE_MAX_QUEUE", "4")), help="Maximum local hardware queue depth before delegating to peers (default: 4)")
+    parser.add_argument("--max-concurrency", type=int, default=int(os.environ.get("LEAN_NATIVE_MAX_CONCURRENCY", "2")), help="Maximum concurrent hardware executions per node (default: 2)")
     parser.add_argument("--ttl", type=int, default=2, help="Request delegation time-to-live hops (default: 2)")
     parser.add_argument("--project-id", type=str, default="default", help="Project identifier for multi-project telemetry")
     parser.add_argument("--status", action="store_true", help="Query remote Colab GPU/TPU hardware & queue status")
@@ -1360,11 +1309,7 @@ def main() -> int:
     parser.add_argument("--self-test-tpu", action="store_true", help="Run full HTTP loopback self-test for TPU & federated endpoints")
     args = parser.parse_args()
 
-    NODE_STATE.configure(
-        max_concurrency=args.max_concurrency,
-        max_queue=args.max_queue,
-        peers=_parse_peers_list(args.peers),
-    )
+    NODE_STATE.configure(max_concurrency=args.max_concurrency, max_queue=args.max_queue, peers=_parse_peers_list(args.peers))
 
     if args.self_test or args.self_test_tpu:
         os.environ["LEAN_NATIVE_COLAB_QUIET"] = "1"
@@ -1372,32 +1317,16 @@ def main() -> int:
         ColabGPUHandler.token = test_token
         server = FederatedThreadingHTTPServer(("127.0.0.1", 0), ColabGPUHandler)
         port = server.server_address[1]
-        srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
-        srv_thread.start()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
             url = f"http://127.0.0.1:{port}"
             st = client_request(url, test_token, "GET", "/status")
             st_v1 = client_request(url, test_token, "GET", "/v1/status")
             tpu_bench = client_request(url, test_token, "POST", "/run-tpu-bench", {"n_elements": 16384, "matmul_dim": 64})
-            tpu_fc = client_request(
-                url,
-                test_token,
-                "POST",
-                "/run-tpu-fastcheck",
-                {"samples": 4096, "decl_name": "evm_constrained_buggy_prop"},
-            )
-            tpu_fc_cached = client_request(
-                url,
-                test_token,
-                "POST",
-                "/run-tpu-fastcheck",
-                {"samples": 4096, "decl_name": "evm_constrained_buggy_prop"},
-            )
+            tpu_fc = client_request(url, test_token, "POST", "/run-tpu-fastcheck", {"samples": 4096, "decl_name": "evm_constrained_buggy_prop"})
+            tpu_fc_cached = client_request(url, test_token, "POST", "/run-tpu-fastcheck", {"samples": 4096, "decl_name": "evm_constrained_buggy_prop"})
             tpu_batch = client_request(
-                url,
-                test_token,
-                "POST",
-                "/run-tpu-batch-fastcheck",
+                url, test_token, "POST", "/run-tpu-batch-fastcheck",
                 {
                     "samples": 4096,
                     "goals": [
@@ -1408,16 +1337,8 @@ def main() -> int:
                 },
             )
             v1_compute = client_request(
-                url,
-                test_token,
-                "POST",
-                "/v1/compute",
-                {
-                    "project_id": "lean-native",
-                    "ttl": 2,
-                    "decl_name": "u256_add_comm_valid",
-                    "stmt_src": "a + b = b + a",
-                },
+                url, test_token, "POST", "/v1/compute",
+                {"project_id": "lean-native", "ttl": 2, "decl_name": "u256_add_comm_valid", "stmt_src": "a + b = b + a"},
             )
         finally:
             server.shutdown()

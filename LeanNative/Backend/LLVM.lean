@@ -235,29 +235,12 @@ def copyVarSlot (dst src : VarId) : EmitM Unit := do
 /-- Check whether a `ScalarExpr` references any 256-bit variable or 256-bit operator. -/
 partial def scalarExprIs256Bit : ScalarExpr → EmitM Bool
   | .constU64 _ | .constBool _ => return false
-  | .var id => do
-    let ty ← getVarSlotType id
-    return ty.is256Bit
-  | .binOp op l r => do
-    match op with
-    | .addChecked256 | .subChecked256 | .mulChecked256 => return true
-    | _ =>
-      let bl ← scalarExprIs256Bit l
-      if bl then return true else scalarExprIs256Bit r
-  | .unaryOp op a => do
-    match op with
-    | .clz256 => return true
-    | _ => scalarExprIs256Bit a
-  | .select c t e => do
-    let bc ← scalarExprIs256Bit c
-    let bt ← scalarExprIs256Bit t
-    let be ← scalarExprIs256Bit e
-    return bc || bt || be
-  | .fma a b c => do
-    let ba ← scalarExprIs256Bit a
-    let bb ← scalarExprIs256Bit b
-    let bc ← scalarExprIs256Bit c
-    return ba || bb || bc
+  | .var id => return (← getVarSlotType id).is256Bit
+  | .binOp (.addChecked256) _ _ | .binOp (.subChecked256) _ _ | .binOp (.mulChecked256) _ _ => return true
+  | .binOp _ l r => return (← scalarExprIs256Bit l) || (← scalarExprIs256Bit r)
+  | .unaryOp .clz256 _ => return true
+  | .unaryOp _ a => scalarExprIs256Bit a
+  | .select c t e | .fma c t e => return (← scalarExprIs256Bit c) || (← scalarExprIs256Bit t) || (← scalarExprIs256Bit e)
 
 abbrev LNIRScalarExpr := ScalarExpr
 
@@ -281,20 +264,19 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
   let sfx := if is256 then "256" else ""
   let emitSub (x : LNIRScalarExpr) : EmitM String := emitScalarExprWithWidth tyStr shiftMask x
   let emit256 (x : LNIRScalarExpr) : EmitM String := emitScalarExprWithWidth "i256" "255" x
+  let emitConst (valStr pfx : String) : EmitM String := do
+    if is256 then
+      let res ← freshTmp pfx
+      emitLine s!"  {res} = add i256 0, {valStr}"
+      return res
+    else return valStr
+  let emitChecked (intr : String) : EmitM (String → String → String → EmitM String) :=
+    return fun lVal rVal res =>
+      if is256 then emitChecked256Op intr intr lVal rVal res
+      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
   match e with
-  | .constU64 v =>
-    if is256 then
-      let res ← freshTmp "c256"
-      emitLine s!"  {res} = add i256 0, {v}"
-      return res
-    else return s!"{v}"
-  | .constBool b =>
-    let bit := if b then "1" else "0"
-    if is256 then
-      let res ← freshTmp "b256"
-      emitLine s!"  {res} = add i256 0, {bit}"
-      return res
-    else return bit
+  | .constU64 v => emitConst s!"{v}" "c256"
+  | .constBool b => emitConst (if b then "1" else "0") "b256"
   | .var id =>
     if is256 then loadVarAsI256 id else loadVarAsI64 id
   | .binOp op lhs rhs =>
@@ -344,15 +326,9 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
     | .eq     => emitCmp "eq" "eq"
     | .lt     => emitCmp "ult" "lt"
     | .le     => emitCmp "ule" "le"
-    | .addChecked256 =>
-      if is256 then emitChecked256Op "uadd" "uadd" lVal rVal res
-      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
-    | .subChecked256 =>
-      if is256 then emitChecked256Op "usub" "usub" lVal rVal res
-      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
-    | .mulChecked256 =>
-      if is256 then emitChecked256Op "umul" "umul" lVal rVal res
-      else do let v256 ← emit256 e; emitLine s!"  {res} = trunc i256 {v256} to i64"; return res
+    | .addChecked256 => (← emitChecked "uadd") lVal rVal res
+    | .subChecked256 => (← emitChecked "usub") lVal rVal res
+    | .mulChecked256 => (← emitChecked "umul") lVal rVal res
   | .unaryOp op arg =>
     if !is256 && op == .clz256 then
       let v256 ← emit256 e
@@ -766,16 +742,10 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
 
 /-- Check if a loop body accesses contiguous memory (`rawLoad`, `rawStore`, `sarrayGet`, `sarraySet`). -/
 partial def loopBodyHasArrayMem : LNIRCode → Bool
-  | .letBind _ _ (.rawLoad _ _ _) _ => true
-  | .letBind _ _ (.sarrayGet _ _ _) _ => true
-  | .letBind _ _ (.sarraySet _ _ _ _) _ => true
-  | .letBind _ _ _ k => loopBodyHasArrayMem k
-  | .rawStore _ _ _ _ _ => true
-  | .incRef _ _ k => loopBodyHasArrayMem k
-  | .decRef _ _ k => loopBodyHasArrayMem k
-  | .ite _ t e => loopBodyHasArrayMem t || loopBodyHasArrayMem e
-  | .seqFor _ _ _ _ _ _ s k => loopBodyHasArrayMem s || loopBodyHasArrayMem k
-  | .parFor _ _ _ _ _ _ => true
+  | .letBind _ _ (.rawLoad _ _ _) _ | .letBind _ _ (.sarrayGet _ _ _) _
+  | .letBind _ _ (.sarraySet _ _ _ _) _ | .rawStore _ _ _ _ _ | .parFor _ _ _ _ _ _ => true
+  | .letBind _ _ _ k | .incRef _ _ k | .decRef _ _ k => loopBodyHasArrayMem k
+  | .ite _ t e | .seqFor _ _ _ _ _ _ t e => loopBodyHasArrayMem t || loopBodyHasArrayMem e
   | .ret _ | .unreachable => false
 
 /-- Try to extract a multi-way tag comparison `ite` chain on a single discriminant `VarId`:
