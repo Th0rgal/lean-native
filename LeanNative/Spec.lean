@@ -661,222 +661,185 @@ theorem subSliceView_valid (s : ByteSliceView) (subOff subLen : Nat)
 
 /-- Grace-Blackwell `cuMemGetInfo` pre-flight memory headroom gate. -/
 structure GpuMemoryHeadroomInput where
-  freeBytes     : Nat
+  freeBytes : Nat
   requiredBytes : Nat
-  safetyMargin  : Nat
+  safetyMargin : Nat
   deriving Repr, DecidableEq, BEq
-
 def hasSufficientGpuMemory (inp : GpuMemoryHeadroomInput) : Bool :=
   decide (inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes)
-
 theorem gpu_memory_headroom_gate_sound (inp : GpuMemoryHeadroomInput) :
     hasSufficientGpuMemory inp = true ↔ inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes := by
   simp [hasSufficientGpuMemory]
-
 def gpuMemoryHeadroomMetaSpec : MetaGateSpec GpuMemoryHeadroomInput
-    (fun inp => inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes) where
-  gate := hasSufficientGpuMemory
-  sound := fun inp => (gpu_memory_headroom_gate_sound inp).mp
-  complete := fun inp => (gpu_memory_headroom_gate_sound inp).mpr
-  posWitness := ⟨4096, 1024, 2048⟩
-  negWitness := ⟨2048, 1024, 2048⟩
-  nonVacuous := rfl
-  tight := rfl
-
+    (fun inp => inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes) :=
+  ⟨hasSufficientGpuMemory, fun inp => (gpu_memory_headroom_gate_sound inp).mp,
+   fun inp => (gpu_memory_headroom_gate_sound inp).mpr, ⟨4096, 1024, 2048⟩, ⟨2048, 1024, 2048⟩, rfl, rfl⟩
 theorem gpu_oom_falls_back_to_cpu_simd (inp : GpuMemoryHeadroomInput)
     (h_low : inp.freeBytes < inp.requiredBytes + inp.safetyMargin) :
     hasSufficientGpuMemory inp = false :=
   gpuMemoryHeadroomMetaSpec.rejects_unsafe inp (Nat.not_le.mpr h_low)
 
-/-- Stateful Matryoshka (`lean_native_trm_ctx`) incremental prefix accumulator across slice widths
-    `S_0 (d=16, h=32) -> S_1 (d=32, h=64) -> S_3 (d=64, h=128) -> S_4 (d=128, h=256)`. -/
+/-- Stateful Matryoshka (`lean_native_trm_ctx`) incremental prefix accumulator across slice widths. -/
 structure MatryoshkaPrefixAccum where
-  dPrev   : Nat
-  dCur    : Nat
-  sqPrev  : Nat
+  dPrev : Nat
+  dCur : Nat
+  sqPrev : Nat
   sqDelta : Nat
   dotPrev : Int
   dotDelta : Int
   deriving Repr, DecidableEq, BEq
-
 @[inline] def evalMatryoshkaPrefixFull (ctx : MatryoshkaPrefixAccum) : Nat × Int :=
   (ctx.sqPrev + ctx.sqDelta, ctx.dotPrev + ctx.dotDelta)
-
 @[inline] def evalMatryoshkaPrefixIncremental (ctx : MatryoshkaPrefixAccum) : Nat × Int :=
-  let sqTotal := ctx.sqPrev + ctx.sqDelta
-  let dotTotal := ctx.dotPrev + ctx.dotDelta
-  (sqTotal, dotTotal)
-
+  (ctx.sqPrev + ctx.sqDelta, ctx.dotPrev + ctx.dotDelta)
 theorem matryoshka_incremental_prefix_eq_full_eval (ctx : MatryoshkaPrefixAccum) :
     evalMatryoshkaPrefixIncremental ctx = evalMatryoshkaPrefixFull ctx ∧
     ctx.sqPrev ≤ (evalMatryoshkaPrefixIncremental ctx).1 := by
   simp [evalMatryoshkaPrefixIncremental, evalMatryoshkaPrefixFull]
 
-/-- Preheader `SArray` `__restrict__` SIMD vectorization gate (`LeanNative.IR.Bridge` / `ln_c_opt`):
-    requires exclusive ownership (`isExclusive = true`), zero escaping closures (`escapesInBody = false`),
-    and positive trip count (`0 < tripCount`). -/
+/-- Preheader `SArray` `__restrict__` SIMD vectorization gate (`LeanNative.IR.Bridge` / `ln_c_opt`). -/
 structure SArrayRestrictSimdInput where
-  isExclusive   : Bool
+  isExclusive : Bool
   escapesInBody : Bool
-  tripCount     : Nat
+  tripCount : Nat
   deriving Repr, DecidableEq, BEq
-
 def canEmitRestrictSimd (inp : SArrayRestrictSimdInput) : Bool :=
   inp.isExclusive && !inp.escapesInBody && decide (0 < inp.tripCount)
-
 theorem sarray_restrict_simd_gate_sound (inp : SArrayRestrictSimdInput) :
-    canEmitRestrictSimd inp = true ↔
-      (inp.isExclusive = true ∧ inp.escapesInBody = false ∧ 0 < inp.tripCount) := by
+    canEmitRestrictSimd inp = true ↔ (inp.isExclusive = true ∧ inp.escapesInBody = false ∧ 0 < inp.tripCount) := by
   simp [canEmitRestrictSimd, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 def sarrayRestrictSimdMetaSpec : MetaGateSpec SArrayRestrictSimdInput
-    (fun inp => inp.isExclusive = true ∧ inp.escapesInBody = false ∧ 0 < inp.tripCount) where
-  gate := canEmitRestrictSimd
-  sound := fun inp => (sarray_restrict_simd_gate_sound inp).mp
-  complete := fun inp => (sarray_restrict_simd_gate_sound inp).mpr
-  posWitness := ⟨true, false, 64⟩
-  negWitness := ⟨true, true, 64⟩
-  nonVacuous := rfl
-  tight := rfl
-
+    (fun inp => inp.isExclusive = true ∧ inp.escapesInBody = false ∧ 0 < inp.tripCount) :=
+  ⟨canEmitRestrictSimd, fun inp => (sarray_restrict_simd_gate_sound inp).mp,
+   fun inp => (sarray_restrict_simd_gate_sound inp).mpr, ⟨true, false, 64⟩, ⟨true, true, 64⟩, rfl, rfl⟩
 theorem sarray_escaping_closure_rejects_restrict_simd (inp : SArrayRestrictSimdInput)
-    (h_esc : inp.escapesInBody = true) :
-    canEmitRestrictSimd inp = false :=
+    (h_esc : inp.escapesInBody = true) : canEmitRestrictSimd inp = false :=
   sarrayRestrictSimdMetaSpec.rejects_unsafe inp (by simp [h_esc])
 
-/-- Recursive binary-tree `Prod` and interprocedural nested `whileM`/`repeatM` SROA unboxing gate (`ln_c_opt` Pass 3):
-    requires positive leaf count (`0 < leafCount`), zero escaping pair pointers (`pairEscapes = false`),
-    and a purely scalar inner-loop accumulator (`innerLoopScalar = true`). -/
+/-- Recursive binary-tree `Prod` and interprocedural nested `whileM`/`repeatM` SROA unboxing gate (`ln_c_opt` Pass 3). -/
 structure NestedProdWhileSroaInput where
-  leafCount       : Nat
-  pairEscapes     : Bool
+  leafCount : Nat
+  pairEscapes : Bool
   innerLoopScalar : Bool
   deriving Repr, DecidableEq, BEq
-
 def canUnboxNestedProdWhile (inp : NestedProdWhileSroaInput) : Bool :=
   decide (0 < inp.leafCount) && !inp.pairEscapes && inp.innerLoopScalar
-
 theorem nested_prod_while_sroa_gate_sound (inp : NestedProdWhileSroaInput) :
-    canUnboxNestedProdWhile inp = true ↔
-      (0 < inp.leafCount ∧ inp.pairEscapes = false ∧ inp.innerLoopScalar = true) := by
+    canUnboxNestedProdWhile inp = true ↔ (0 < inp.leafCount ∧ inp.pairEscapes = false ∧ inp.innerLoopScalar = true) := by
   simp [canUnboxNestedProdWhile, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 def nestedProdWhileSroaMetaSpec : MetaGateSpec NestedProdWhileSroaInput
-    (fun inp => 0 < inp.leafCount ∧ inp.pairEscapes = false ∧ inp.innerLoopScalar = true) where
-  gate := canUnboxNestedProdWhile
-  sound := fun inp => (nested_prod_while_sroa_gate_sound inp).mp
-  complete := fun inp => (nested_prod_while_sroa_gate_sound inp).mpr
-  posWitness := ⟨8, false, true⟩
-  negWitness := ⟨8, true, true⟩
-  nonVacuous := rfl
-  tight := rfl
-
+    (fun inp => 0 < inp.leafCount ∧ inp.pairEscapes = false ∧ inp.innerLoopScalar = true) :=
+  ⟨canUnboxNestedProdWhile, fun inp => (nested_prod_while_sroa_gate_sound inp).mp,
+   fun inp => (nested_prod_while_sroa_gate_sound inp).mpr, ⟨8, false, true⟩, ⟨8, true, true⟩, rfl, rfl⟩
 theorem escaping_pair_rejects_nested_prod_sroa (inp : NestedProdWhileSroaInput)
-    (h_esc : inp.pairEscapes = true) :
-    canUnboxNestedProdWhile inp = false :=
+    (h_esc : inp.pairEscapes = true) : canUnboxNestedProdWhile inp = false :=
   nestedProdWhileSroaMetaSpec.rejects_unsafe inp (by simp [h_esc])
 
-/-- Structural 64x64->128 `mulHi` (`__uint128_t`) peephole gate (`ln_c_opt` Pass 3b):
-    requires an exact `0xFFFFFFFF` 32-bit half-word mask (`maskBits = 32`), a `32`-bit shift (`shiftBits = 32`),
-    and clean cross-product carry propagation (`hasCarry = true`). -/
+/-- Structural 64x64->128 `mulHi` (`__uint128_t`) peephole gate (`ln_c_opt` Pass 3b). -/
 structure MulHiU128PeepholeInput where
-  maskBits  : Nat
+  maskBits : Nat
   shiftBits : Nat
-  hasCarry  : Bool
+  hasCarry : Bool
   deriving Repr, DecidableEq, BEq
-
 def canRewriteMulHiU128 (inp : MulHiU128PeepholeInput) : Bool :=
   decide (inp.maskBits = 32) && decide (inp.shiftBits = 32) && inp.hasCarry
-
 theorem mulhi_u128_peephole_gate_sound (inp : MulHiU128PeepholeInput) :
-    canRewriteMulHiU128 inp = true ↔
-      (inp.maskBits = 32 ∧ inp.shiftBits = 32 ∧ inp.hasCarry = true) := by
+    canRewriteMulHiU128 inp = true ↔ (inp.maskBits = 32 ∧ inp.shiftBits = 32 ∧ inp.hasCarry = true) := by
   simp [canRewriteMulHiU128, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 def mulHiU128PeepholeMetaSpec : MetaGateSpec MulHiU128PeepholeInput
-    (fun inp => inp.maskBits = 32 ∧ inp.shiftBits = 32 ∧ inp.hasCarry = true) where
-  gate := canRewriteMulHiU128
-  sound := fun inp => (mulhi_u128_peephole_gate_sound inp).mp
-  complete := fun inp => (mulhi_u128_peephole_gate_sound inp).mpr
-  posWitness := ⟨32, 32, true⟩
-  negWitness := ⟨16, 32, true⟩
-  nonVacuous := rfl
-  tight := rfl
-
+    (fun inp => inp.maskBits = 32 ∧ inp.shiftBits = 32 ∧ inp.hasCarry = true) :=
+  ⟨canRewriteMulHiU128, fun inp => (mulhi_u128_peephole_gate_sound inp).mp,
+   fun inp => (mulhi_u128_peephole_gate_sound inp).mpr, ⟨32, 32, true⟩, ⟨16, 32, true⟩, rfl, rfl⟩
 theorem non32_mask_rejects_mulhi_u128_peephole (inp : MulHiU128PeepholeInput)
-    (h_ne : inp.maskBits ≠ 32) :
-    canRewriteMulHiU128 inp = false :=
+    (h_ne : inp.maskBits ≠ 32) : canRewriteMulHiU128 inp = false :=
   mulHiU128PeepholeMetaSpec.rejects_unsafe inp (by simp [h_ne])
 
-/-- General 2-tuple `SArray` in-place fill gate (`ln_c_opt` Sub-pass 2D):
-    fires iff both tuple components have `SArray` tag `248` (`tag0 = 248 ∧ tag1 = 248`),
-    both arrays have capacity at least `stop` (`stop ≤ cap0 ∧ stop ≤ cap1`),
-    and the fill values are loop-invariant scalar constants (`scalarFill = true`). -/
+/-- General 2-tuple `SArray` in-place fill gate (`ln_c_opt` Sub-pass 2D). -/
 structure TupleSArrayFillInput where
-  tag0       : Nat
-  tag1       : Nat
-  cap0       : Nat
-  cap1       : Nat
-  stop       : Nat
+  tag0 : Nat
+  tag1 : Nat
+  cap0 : Nat
+  cap1 : Nat
+  stop : Nat
   scalarFill : Bool
   deriving Repr, DecidableEq, BEq
-
 def canRewriteTupleSArrayFill (inp : TupleSArrayFillInput) : Bool :=
   decide (inp.tag0 = 248) && decide (inp.tag1 = 248) &&
     decide (inp.stop ≤ inp.cap0) && decide (inp.stop ≤ inp.cap1) && inp.scalarFill
-
 theorem tuple_sarray_fill_gate_sound (inp : TupleSArrayFillInput) :
     canRewriteTupleSArrayFill inp = true ↔
       (inp.tag0 = 248 ∧ inp.tag1 = 248 ∧ inp.stop ≤ inp.cap0 ∧ inp.stop ≤ inp.cap1 ∧ inp.scalarFill = true) := by
   simp [canRewriteTupleSArrayFill, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
-
 def tupleSArrayFillMetaSpec : MetaGateSpec TupleSArrayFillInput
-    (fun inp => inp.tag0 = 248 ∧ inp.tag1 = 248 ∧ inp.stop ≤ inp.cap0 ∧ inp.stop ≤ inp.cap1 ∧ inp.scalarFill = true) where
-  gate := canRewriteTupleSArrayFill
-  sound := fun inp => (tuple_sarray_fill_gate_sound inp).mp
-  complete := fun inp => (tuple_sarray_fill_gate_sound inp).mpr
-  posWitness := ⟨248, 248, 64, 64, 64, true⟩
-  negWitness := ⟨246, 248, 64, 64, 64, true⟩
-  nonVacuous := rfl
-  tight := rfl
-
+    (fun inp => inp.tag0 = 248 ∧ inp.tag1 = 248 ∧ inp.stop ≤ inp.cap0 ∧ inp.stop ≤ inp.cap1 ∧ inp.scalarFill = true) :=
+  ⟨canRewriteTupleSArrayFill, fun inp => (tuple_sarray_fill_gate_sound inp).mp,
+   fun inp => (tuple_sarray_fill_gate_sound inp).mpr, ⟨248, 248, 64, 64, 64, true⟩, ⟨246, 248, 64, 64, 64, true⟩, rfl, rfl⟩
 theorem non_sarray_tag_rejects_tuple_fill (inp : TupleSArrayFillInput)
-    (h_tag : inp.tag0 ≠ 248) :
-    canRewriteTupleSArrayFill inp = false :=
+    (h_tag : inp.tag0 ≠ 248) : canRewriteTupleSArrayFill inp = false :=
   tupleSArrayFillMetaSpec.rejects_unsafe inp (by simp [h_tag])
 
-/-- Small-`Nat` and `Bool` leaf unboxing gate inside `whileM` SROA (`ln_c_opt` Pass 3):
-    fires iff every `Nat` leaf fits in 63-bit tagged scalar representation (`natFitsScalar = true`),
-    all array indexing is within `SArray` bounds (`boundsProven = true`),
-    and no intermediate boxed `Nat` allocation escapes (`natEscapes = false`). -/
+/-- Small-`Nat` and `Bool` leaf unboxing gate inside `whileM` SROA (`ln_c_opt` Pass 3). -/
 structure NatBoolWhileSroaInput where
   natFitsScalar : Bool
-  boundsProven  : Bool
-  natEscapes    : Bool
+  boundsProven : Bool
+  natEscapes : Bool
   deriving Repr, DecidableEq, BEq
-
 def canUnboxNatBoolWhile (inp : NatBoolWhileSroaInput) : Bool :=
   inp.natFitsScalar && inp.boundsProven && !inp.natEscapes
-
 theorem nat_bool_while_sroa_gate_sound (inp : NatBoolWhileSroaInput) :
-    canUnboxNatBoolWhile inp = true ↔
-      (inp.natFitsScalar = true ∧ inp.boundsProven = true ∧ inp.natEscapes = false) := by
+    canUnboxNatBoolWhile inp = true ↔ (inp.natFitsScalar = true ∧ inp.boundsProven = true ∧ inp.natEscapes = false) := by
   simp [canUnboxNatBoolWhile, Bool.and_eq_true, and_assoc]
-
 def natBoolWhileSroaMetaSpec : MetaGateSpec NatBoolWhileSroaInput
-    (fun inp => inp.natFitsScalar = true ∧ inp.boundsProven = true ∧ inp.natEscapes = false) where
-  gate := canUnboxNatBoolWhile
-  sound := fun inp => (nat_bool_while_sroa_gate_sound inp).mp
-  complete := fun inp => (nat_bool_while_sroa_gate_sound inp).mpr
-  posWitness := ⟨true, true, false⟩
-  negWitness := ⟨true, true, true⟩
-  nonVacuous := rfl
-  tight := rfl
-
+    (fun inp => inp.natFitsScalar = true ∧ inp.boundsProven = true ∧ inp.natEscapes = false) :=
+  ⟨canUnboxNatBoolWhile, fun inp => (nat_bool_while_sroa_gate_sound inp).mp,
+   fun inp => (nat_bool_while_sroa_gate_sound inp).mpr, ⟨true, true, false⟩, ⟨true, true, true⟩, rfl, rfl⟩
 theorem escaping_nat_rejects_while_sroa (inp : NatBoolWhileSroaInput)
-    (h_esc : inp.natEscapes = true) :
-    canUnboxNatBoolWhile inp = false :=
+    (h_esc : inp.natEscapes = true) : canUnboxNatBoolWhile inp = false :=
   natBoolWhileSroaMetaSpec.rejects_unsafe inp (by simp [h_esc])
+
+/-- Mixed `(SArray, Scalar)` `whileM`/`repeatM` SROA gate (`ln_c_opt` Pass 3):
+    fires iff every `SArray` leaf is exclusively owned at loop entry (`sarrayExclusive = true`),
+    all scalar leaves unbox cleanly (`scalarsUnboxed = true`), and no `SArray` alias escapes (`aliasEscapes = false`). -/
+structure MixedSArrayWhileSroaInput where
+  sarrayExclusive : Bool
+  scalarsUnboxed : Bool
+  aliasEscapes : Bool
+  deriving Repr, DecidableEq, BEq
+def canRewriteMixedSArrayWhile (inp : MixedSArrayWhileSroaInput) : Bool :=
+  inp.sarrayExclusive && inp.scalarsUnboxed && !inp.aliasEscapes
+theorem mixed_sarray_while_sroa_gate_sound (inp : MixedSArrayWhileSroaInput) :
+    canRewriteMixedSArrayWhile inp = true ↔
+      (inp.sarrayExclusive = true ∧ inp.scalarsUnboxed = true ∧ inp.aliasEscapes = false) := by
+  simp [canRewriteMixedSArrayWhile, Bool.and_eq_true, and_assoc]
+def mixedSArrayWhileSroaMetaSpec : MetaGateSpec MixedSArrayWhileSroaInput
+    (fun inp => inp.sarrayExclusive = true ∧ inp.scalarsUnboxed = true ∧ inp.aliasEscapes = false) :=
+  ⟨canRewriteMixedSArrayWhile, fun inp => (mixed_sarray_while_sroa_gate_sound inp).mp,
+   fun inp => (mixed_sarray_while_sroa_gate_sound inp).mpr, ⟨true, true, false⟩, ⟨true, true, true⟩, rfl, rfl⟩
+theorem escaping_alias_rejects_mixed_while_sroa (inp : MixedSArrayWhileSroaInput)
+    (h_esc : inp.aliasEscapes = true) : canRewriteMixedSArrayWhile inp = false :=
+  mixedSArrayWhileSroaMetaSpec.rejects_unsafe inp (by simp [h_esc])
+
+/-- Nested 3-tuple `(Array, SArray, SArray)` `Range.forIn'` in-place mutation gate (`ln_c_opt` Sub-pass 2E):
+    fires iff `tag0 = 246` (`Array`), `tag1 = 248 ∧ tag2 = 248` (`SArray`), and inner `Range.forIn'` is unit-step (`step = 1`). -/
+structure NestedRangeTupleMutInput where
+  tag0 : Nat
+  tag1 : Nat
+  tag2 : Nat
+  step : Nat
+  deriving Repr, DecidableEq, BEq
+def canRewriteNestedRangeTupleMut (inp : NestedRangeTupleMutInput) : Bool :=
+  decide (inp.tag0 = 246) && decide (inp.tag1 = 248) && decide (inp.tag2 = 248) && decide (inp.step = 1)
+theorem nested_range_tuple_mut_gate_sound (inp : NestedRangeTupleMutInput) :
+    canRewriteNestedRangeTupleMut inp = true ↔
+      (inp.tag0 = 246 ∧ inp.tag1 = 248 ∧ inp.tag2 = 248 ∧ inp.step = 1) := by
+  simp [canRewriteNestedRangeTupleMut, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def nestedRangeTupleMutMetaSpec : MetaGateSpec NestedRangeTupleMutInput
+    (fun inp => inp.tag0 = 246 ∧ inp.tag1 = 248 ∧ inp.tag2 = 248 ∧ inp.step = 1) :=
+  ⟨canRewriteNestedRangeTupleMut, fun inp => (nested_range_tuple_mut_gate_sound inp).mp,
+   fun inp => (nested_range_tuple_mut_gate_sound inp).mpr, ⟨246, 248, 248, 1⟩, ⟨246, 248, 248, 2⟩, rfl, rfl⟩
+theorem non_unit_step_rejects_nested_range_mut (inp : NestedRangeTupleMutInput)
+    (h_step : inp.step ≠ 1) : canRewriteNestedRangeTupleMut inp = false :=
+  nestedRangeTupleMutMetaSpec.rejects_unsafe inp (by simp [h_step])
 
 end LeanNative.Spec
 

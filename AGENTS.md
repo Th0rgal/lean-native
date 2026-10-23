@@ -38,7 +38,7 @@ Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lea
    Every refactoring, bug fix, or feature addition must compress or factor existing code and specifications. New capabilities must generalize Layer I meta-theorems or shared backend passes rather than accreting ad-hoc lines of code.
 
 6. **Doc & Context Ratchet (`--sync-docs`)**:
-   Any commit that adds or modifies theorems in `LeanNative/Proofs/AxiomAudit.lean` (`153/153` audited theorems) or tight specs in `LeanNative/Spec.lean` (`64/64` tight specs) must keep `README.md`, `AGENTS.md`, and `scripts/ci_verify.sh` synchronized; `./scripts/ci_verify.sh --sync-docs` verifies that doc theorem/spec counters match the in-kernel audit.
+   Any commit that adds or modifies theorems in `LeanNative/Proofs/AxiomAudit.lean` (`157/157` audited theorems) or tight specs in `LeanNative/Spec.lean` (`68/68` tight specs) must keep `README.md`, `AGENTS.md`, and `scripts/ci_verify.sh` synchronized; `./scripts/ci_verify.sh --sync-docs` verifies that doc theorem/spec counters match the in-kernel audit.
 
 ---
 

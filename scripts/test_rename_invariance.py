@@ -37,6 +37,15 @@ def verify_rename_invariance(raw_c_path: str) -> None:
     m_dijk = re.search(r"LEAN_EXPORT lean_object\* [^\n]*renamedTaskDijkstraPairingHeap_spec__2___redArg\([^)]*\)\{", c3)
     assert m_dijk and "ln_sarray_ensure_exclusive_u64" in c3[m_dijk.start() : m_dijk.start() + 1400]
 
+    # 1c. Verify Sub-pass 2E mixed (Array, ByteArray) and nested 3-tuple CSR setup loops fired on renamed CSR init
+    for fn_csr in [
+        "renamedTaskSparseMatmulCsr_spec__0___redArg",
+        "renamedTaskSparseMatmulCsr_spec__1___redArg",
+    ]:
+        m_csr = re.search(rf"LEAN_EXPORT lean_object\* [^\n]*{fn_csr}\([^)]*\)\{{", c3)
+        assert m_csr, f"Missing {fn_csr}"
+        assert "lean_copy_expand_array" in c3[m_csr.start() : m_csr.start() + 1400], f"Sub-pass 2E failed on {fn_csr}"
+
     # 2. Verify Pass 3 interprocedural scalar companion emission and outer-loop scalarization
     for inner_fn in [
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskSha256Compress_spec__0___redArg_scalar",
@@ -44,6 +53,8 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskJsonSimdScanner_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__1___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__0___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__1___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__2___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__3___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRegexDfaStep_spec__2___redArg_scalar",

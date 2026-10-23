@@ -178,6 +178,10 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.non_sarray_tag_rejects_tuple_fill
   , ``LeanNative.Spec.nat_bool_while_sroa_gate_sound
   , ``LeanNative.Spec.escaping_nat_rejects_while_sroa
+  , ``LeanNative.Spec.mixed_sarray_while_sroa_gate_sound
+  , ``LeanNative.Spec.escaping_alias_rejects_mixed_while_sroa
+  , ``LeanNative.Spec.nested_range_tuple_mut_gate_sound
+  , ``LeanNative.Spec.non_unit_step_rejects_nested_range_mut
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

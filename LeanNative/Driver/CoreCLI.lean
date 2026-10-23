@@ -482,9 +482,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.canUnboxNestedProdWhile ⟨8, false, true⟩ &&
     LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩ &&
     LeanNative.Spec.canRewriteTupleSArrayFill ⟨248, 248, 64, 64, 64, true⟩ &&
-    LeanNative.Spec.canUnboxNatBoolWhile ⟨true, true, false⟩
+    LeanNative.Spec.canUnboxNatBoolWhile ⟨true, true, false⟩ &&
+    LeanNative.Spec.canRewriteMixedSArrayWhile ⟨true, true, false⟩ &&
+    LeanNative.Spec.canRewriteNestedRangeTupleMut ⟨246, 248, 248, 1⟩
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 153
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 157
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
