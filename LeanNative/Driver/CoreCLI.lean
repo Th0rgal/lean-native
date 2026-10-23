@@ -151,7 +151,177 @@ private def writeAndPrintJsonOrSummary (outPath jsonText summaryText : String) (
   if !outPath.isEmpty then IO.FS.writeFile outPath jsonText
   IO.println (if jsonFlag then jsonText else summaryText)
 
+private def lnirTypeToCType : LNIRType → String
+  | .i1 | .i8 => "uint8_t" | .i16 => "uint16_t" | .i32 => "uint32_t" | .i64 | .tuple _ => "uint64_t"
+  | .usize => "size_t" | .u256 | .i256 => "const uint64_t*" | .f32 => "float" | .f64 => "double"
+  | .rawPtr _ | .sarray _ | .objPtr | .taggedPtr | .storageMap => "void*" | .unit => "void"
+
+private def lnirTypeToRustType : LNIRType → String
+  | .i1 | .i8 => "u8" | .i16 => "u16" | .i32 => "u32" | .i64 | .tuple _ => "u64"
+  | .usize => "usize" | .u256 | .i256 => "*const u64" | .f32 => "f32" | .f64 => "f64"
+  | .rawPtr _ | .sarray _ | .objPtr | .taggedPtr | .storageMap => "*mut core::ffi::c_void" | .unit => "()"
+
+structure CAbiBindingSig where
+  cSymbol : String
+  leanName : String
+  params : List (String × String × String) -- (paramName, cType, rustType)
+  retCType : String
+  retRustType : String
+  deriving Repr, Inhabited
+
+private def mapLeanTypeStr (tyRaw : String) : String × String :=
+  let t := tyRaw.trimAscii.toString
+  if t == "Bool" || t == "UInt8" then ("uint8_t", "u8")
+  else if t == "UInt16" then ("uint16_t", "u16")
+  else if t == "UInt32" then ("uint32_t", "u32")
+  else if t == "UInt64" || t == "Nat" then ("uint64_t", "u64")
+  else if t == "Int64" || t == "Int" then ("int64_t", "i64")
+  else if t == "USize" then ("size_t", "usize")
+  else if t == "Float" then ("double", "f64")
+  else ("const void*", "*const core::ffi::c_void")
+
+private def parseParamGroups (sig : String) : List (String × String × String) :=
+  let groups := (sig.splitOn "(").drop 1
+  groups.foldl (fun acc g =>
+    match (g.splitOn ")").head? with
+    | some inside =>
+      match inside.splitOn ":" with
+      | namesStr :: tyStr :: _ =>
+        let (cTy, rsTy) := mapLeanTypeStr tyStr
+        let names := (namesStr.splitOn " ").map (·.trimAscii.toString) |>.filter (!·.isEmpty)
+        acc ++ names.map (fun n => (n, cTy, rsTy))
+      | _ => acc
+    | none => acc) []
+
+private def extractReturnTypeStr (sig : String) : String × String :=
+  let afterParens := match (sig.splitOn ")").reverse.head? with | some s => s | none => sig
+  let beforeEq := (afterParens.splitOn ":=").headD afterParens
+  let retRaw := (beforeEq.splitOn ":").drop 1 |>.reverse.headD "UInt64"
+  mapLeanTypeStr retRaw
+
+/-- Extract `@[export <sym>]` / `@[inline, export <sym>]` signatures and `#guard` fixtures from `.lean` source text. -/
+def extractLeanSourceCAbiAndGuards (raw : String) : List CAbiBindingSig × List (String × String) :=
+  let lines := raw.splitOn "\n"
+  let rec loop (ls : List String) (pendSym : Option String) (sigs : List CAbiBindingSig) (guards : List (String × String)) :
+      List CAbiBindingSig × List (String × String) :=
+    match ls with
+    | [] => (sigs.reverse, guards.reverse)
+    | line :: rest =>
+      let tr := line.trimAscii.toString
+      let guards' :=
+        if tr.startsWith "#guard " then
+          let expr := (tr.drop 7).trimAscii.toString
+          match expr.splitOn "==" with
+          | lhs :: rhs :: _ => (lhs.trimAscii.toString, rhs.trimAscii.toString) :: guards
+          | _ => (expr, "true") :: guards
+        else guards
+      let symOpt :=
+        match tr.splitOn "export " with
+        | _ :: afterExp :: _ =>
+          if tr.startsWith "@[" then
+            let tok := String.ofList (afterExp.trimAscii.toString.toList.takeWhile (fun c => c != ']' && c != ',' && c != ' '))
+            if tok.isEmpty then pendSym else some tok
+          else pendSym
+        | _ => pendSym
+      if tr.startsWith "def " || tr.startsWith "abbrev " then
+        match symOpt with
+        | some sym =>
+          let headerLines := tr :: (rest.take 3 |>.takeWhile (fun l => !(l.trimAscii.toString.startsWith "def ") && !(l.trimAscii.toString.startsWith "@[")))
+          let fullSig := String.intercalate " " (headerLines.map (·.trimAscii.toString))
+          let afterDef := (fullSig.drop 4).trimAscii.toString
+          let leanName := String.ofList (afterDef.toList.takeWhile (fun c => c != ' ' && c != '(' && c != ':'))
+          let params := parseParamGroups fullSig
+          let (retC, retRs) := extractReturnTypeStr fullSig
+          loop rest none ({ cSymbol := sym, leanName, params, retCType := retC, retRustType := retRs } :: sigs) guards'
+        | none => loop rest none sigs guards'
+      else loop rest symOpt sigs guards'
+  loop lines none [] []
+
+def moduleToCAbiSigs (m : LNIRModule) : List CAbiBindingSig :=
+  m.decls.map fun d => {
+    cSymbol := d.name, leanName := d.name,
+    params := d.params.map (fun p => (p.name, lnirTypeToCType p.ty, lnirTypeToRustType p.ty)),
+    retCType := lnirTypeToCType d.retTy, retRustType := lnirTypeToRustType d.retTy
+  }
+
+def emitCAbiHeaderFromSigs (sigs : List CAbiBindingSig) : String :=
+  let declProtos := sigs.map fun s =>
+    let paramsC := if s.params.isEmpty then "void" else String.intercalate ", " (s.params.map fun (n, cTy, _) => s!"{cTy} {n}")
+    s!"{s.retCType} {s.cSymbol}({paramsC});"
+  String.intercalate "\n" ([
+    "/* Auto-generated C99 Header by lean-native C-ABI Binding Generator */",
+    "#pragma once", "#ifndef LEAN_NATIVE_GENERATED_C_ABI_H", "#define LEAN_NATIVE_GENERATED_C_ABI_H",
+    "#include <stdint.h>", "#include <stddef.h>",
+    "typedef struct { const void* data; size_t len; size_t stride_bytes; } lean_native_flat_slice_t;",
+    "typedef struct { void* data; size_t len; size_t cap; } lean_native_mut_slice_t;",
+    "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L",
+    "_Static_assert(sizeof(lean_native_flat_slice_t) == 24, \"lean_native_flat_slice_t size == 24\");",
+    "_Static_assert(sizeof(lean_native_mut_slice_t) == 24, \"lean_native_mut_slice_t size == 24\");",
+    "#endif",
+    "#ifdef __cplusplus", "extern \"C\" {", "#endif"
+  ] ++ declProtos ++ ["#ifdef __cplusplus", "}", "#endif", "#endif /* LEAN_NATIVE_GENERATED_C_ABI_H */", ""])
+
+def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) : String :=
+  let declExterns := sigs.map fun s =>
+    let paramsRs := String.intercalate ", " (s.params.map fun (n, _, rsTy) => s!"{n}: {rsTy}")
+    let retPart := if s.retRustType == "()" then "" else s!" -> {s.retRustType}"
+    s!"    pub fn {s.cSymbol}({paramsRs}){retPart};"
+  String.intercalate "\n" ([
+    "//! Auto-generated Rust FFI bindings by lean-native C-ABI Binding Generator",
+    "#![allow(dead_code, non_camel_case_types, clashing_external_declarations)]",
+    "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
+    "pub struct LeanNativeFlatSlice { pub data: *const core::ffi::c_void, pub len: usize, pub stride_bytes: usize }",
+    "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
+    "pub struct LeanNativeMutSlice { pub data: *mut core::ffi::c_void, pub len: usize, pub cap: usize }",
+    "extern \"C\" {"
+  ] ++ declExterns ++ ["}", ""])
+
+def emitGuardFixturesJson (sourcePath : String) (sigs : List CAbiBindingSig) (guards : List (String × String)) : String :=
+  let esc := LeanNative.IR.jsonEscape
+  let expJson := String.intercalate "," (sigs.map fun s =>
+    s!"\{\"c_symbol\":\"{esc s.cSymbol}\",\"lean_name\":\"{esc s.leanName}\",\"arity\":{s.params.length},\"ret_c\":\"{esc s.retCType}\",\"ret_rust\":\"{esc s.retRustType}\"}")
+  let gJson := String.intercalate "," (guards.map fun (lhs, rhs) =>
+    s!"\{\"expr\":\"{esc lhs}\",\"expected\":\"{esc rhs}\"}")
+  s!"\{\"schema\":\"lean-native.cabi-fixtures.v1\",\"source\":\"{esc sourcePath}\",\"exports_count\":{sigs.length},\"guards_count\":{guards.length},\"exports\":[{expJson}],\"guards\":[{gJson}]}\n"
+
+/-- Emit a C-ABI header (`.h`) for an `LNIRModule`. -/
+def emitCAbiHeader (m : LNIRModule) : String :=
+  emitCAbiHeaderFromSigs (moduleToCAbiSigs m)
+
+def runEmitCAbiBindings (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
+  let leanPath := findFlagValue args "--lean" (findFlagValue args "--input" (findFirstPositional args))
+  let hdrPath := findFlagValue args "--emit-header" (findFlagValue args "--header" "")
+  let rsPath := findFlagValue args "--emit-rust" (findFlagValue args "--rust" "")
+  let fixPath := findFlagValue args "--emit-fixtures" (findFlagValue args "--fixtures" "")
+  let outPath := findFlagValue args "-o" ""
+  let jsonFlag := hasFlag args "--json"
+  let (sigs, guards, srcLabel) ←
+    if !leanPath.isEmpty && (← System.FilePath.pathExists leanPath) && leanPath.endsWith ".lean" then
+      let raw ← IO.FS.readFile leanPath
+      let (s, g) := extractLeanSourceCAbiAndGuards raw
+      if !s.isEmpty then pure (s, g, leanPath)
+      else
+        let m ← loadInputModule elaborateHook? args
+        pure (moduleToCAbiSigs (runDefaultPipeline m).1, g, leanPath)
+    else
+      let m ← loadInputModule elaborateHook? args
+      pure (moduleToCAbiSigs (runDefaultPipeline m).1, [], if leanPath.isEmpty then m.moduleName else leanPath)
+  let hdrText := emitCAbiHeaderFromSigs sigs
+  let rsText := emitCAbiRustFromSigs sigs
+  let fixText := emitGuardFixturesJson srcLabel sigs guards
+  if !hdrPath.isEmpty then IO.FS.writeFile hdrPath hdrText
+  if !rsPath.isEmpty then IO.FS.writeFile rsPath rsText
+  if !fixPath.isEmpty then IO.FS.writeFile fixPath fixText
+  if !outPath.isEmpty then IO.FS.writeFile outPath (if jsonFlag then fixText else hdrText)
+  if jsonFlag || (hdrPath.isEmpty && rsPath.isEmpty && fixPath.isEmpty && outPath.isEmpty) then
+    IO.print fixText
+  else
+    IO.println s!"[{tag}] Emitted C-ABI bindings (exports={sigs.length}, guards={guards.length}, header={hdrPath}, rust={rsPath}, fixtures={fixPath})"
+  return 0
+
 def runCompileMode (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
+  if !(findFlagValue args "--emit-header" (findFlagValue args "--emit-rust" (findFlagValue args "--emit-fixtures" ""))).isEmpty then
+    let _ ← runEmitCAbiBindings tag elaborateHook? args
   let opts := parseCoreCLIOptions args
   let telCfg ← TelemetryConfig.probe args
   let baseMod ← loadInputModule elaborateHook? args opts.emitCABI
@@ -175,35 +345,21 @@ def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let irText := if isBaseline then emitLLVMBaseline modToEmit arch else emitLLVMOptimized modToEmit arch
   writeOrPrint outPath irText (some s!"[{tag}] Wrote LLVM 18 IR ({arch.triple}, baseline={isBaseline}, decls={modToEmit.decls.length}) to {outPath}")
 
-private def lnirTypeToCType : LNIRType → String
-  | .i1 | .i8 => "uint8_t" | .i16 => "uint16_t" | .i32 => "uint32_t" | .i64 | .tuple _ => "uint64_t"
-  | .usize => "size_t" | .u256 | .i256 => "const uint64_t*" | .f32 => "float" | .f64 => "double"
-  | .rawPtr _ | .sarray _ | .objPtr | .taggedPtr | .storageMap => "void*" | .unit => "void"
-
-/-- Emit a C-ABI header (`.h`) and static library (`.a`) or LLVM IR for an `LNIRModule`
-    so Rust (`crates/turbo-lean`) or C/C++ callers can invoke verified Lean kernels directly
-    via `extern "C"` at `< 2 ns` overhead. -/
-def emitCAbiHeader (m : LNIRModule) : String :=
-  let declProtos := m.decls.map fun d =>
-    let paramsC := if d.params.isEmpty then "void" else String.intercalate ", " (d.params.map fun p => s!"{lnirTypeToCType p.ty} {p.name}")
-    s!"{lnirTypeToCType d.retTy} {d.name}({paramsC});"
-  String.intercalate "\n" ([
-    "/* Auto-generated C-ABI Header by lean-native compile-static-lib */",
-    "#ifndef LEAN_NATIVE_GENERATED_C_ABI_H", "#define LEAN_NATIVE_GENERATED_C_ABI_H",
-    "#include <stdint.h>", "#include <stddef.h>",
-    "#ifdef __cplusplus", "extern \"C\" {", "#endif", ""
-  ] ++ declProtos ++ ["", "#ifdef __cplusplus", "}", "#endif", "#endif /* LEAN_NATIVE_GENERATED_C_ABI_H */", ""])
-
 def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO LNIRModule)) (args : List String) : IO UInt32 := do
   let arch := parseTargetArch (findFlagValue args "--arch" "x86_64")
   let outPath := findFlagValue args "-o" "/tmp/liblean_native_kernels.a"
-  let headerPath := findFlagValue args "--header" (outPath ++ ".h")
+  let headerPath := findFlagValue args "--emit-header" (findFlagValue args "--header" (outPath ++ ".h"))
+  let rustPath := findFlagValue args "--emit-rust" (findFlagValue args "--rust" "")
+  let fixPath := findFlagValue args "--emit-fixtures" (findFlagValue args "--fixtures" "")
   let jsonFlag := hasFlag args "--json"
   let baseMod ← loadInputModule elaborateHook? args
   let (optMod, _) := runDefaultPipeline baseMod
+  let sigs := moduleToCAbiSigs optMod
   let irText := emitLLVMOptimized optMod arch
-  let hdrText := emitCAbiHeader optMod
+  let hdrText := emitCAbiHeaderFromSigs sigs
   IO.FS.writeFile headerPath hdrText
+  if !rustPath.isEmpty then IO.FS.writeFile rustPath (emitCAbiRustFromSigs sigs)
+  if !fixPath.isEmpty then IO.FS.writeFile fixPath (emitGuardFixturesJson optMod.moduleName sigs [])
   let tmpLl := outPath ++ ".tmp.ll"
   let tmpObj := outPath ++ ".tmp.o"
   IO.FS.writeFile tmpLl irText
@@ -217,7 +373,7 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
   else pure false
   if !builtArchive then IO.FS.writeFile outPath irText
   if jsonFlag then
-    IO.println s!"\{\"status\":\"compiled_static_lib\",\"archive\":{if builtArchive then "true" else "false"},\"library\":\"{outPath}\",\"header\":\"{headerPath}\",\"decls\":{optMod.decls.length}}"
+    IO.println s!"\{\"status\":\"compiled_static_lib\",\"archive\":{if builtArchive then "true" else "false"},\"library\":\"{outPath}\",\"header\":\"{headerPath}\",\"rust\":\"{rustPath}\",\"decls\":{optMod.decls.length}}"
   else
     IO.println s!"[{tag}] Wrote C-ABI static library ({outPath}, archive={builtArchive}) and header ({headerPath}, decls={optMod.decls.length})"
   return 0
@@ -488,9 +644,18 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.canEmitZeroDepMathlibCert ⟨false, false, false, true⟩ &&
     !(LeanNative.Spec.canEmitZeroDepMathlibCert ⟨false, true, false, true⟩) &&
     LeanNative.Backend.selectOptimalSearchBackend 8192 false true false false true false true == .FpgaLsc2 &&
-    (emitZeroDepMathlibProof { declName := "tauceti_cert", stmtSrc := "x = y", cofactorTerms := [("h1", 1), ("h2", -1)], dagRwSteps := ["Nat.add_comm"], distilledLemmas := ["Nat.add_zero"], farkasWeights := [1, 2] }).startsWith "by\n"
+    (emitZeroDepMathlibProof { declName := "tauceti_cert", stmtSrc := "x = y", cofactorTerms := [("h1", 1), ("h2", -1)], dagRwSteps := ["Nat.add_comm"], distilledLemmas := ["Nat.add_zero"], farkasWeights := [1, 2] }).startsWith "by\n" &&
+    LeanNative.Spec.canBindCAbiSliceIo ⟨16, 48, 4096, 8, 16⟩ && !(LeanNative.Spec.canBindCAbiSliceIo ⟨16, 48, 4096, 32, 16⟩) &&
+    LeanNative.Spec.verifyCAbiSliceIoC 16 48 4096 8 16 == 1 && LeanNative.Spec.verifyCAbiSliceIoC 16 48 512 8 16 == 0
+  let specRaw ← if ← System.FilePath.pathExists "LeanNative/Spec.lean" then IO.FS.readFile "LeanNative/Spec.lean" else pure ""
+  let (specSigs, specGuards) := extractLeanSourceCAbiAndGuards specRaw
+  let cabiGenHdr := emitCAbiHeaderFromSigs (if specSigs.isEmpty then moduleToCAbiSigs optMod else specSigs)
+  let cabiGenRs := emitCAbiRustFromSigs (if specSigs.isEmpty then moduleToCAbiSigs optMod else specSigs)
+  let cabiGenFix := emitGuardFixturesJson "LeanNative/Spec.lean" specSigs specGuards
+  let cabiGenOk := (cabiGenHdr.splitOn "extern \"C\"").length > 1 && (cabiGenRs.splitOn "extern \"C\"").length > 1 &&
+    (specRaw.isEmpty || (!specSigs.isEmpty && !specGuards.isEmpty && (cabiGenFix.splitOn "leannative_verify_cabi_slice_io").length > 1))
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 176
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 185 && cabiGenOk
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
@@ -804,6 +969,8 @@ def dispatchSharedCommand (tag : String) (elaborateHook? : Option (String → IO
   | "audit-axioms" :: rest       => some <$> runAuditAxioms rest
   | "compile-llvm" :: rest       => some <$> runCompileLLVM tag elaborateHook? rest
   | "compile-static-lib" :: rest => some <$> runCompileStaticLib tag elaborateHook? rest
+  | "emit-cabi-bindings" :: rest => some <$> runEmitCAbiBindings tag elaborateHook? rest
+  | "compile-c-abi" :: rest      => some <$> runEmitCAbiBindings tag elaborateHook? rest
   | "compile-mlir" :: rest       => some <$> runCompileMLIR tag elaborateHook? rest
   | "compile-ptx" :: rest       => some <$> runCompilePTX tag elaborateHook? rest
   | "compile-metal" :: rest     => some <$> runCompileMetal tag elaborateHook? rest

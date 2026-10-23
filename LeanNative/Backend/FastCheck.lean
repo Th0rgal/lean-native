@@ -726,6 +726,9 @@ def emitFastCheckCABI (m : LNIRModule) : String :=
     "    for (uint64_t i = 0ULL; i < num_samples; ++i) {\n        uint64_t gas_in = (i < 7ULL) ? b_gas[i] : (lean_native_cabi_splitmix64(seed + i * 0x9E3779B97F4A7C15ULL) % 200000001ULL);",
     "        uint64_t steps = bootstrap_steps + loop_scale * (gas_in & 0xffffULL) + csr_cost;\n        if (steps > max_steps) max_steps = steps;\n        if (!refuted && steps > candidate_k) { refuted = 1ULL; viol_gas = gas_in; }\n    }",
     "    if (max_steps_out) *max_steps_out = max_steps;\n    if (violating_gas_out) *violating_gas_out = viol_gas;\n    return refuted;\n}\n",
+    "uint64_t leannative_verify_cabi_slice_io(uint64_t row_count, uint64_t row_bytes, uint64_t max_buffer_bytes, uint64_t out_len, uint64_t out_cap) {",
+    "    __uint128_t total = (__uint128_t)row_count * (__uint128_t)row_bytes;",
+    "    return (max_buffer_bytes > 0ULL && total <= (__uint128_t)max_buffer_bytes && out_len <= out_cap) ? 1ULL : 0ULL;\n}\n",
     emitCABIFarkasCheckI64,
     "\n#ifdef __cplusplus\n}\n#endif\n"
   ]

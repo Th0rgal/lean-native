@@ -17,16 +17,16 @@ BASE_REF="HEAD"
 for arg in "$@"; do
   if [[ "$arg" == "--sync-docs" ]]; then
     python3 scripts/sync_docs_inventory.py --check
-    grep -q "183" README.md
-    grep -q "94" README.md
-    grep -q "183" AGENTS.md
+    grep -q "185" README.md
+    grep -q "96" README.md
+    grep -q "185" AGENTS.md
   else
     BASE_REF="$arg"
   fi
 done
 python3 scripts/sync_docs_inventory.py --check
-grep -q "183" README.md
-grep -q "183" AGENTS.md
+grep -q "185" README.md
+grep -q "185" AGENTS.md
 EXTRA_PR_FLAGS="${LEAN_NATIVE_PR_FLAGS:-}"
 
 echo "=================================================================="
@@ -51,15 +51,20 @@ if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean..."
   turbo-lean --json audit-spec LeanNative/Spec.lean > /tmp/ln_ci_audit_spec.json
   grep -q '"vacuous_specs": 0' /tmp/ln_ci_audit_spec.json
-  grep -q '"tight_specs": 94' /tmp/ln_ci_audit_spec.json
-  echo "  -> turbo-lean audit-spec: 94/94 tight in Spec.lean (0 vacuous specs)!"
+  grep -q '"tight_specs": 96' /tmp/ln_ci_audit_spec.json
+  echo "  -> turbo-lean audit-spec: 96/96 tight in Spec.lean (0 vacuous specs)!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (183 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (185 theorems) & Self-Tests..."
 $CORE_BIN self-test
 $FULL_BIN self-test
+$CORE_BIN emit-cabi-bindings --lean LeanNative/Spec.lean --emit-header /tmp/ln_ci_spec_cabi.h --emit-rust /tmp/ln_ci_spec_cabi.rs --emit-fixtures /tmp/ln_ci_spec_fixtures.json
+grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_cabi.h
+grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_cabi.rs
+grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_fixtures.json
+$CORE_BIN compile --c-abi -o /tmp/ln_ci_fastcheck_cabi.c
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 183" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 185" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."
@@ -84,11 +89,15 @@ $FULL_BIN build-exe tests/test_runner.lean -o /tmp/ln_ci_test_runner
 /tmp/ln_ci_test_runner
 CC_BIN="gcc"
 command -v gcc >/dev/null 2>&1 || CC_BIN="/usr/bin/clang"
-$CC_BIN -O3 -Iruntime -x c - -o /tmp/ln_ci_trm_parity runtime/lean_native_runtime.c << 'EOF'
+$CC_BIN -O3 -Iruntime -I/tmp -x c - -o /tmp/ln_ci_trm_parity runtime/lean_native_runtime.c /tmp/ln_ci_fastcheck_cabi.c << 'EOF'
 #include "lean_native_runtime.h"
+#include "ln_ci_spec_cabi.h"
 #include <stdio.h>
 int main(void) {
     int ok = lean_native_trm_matryoshka_parity_selftest();
+    ok = ok && (leannative_verify_cabi_slice_io(16ULL, 48ULL, 4096ULL, 8ULL, 16ULL) == 1ULL);
+    ok = ok && (leannative_verify_cabi_slice_io(16ULL, 48ULL, 512ULL, 8ULL, 16ULL) == 0ULL);
+    ok = ok && (leannative_verify_cabi_slice_io(16ULL, 48ULL, 4096ULL, 32ULL, 16ULL) == 0ULL);
     printf("MATRYOSHKA_TRM_C_RUNTIME_PARITY=%s\n", ok ? "PASSED" : "FAILED");
     return ok ? 0 : 1;
 }

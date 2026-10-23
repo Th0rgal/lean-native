@@ -972,5 +972,31 @@ theorem native_decide_rejects_mathlib_cert_lowering (inp : MathlibCertLoweringIn
     (h_nd : inp.usesNativeDecide = true) : canEmitZeroDepMathlibCert inp = false :=
   mathlibCertLoweringMetaSpec.rejects_unsafe inp (by simp [h_nd])
 
+/-- Formal C-ABI flat-slice & out-buffer bounds gate (`emit-cabi-bindings` / `compile-static-lib`). -/
+structure CAbiSliceIoInput where
+  (rowCount rowBytes maxBufferBytes outLen outCap : Nat)
+  deriving Repr, DecidableEq, BEq
+def canBindCAbiSliceIo (inp : CAbiSliceIoInput) : Bool :=
+  decide (0 < inp.maxBufferBytes) && decide (inp.rowCount * inp.rowBytes ≤ inp.maxBufferBytes) && decide (inp.outLen ≤ inp.outCap)
+theorem cabi_slice_io_gate_sound (inp : CAbiSliceIoInput) :
+    canBindCAbiSliceIo inp = true ↔
+      (0 < inp.maxBufferBytes ∧ inp.rowCount * inp.rowBytes ≤ inp.maxBufferBytes ∧ inp.outLen ≤ inp.outCap) := by
+  simp [canBindCAbiSliceIo, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def cabiSliceIoMetaSpec : MetaGateSpec CAbiSliceIoInput
+    (fun inp => 0 < inp.maxBufferBytes ∧ inp.rowCount * inp.rowBytes ≤ inp.maxBufferBytes ∧ inp.outLen ≤ inp.outCap) :=
+  ⟨canBindCAbiSliceIo, fun inp => (cabi_slice_io_gate_sound inp).mp,
+   fun inp => (cabi_slice_io_gate_sound inp).mpr, ⟨16, 48, 4096, 8, 16⟩, ⟨16, 48, 4096, 32, 16⟩, rfl, rfl⟩
+theorem overflow_out_len_rejects_cabi_slice_io (inp : CAbiSliceIoInput)
+    (h_ovf : inp.outCap < inp.outLen) : canBindCAbiSliceIo inp = false :=
+  cabiSliceIoMetaSpec.rejects_unsafe inp (by omega)
+
+@[inline, export leannative_verify_cabi_slice_io]
+def verifyCAbiSliceIoC (rowCount rowBytes maxBufferBytes outLen outCap : UInt64) : UInt64 :=
+  if canBindCAbiSliceIo ⟨rowCount.toNat, rowBytes.toNat, maxBufferBytes.toNat, outLen.toNat, outCap.toNat⟩ then 1 else 0
+
+#guard verifyCAbiSliceIoC 16 48 4096 8 16 == 1
+#guard verifyCAbiSliceIoC 16 48 512 8 16 == 0
+#guard verifyCAbiSliceIoC 16 48 4096 32 16 == 0
+
 end LeanNative.Spec
 

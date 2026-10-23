@@ -123,6 +123,7 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.reg_cut_feasible_sound, ``LeanNative.Spec.reg_cut_cost_monotone
   , ``LeanNative.Spec.fpga_lsc2_256bit_routing_sound
   , ``LeanNative.Spec.mathlib_cert_lowering_gate_sound, ``LeanNative.Spec.native_decide_rejects_mathlib_cert_lowering
+  , ``LeanNative.Spec.cabi_slice_io_gate_sound, ``LeanNative.Spec.overflow_out_len_rejects_cabi_slice_io
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
