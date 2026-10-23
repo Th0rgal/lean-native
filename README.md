@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" width="108" alt="lean-native" />
+  <img src="logo.svg" width="160" alt="lean-native" />
 </p>
 
 <h1 align="center">lean-native</h1>
