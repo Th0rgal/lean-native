@@ -463,19 +463,14 @@ private theorem weightedColVec_zero_weights (matrix : List (List Nat)) (len colI
     dotNat (weightedColVec [] matrix len colIdx) x = 0 := by
   induction len generalizing colIdx x with
   | zero => rfl
-  | succ len ih =>
-    cases x with
-    | nil => exact dotNat_nil_right _
-    | cons _ xs => simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
+  | succ len ih => cases x <;> simp [weightedColVec, weightedColSum, dotNat_nil_right, dotNat_cons, ih]
 
 private theorem weightedColVec_zero_matrix (weights : List Nat) (len colIdx : Nat) (x : List Nat) :
     dotNat (weightedColVec weights [] len colIdx) x = 0 := by
   induction len generalizing colIdx x with
   | zero => rfl
   | succ len ih =>
-    cases x with
-    | nil => exact dotNat_nil_right _
-    | cons _ xs => cases weights <;> simp [weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1) xs]
+    cases x <;> cases weights <;> simp [weightedColVec, weightedColSum, dotNat_nil_right, dotNat_cons, ih]
 
 private theorem weightedColVec_dot_split (w : Nat) (ws : List Nat) (row : List Nat) (rows : List (List Nat))
     (colIdx : Nat) (x : List Nat) :
@@ -486,50 +481,32 @@ private theorem weightedColVec_dot_split (w : Nat) (ws : List Nat) (row : List N
   | cons x0 xs ih =>
     simp only [List.length_cons, weightedColVec, weightedColSum, dotNat_cons, ih (colIdx + 1)]
     have h_drop : dotNat (row.drop colIdx) (x0 :: xs) = row.getD colIdx 0 * x0 + dotNat (row.drop (colIdx + 1)) xs := by
-      clear ih
-      induction colIdx generalizing row with
-      | zero =>
-        cases row <;> simp [List.getD, dotNat_nil_left, dotNat_cons]
-      | succ k ih_k =>
-        cases row with
-        | nil => simp [List.getD, dotNat_nil_left]
-        | cons r0 rs =>
-          simpa [List.getD, Nat.add_assoc] using ih_k rs
-    rw [h_drop, Nat.add_mul, Nat.mul_add, Nat.mul_assoc]
-    omega
+      clear ih; induction colIdx generalizing row with
+      | zero => cases row <;> simp [List.getD, dotNat_nil_left, dotNat_cons]
+      | succ k ih_k => cases row <;> simp [List.getD, dotNat_nil_left, ih_k, Nat.add_assoc]
+    rw [h_drop, Nat.add_mul, Nat.mul_add, Nat.mul_assoc]; omega
 
 theorem farkas_weighted_rows_le (weights : List Nat) (matrix : List (List Nat)) (rhs x : List Nat)
     (h_rows : ∀ i, i < weights.length → dotNat (matrix.getD i []) x ≤ rhs.getD i 0) :
     dotNat (weightedColVec weights matrix x.length 0) x ≤ dotNat weights rhs := by
   induction weights generalizing matrix rhs with
-  | nil =>
-    rw [weightedColVec_zero_weights, dotNat_nil_left]
-    exact Nat.le_refl 0
+  | nil => simp [weightedColVec_zero_weights, dotNat_nil_left]
   | cons w ws ih =>
     have h0 : dotNat (matrix.getD 0 []) x ≤ rhs.getD 0 0 := h_rows 0 (Nat.zero_lt_succ _)
     cases matrix with
-    | nil =>
-      rw [weightedColVec_zero_matrix]
-      exact Nat.zero_le _
+    | nil => simp [weightedColVec_zero_matrix]
     | cons row rows =>
       rw [weightedColVec_dot_split]
       have h_row0 : w * dotNat row x ≤ w * rhs.getD 0 0 := Nat.mul_le_mul_left w h0
       have h_tail : dotNat (weightedColVec ws rows x.length 0) x ≤ dotNat ws (rhs.drop 1) :=
         ih rows (rhs.drop 1) (fun i hi => by
-          have := h_rows (i + 1) (Nat.succ_lt_succ hi)
-          cases rhs <;> simpa [List.getD] using this)
+          have := h_rows (i + 1) (Nat.succ_lt_succ hi); cases rhs <;> simpa [List.getD] using this)
       cases rhs with
       | nil =>
         have h_rhs_nil : dotNat ws [] = 0 := dotNat_nil_right ws
-        rw [dotNat_nil_right]
-        have h_r0 : w * dotNat row x = 0 := Nat.eq_zero_of_le_zero h_row0
-        have h_rt : dotNat (weightedColVec ws rows x.length 0) x = 0 := by
-          rw [List.drop, h_rhs_nil] at h_tail
-          exact Nat.eq_zero_of_le_zero h_tail
-        simp [List.drop, h_r0, h_rt]
-      | cons b bs =>
-        rw [dotNat_cons]
-        exact Nat.add_le_add h_row0 h_tail
+        rw [List.drop, h_rhs_nil] at h_tail
+        simp [dotNat_nil_right, Nat.eq_zero_of_le_zero h_row0, Nat.eq_zero_of_le_zero h_tail]
+      | cons b bs => rw [dotNat_cons]; exact Nat.add_le_add h_row0 h_tail
 
 private theorem weightedColVec_getD (weights : List Nat) (matrix : List (List Nat)) (len colIdx j : Nat)
     (hj : j < len) :
@@ -540,8 +517,8 @@ private theorem weightedColVec_getD (weights : List Nat) (matrix : List (List Na
     cases j with
     | zero => simp [weightedColVec, List.getD]
     | succ j_prev =>
-      have hj_prev : j_prev < len := Nat.lt_of_succ_lt_succ hj
-      simpa [weightedColVec, List.getD, Nat.add_right_comm, Nat.add_assoc] using ih (colIdx + 1) j_prev hj_prev
+      simpa [weightedColVec, List.getD, Nat.add_right_comm, Nat.add_assoc] using
+        ih (colIdx + 1) j_prev (Nat.lt_of_succ_lt_succ hj)
 
 private theorem checkFarkasCols_sound (weights : List Nat) (matrix : List (List Nat)) (obj : List Nat) (n j : Nat)
     (h_ok : checkFarkasCols weights matrix obj n = true) (hj : j < n) :
@@ -561,55 +538,37 @@ theorem checkFarkasNat_sound (weights : List Nat) (matrix : List (List Nat)) (rh
   simp [checkFarkasNat, Bool.and_eq_true, decide_eq_true_eq] at h_cert
   let x_pad := x.take obj.length ++ List.replicate (obj.length - x.length) 0
   have h_xpad_len : x_pad.length = obj.length := by
-    simp [x_pad, List.length_append, List.length_take, List.length_replicate]
-    omega
+    simp [x_pad, List.length_append, List.length_take, List.length_replicate]; omega
   have h_rep_zero : ∀ (u : List Nat) (k : Nat), dotNat u (List.replicate k 0) = 0 := by
-    intro u k
-    induction u generalizing k with
+    intro u k; induction u generalizing k with
     | nil => rfl
-    | cons u0 us ih_u =>
-      cases k with
-      | zero => exact dotNat_nil_right _
-      | succ k_prev => simp [List.replicate, dotNat_cons, ih_u k_prev]
+    | cons u0 us ih_u => cases k <;> simp [List.replicate, dotNat_nil_right, dotNat_cons, ih_u]
   have h_obj_xpad : dotNat obj x = dotNat obj x_pad := by
-    clear h_cert h_rows h_xpad_len
-    induction obj generalizing x with
+    clear h_cert h_rows h_xpad_len; induction obj generalizing x with
     | nil => rfl
     | cons c cs ih =>
       cases x with
-      | nil =>
-        simp [x_pad, dotNat_nil_right, h_rep_zero]
-      | cons x0 xs =>
-        simp [x_pad, List.length_cons, Nat.succ_sub_succ_eq_sub, dotNat_cons, ih xs]
+      | nil => simp [x_pad, dotNat_nil_right, h_rep_zero]
+      | cons x0 xs => simp [x_pad, List.length_cons, Nat.succ_sub_succ_eq_sub, dotNat_cons, ih xs]
   rw [h_obj_xpad]
-  have h_pw : dotNat obj x_pad ≤ dotNat (weightedColVec weights matrix x_pad.length 0) x_pad := by
-    apply dotNat_le_of_pointwise_le
-    intro j hj
-    rw [h_xpad_len, weightedColVec_getD weights matrix obj.length 0 j hj, Nat.zero_add]
-    exact checkFarkasCols_sound weights matrix obj obj.length j h_cert.1 hj
+  have h_pw : dotNat obj x_pad ≤ dotNat (weightedColVec weights matrix x_pad.length 0) x_pad :=
+    dotNat_le_of_pointwise_le _ _ _ (fun j hj => by
+      rw [h_xpad_len, weightedColVec_getD weights matrix obj.length 0 j hj, Nat.zero_add]
+      exact checkFarkasCols_sound weights matrix obj obj.length j h_cert.1 hj)
   have h_rows_xpad : ∀ i, i < weights.length → dotNat (matrix.getD i []) x_pad ≤ rhs.getD i 0 := by
     intro i hi
-    have h_le_x : dotNat (matrix.getD i []) x_pad ≤ dotNat (matrix.getD i []) x := by
-      clear h_cert h_rows h_xpad_len h_obj_xpad h_pw hi
-      generalize matrix.getD i [] = row
-      have h_take_rep : ∀ (r v : List Nat) (n k : Nat), dotNat r (v.take n ++ List.replicate k 0) ≤ dotNat r v := by
-        intro r v n k
-        induction r generalizing v n with
-        | nil => exact Nat.le_refl 0
-        | cons r0 rs ih_r =>
-          cases n with
-          | zero =>
-            simp [List.take, h_rep_zero]
-          | succ n_prev =>
-            cases v with
-            | nil => simp [List.take, h_rep_zero, dotNat_nil_right]
-            | cons v0 vs =>
-              simp only [List.take, List.cons_append, dotNat_cons]
-              exact Nat.add_le_add_left (ih_r vs n_prev) (r0 * v0)
-      exact h_take_rep row x obj.length (obj.length - x.length)
-    exact Nat.le_trans h_le_x (h_rows i hi)
-  have h_farkas := farkas_weighted_rows_le weights matrix rhs x_pad h_rows_xpad
-  exact Nat.le_trans h_pw (Nat.le_trans h_farkas h_cert.2)
+    have h_take_rep : ∀ (r v : List Nat) (n k : Nat), dotNat r (v.take n ++ List.replicate k 0) ≤ dotNat r v := by
+      intro r v n k; induction r generalizing v n with
+      | nil => exact Nat.le_refl 0
+      | cons r0 rs ih_r =>
+        cases n with
+        | zero => simp [List.take, h_rep_zero]
+        | succ n_prev =>
+          cases v with
+          | nil => simp [List.take, h_rep_zero, dotNat_nil_right]
+          | cons v0 vs => exact Nat.add_le_add_left (ih_r vs n_prev) (r0 * v0)
+    exact Nat.le_trans (h_take_rep (matrix.getD i []) x obj.length (obj.length - x.length)) (h_rows i hi)
+  exact Nat.le_trans h_pw (Nat.le_trans (farkas_weighted_rows_le weights matrix rhs x_pad h_rows_xpad) h_cert.2)
 
 /-! ## 8. Relational Polytope Sampling, Zero-Copy ByteSlice & Grace-Blackwell Headroom Gate -/
 
@@ -855,6 +814,42 @@ def nested2DRangeForInMetaSpec : MetaGateSpec Nested2DRangeForInInput
 theorem non_scalar_inner_idx_rejects_2d_range_forin (inp : Nested2DRangeForInInput)
     (h_ns : inp.innerIdxScalar = false) : canRewriteNested2DRangeForIn inp = false :=
   nested2DRangeForInMetaSpec.rejects_unsafe inp (by simp [h_ns])
+
+/-- Stack-allocated persistent `Range` (`m_rc = 0`) & saturating offset-limit elision gate (`ln_c_opt` Pass 2). -/
+structure InBodyRangeForInElisionInput where
+  (rangeRc step : Nat) (rangeEscapes offsetBounded : Bool)
+  deriving Repr, DecidableEq, BEq
+def canElideInBodyRangeAlloc (inp : InBodyRangeForInElisionInput) : Bool :=
+  decide (inp.rangeRc = 0) && decide (inp.step = 1) && !inp.rangeEscapes && inp.offsetBounded
+theorem inbody_range_forin_elision_gate_sound (inp : InBodyRangeForInElisionInput) :
+    canElideInBodyRangeAlloc inp = true ↔
+      (inp.rangeRc = 0 ∧ inp.step = 1 ∧ inp.rangeEscapes = false ∧ inp.offsetBounded = true) := by
+  simp [canElideInBodyRangeAlloc, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def inBodyRangeForInElisionMetaSpec : MetaGateSpec InBodyRangeForInElisionInput
+    (fun inp => inp.rangeRc = 0 ∧ inp.step = 1 ∧ inp.rangeEscapes = false ∧ inp.offsetBounded = true) :=
+  ⟨canElideInBodyRangeAlloc, fun inp => (inbody_range_forin_elision_gate_sound inp).mp,
+   fun inp => (inbody_range_forin_elision_gate_sound inp).mpr, ⟨0, 1, false, true⟩, ⟨0, 1, true, true⟩, rfl, rfl⟩
+theorem escaping_range_rejects_inbody_elision (inp : InBodyRangeForInElisionInput)
+    (h_esc : inp.rangeEscapes = true) : canElideInBodyRangeAlloc inp = false :=
+  inBodyRangeForInElisionMetaSpec.rejects_unsafe inp (by simp [h_esc])
+
+/-- Ping-pong `SArray` (`(x, y, scalars...)`) pointer-swap SROA & pointer-rebind gate (`ln_c_opt` Pass 2/3). -/
+structure PingPongSArraySwapSROAInput where
+  (tagX tagY : Nat) (disjointBuffers ptrReboundAfterCall : Bool)
+  deriving Repr, DecidableEq, BEq
+def canSwapPingPongSArray (inp : PingPongSArraySwapSROAInput) : Bool :=
+  decide (inp.tagX = 248) && decide (inp.tagY = 248) && inp.disjointBuffers && inp.ptrReboundAfterCall
+theorem pingpong_sarray_swap_sroa_gate_sound (inp : PingPongSArraySwapSROAInput) :
+    canSwapPingPongSArray inp = true ↔
+      (inp.tagX = 248 ∧ inp.tagY = 248 ∧ inp.disjointBuffers = true ∧ inp.ptrReboundAfterCall = true) := by
+  simp [canSwapPingPongSArray, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def pingPongSArraySwapSROAMetaSpec : MetaGateSpec PingPongSArraySwapSROAInput
+    (fun inp => inp.tagX = 248 ∧ inp.tagY = 248 ∧ inp.disjointBuffers = true ∧ inp.ptrReboundAfterCall = true) :=
+  ⟨canSwapPingPongSArray, fun inp => (pingpong_sarray_swap_sroa_gate_sound inp).mp,
+   fun inp => (pingpong_sarray_swap_sroa_gate_sound inp).mpr, ⟨248, 248, true, true⟩, ⟨248, 248, false, true⟩, rfl, rfl⟩
+theorem aliased_buffers_reject_pingpong_swap (inp : PingPongSArraySwapSROAInput)
+    (h_alias : inp.disjointBuffers = false) : canSwapPingPongSArray inp = false :=
+  pingPongSArraySwapSROAMetaSpec.rejects_unsafe inp (by simp [h_alias])
 
 end LeanNative.Spec
 

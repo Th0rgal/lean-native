@@ -25,120 +25,68 @@ def forbiddenAxioms : List Name :=
 
 /-- Complete list of formal soundness & refinement theorems audited in `LeanNative`. -/
 def auditedTheoremNames : List Name :=
-  [ ``LeanNative.Semantics.ScalarExprEquiv.refl
-  , ``LeanNative.Semantics.ScalarExprEquiv.symm
-  , ``LeanNative.Semantics.ScalarExprEquiv.trans
-  , ``LeanNative.Semantics.ExprRefines.refl
-  , ``LeanNative.Semantics.ExprRefines.trans
-  , ``LeanNative.Semantics.ExprRefines.of_scalar_equiv
-  , ``LeanNative.Semantics.ExprEquiv.refl
-  , ``LeanNative.Semantics.ExprEquiv.symm
-  , ``LeanNative.Semantics.ExprEquiv.trans
-  , ``LeanNative.Semantics.ExprEquiv.toRefines
-  , ``LeanNative.Semantics.CodeRefines.refl
-  , ``LeanNative.Semantics.CodeRefines.trans
-  , ``LeanNative.Semantics.CodeRefines.letBind_congr
-  , ``LeanNative.Semantics.CodeRefines.rawStore_congr
-  , ``LeanNative.Semantics.CodeRefines.incRef_congr
-  , ``LeanNative.Semantics.CodeRefines.decRef_congr
-  , ``LeanNative.Semantics.CodeRefines.ite_congr
-  , ``LeanNative.Semantics.CodeRefines.parFor_congr
-  , ``LeanNative.Proofs.rewriteBinOpStep_sound
-  , ``LeanNative.Proofs.rewriteSelectStep_sound
-  , ``LeanNative.Proofs.rewriteScalarPeepholeStep_sound
-  , ``LeanNative.Proofs.rewriteScalarPeephole_sound
-  , ``LeanNative.Proofs.rewriteLNIRExpr_sound
-  , ``LeanNative.Proofs.evalExpr_optimizeExpr_eq
-  , ``LeanNative.Proofs.evalCode_rewriteCodePeephole_eq
-  , ``LeanNative.Proofs.rewriteCodePeephole_refines
-  , ``LeanNative.Proofs.unboxTupleProj0_sound
-  , ``LeanNative.Proofs.unboxTupleProj1_sound
-  , ``LeanNative.Proofs.unboxTupleProj_sound
-  , ``LeanNative.Proofs.eval_unboxTupleSROA_refines
-  , ``LeanNative.Proofs.unboxTupleLetChain_refines
-  , ``LeanNative.Proofs.unboxTupleLetChain1_refines
-  , ``LeanNative.Proofs.unboxTupleDeadElim_refines
-  , ``LeanNative.Proofs.unboxNestedTupleDeadElim_refines
-  , ``LeanNative.Proofs.hoistExclusivity_sound
-  , ``LeanNative.Proofs.eval_hoistExclusivity_refines
-  , ``LeanNative.Proofs.hoistExclusivityPreheader_refines
-  , ``LeanNative.Proofs.unboxedLoopStep_sound
-  , ``LeanNative.Proofs.unboxedLoopAccumulator_sim
-  , ``LeanNative.Proofs.normSymExpr_constU64
-  , ``LeanNative.Proofs.normSymExpr_constBool
-  , ``LeanNative.Proofs.normSymExpr_const_sound
-  , ``LeanNative.Proofs.checkSingleSample_of_codeRefines
-  , ``LeanNative.Proofs.checkConcreteSamples_of_codeRefines
-  , ``LeanNative.Proofs.sound_of_checkSingleSample_eq_true
-  , ``LeanNative.Proofs.symbolicTV_refl_sound
-  , ``LeanNative.IR.UInt256.bitAnd_self
-  , ``LeanNative.IR.UInt256.bitOr_self
-  , ``LeanNative.IR.UInt256.bitXor_zero
-  , ``LeanNative.IR.UInt256.zero_bitXor
-  , ``LeanNative.IR.UInt256.bitOr_zero
-  , ``LeanNative.IR.UInt256.zero_bitOr
+  [ ``LeanNative.Semantics.ScalarExprEquiv.refl, ``LeanNative.Semantics.ScalarExprEquiv.symm
+  , ``LeanNative.Semantics.ScalarExprEquiv.trans, ``LeanNative.Semantics.ExprRefines.refl
+  , ``LeanNative.Semantics.ExprRefines.trans, ``LeanNative.Semantics.ExprRefines.of_scalar_equiv
+  , ``LeanNative.Semantics.ExprEquiv.refl, ``LeanNative.Semantics.ExprEquiv.symm
+  , ``LeanNative.Semantics.ExprEquiv.trans, ``LeanNative.Semantics.ExprEquiv.toRefines
+  , ``LeanNative.Semantics.CodeRefines.refl, ``LeanNative.Semantics.CodeRefines.trans
+  , ``LeanNative.Semantics.CodeRefines.letBind_congr, ``LeanNative.Semantics.CodeRefines.rawStore_congr
+  , ``LeanNative.Semantics.CodeRefines.incRef_congr, ``LeanNative.Semantics.CodeRefines.decRef_congr
+  , ``LeanNative.Semantics.CodeRefines.ite_congr, ``LeanNative.Semantics.CodeRefines.parFor_congr
+  , ``LeanNative.Proofs.rewriteBinOpStep_sound, ``LeanNative.Proofs.rewriteSelectStep_sound
+  , ``LeanNative.Proofs.rewriteScalarPeepholeStep_sound, ``LeanNative.Proofs.rewriteScalarPeephole_sound
+  , ``LeanNative.Proofs.rewriteLNIRExpr_sound, ``LeanNative.Proofs.evalExpr_optimizeExpr_eq
+  , ``LeanNative.Proofs.evalCode_rewriteCodePeephole_eq, ``LeanNative.Proofs.rewriteCodePeephole_refines
+  , ``LeanNative.Proofs.unboxTupleProj0_sound, ``LeanNative.Proofs.unboxTupleProj1_sound
+  , ``LeanNative.Proofs.unboxTupleProj_sound, ``LeanNative.Proofs.eval_unboxTupleSROA_refines
+  , ``LeanNative.Proofs.unboxTupleLetChain_refines, ``LeanNative.Proofs.unboxTupleLetChain1_refines
+  , ``LeanNative.Proofs.unboxTupleDeadElim_refines, ``LeanNative.Proofs.unboxNestedTupleDeadElim_refines
+  , ``LeanNative.Proofs.hoistExclusivity_sound, ``LeanNative.Proofs.eval_hoistExclusivity_refines
+  , ``LeanNative.Proofs.hoistExclusivityPreheader_refines, ``LeanNative.Proofs.unboxedLoopStep_sound
+  , ``LeanNative.Proofs.unboxedLoopAccumulator_sim, ``LeanNative.Proofs.normSymExpr_constU64
+  , ``LeanNative.Proofs.normSymExpr_constBool, ``LeanNative.Proofs.normSymExpr_const_sound
+  , ``LeanNative.Proofs.checkSingleSample_of_codeRefines, ``LeanNative.Proofs.checkConcreteSamples_of_codeRefines
+  , ``LeanNative.Proofs.sound_of_checkSingleSample_eq_true, ``LeanNative.Proofs.symbolicTV_refl_sound
+  , ``LeanNative.IR.UInt256.bitAnd_self, ``LeanNative.IR.UInt256.bitOr_self
+  , ``LeanNative.IR.UInt256.bitXor_zero, ``LeanNative.IR.UInt256.zero_bitXor
+  , ``LeanNative.IR.UInt256.bitOr_zero, ``LeanNative.IR.UInt256.zero_bitOr
   , ``LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_same
   , ``LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_ne
   , ``LeanNative.Semantics.HeapState.storageLoad_after_storageStore_same
   , ``LeanNative.Semantics.HeapState.storageLoad_after_storageStore_ne
-  , ``LeanNative.Proofs.evalBinOp_u256_and_self
-  , ``LeanNative.Proofs.evalBinOp_u256_or_self
-  , ``LeanNative.Proofs.evalBinOp_u256_xor_zero
-  , ``LeanNative.Proofs.evalBinOp_u256_or_zero
-  , ``LeanNative.Proofs.storageStore_load_same_sound
-  , ``LeanNative.Proofs.storageStore_load_ne_sound
-  , ``LeanNative.Proofs.evalBinOp_const_fold_sound
-  , ``LeanNative.Proofs.rewriteConstFoldStep_sound
+  , ``LeanNative.Proofs.evalBinOp_u256_and_self, ``LeanNative.Proofs.evalBinOp_u256_or_self
+  , ``LeanNative.Proofs.evalBinOp_u256_xor_zero, ``LeanNative.Proofs.evalBinOp_u256_or_zero
+  , ``LeanNative.Proofs.storageStore_load_same_sound, ``LeanNative.Proofs.storageStore_load_ne_sound
+  , ``LeanNative.Proofs.evalBinOp_const_fold_sound, ``LeanNative.Proofs.rewriteConstFoldStep_sound
   , ``LeanNative.Proofs.rewriteScalarVerified_sound
   , ``LeanNative.Backend.FastCheck.certifyCounterexample_no_false_positive
   , ``LeanNative.Backend.FastCheck.substScalarExpr_nil
   , ``LeanNative.Backend.FastCheck.substSingleConstraint_sound
   , ``LeanNative.Backend.FastCheck.propagatePrecondition_letBind_sound
-  , ``LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound
-  , ``LeanNative.Spec.untrusted_opt_plugin_code_refines
-  , ``LeanNative.Spec.untrusted_opt_plugin_timeout_fallback
-  , ``LeanNative.Spec.untrusted_opt_plugin_reject_fallback
-  , ``LeanNative.Spec.opt_pipeline_two_step_refines
-  , ``LeanNative.Spec.opt_pipeline_chain_refines
-  , ``LeanNative.Spec.fastcheck_rejects_vacuous_precondition
-  , ``LeanNative.Spec.fastcheck_non_vacuous_tightness_law
-  , ``LeanNative.Spec.c_abi_box_zero_eq_one
-  , ``LeanNative.Spec.c_abi_unbox_box_zero
-  , ``LeanNative.Spec.c_abi_unbox_box_one
-  , ``LeanNative.Spec.pr_spec_pinning_blocks_spec_tampering
-  , ``LeanNative.Spec.pr_spec_pinning_blocks_test_tampering
-  , ``LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms
+  , ``LeanNative.Spec.untrusted_opt_plugin_tv_gate_sound, ``LeanNative.Spec.untrusted_opt_plugin_code_refines
+  , ``LeanNative.Spec.untrusted_opt_plugin_timeout_fallback, ``LeanNative.Spec.untrusted_opt_plugin_reject_fallback
+  , ``LeanNative.Spec.opt_pipeline_two_step_refines, ``LeanNative.Spec.opt_pipeline_chain_refines
+  , ``LeanNative.Spec.fastcheck_rejects_vacuous_precondition, ``LeanNative.Spec.fastcheck_non_vacuous_tightness_law
+  , ``LeanNative.Spec.c_abi_box_zero_eq_one, ``LeanNative.Spec.c_abi_unbox_box_zero
+  , ``LeanNative.Spec.c_abi_unbox_box_one, ``LeanNative.Spec.pr_spec_pinning_blocks_spec_tampering
+  , ``LeanNative.Spec.pr_spec_pinning_blocks_test_tampering, ``LeanNative.Spec.pr_spec_pinning_blocks_forbidden_axioms
   , ``LeanNative.Spec.pr_spec_pinning_gate_sound
-  , ``LeanNative.Proofs.uint64_mul_sixteen
-  , ``LeanNative.Proofs.uint64_mul_thirtytwo
-  , ``LeanNative.Proofs.uint64_two_mul
-  , ``LeanNative.Proofs.uint64_four_mul
-  , ``LeanNative.Proofs.uint64_eight_mul
-  , ``LeanNative.Proofs.uint64_div_two
-  , ``LeanNative.Proofs.uint64_div_four
-  , ``LeanNative.Proofs.uint64_div_eight
-  , ``LeanNative.Proofs.uint64_add_self_shl_one
-  , ``LeanNative.Proofs.uint64_add_assoc_const
-  , ``LeanNative.Proofs.uint64_and_mask_coalesce
-  , ``LeanNative.Proofs.uint64_or_mask_coalesce
-  , ``LeanNative.Proofs.uint64_xor_mask_coalesce
-  , ``LeanNative.Proofs.uint64_mul_add_distrib_const
-  , ``LeanNative.Proofs.evalScalarExpr_add_self_u64
-  , ``LeanNative.Proofs.evalScalarExpr_add_assoc_const_u64
-  , ``LeanNative.Proofs.evalScalarExpr_and_mask_coalesce_u64
-  , ``LeanNative.Proofs.evalScalarExpr_or_mask_coalesce_u64
-  , ``LeanNative.Proofs.evalScalarExpr_xor_mask_coalesce_u64
-  , ``LeanNative.Proofs.evalScalarExpr_mul_add_distrib_const_u64
-  , ``LeanNative.Spec.meta_verified_contract_compose_sound
-  , ``LeanNative.Spec.meta_validator_rejects_semantic_mutants
-  , ``LeanNative.Spec.meta_limb256_mul_lo_homomorphism
-  , ``LeanNative.Spec.meta_unbox_tuple_full_elim_sound
-  , ``LeanNative.Spec.meta_double_shift_mask_and_fma_sound
-  , ``LeanNative.Proofs.unboxTupleDeadElim_refines
-  , ``LeanNative.Proofs.uint64_shr_shl_mask_collapse
-  , ``LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64
-  , ``LeanNative.Proofs.evalScalarExpr_fma_fusion_u64
-  , ``LeanNative.Proofs.uint64_rotl_comm_or
+  , ``LeanNative.Proofs.uint64_mul_sixteen, ``LeanNative.Proofs.uint64_mul_thirtytwo
+  , ``LeanNative.Proofs.uint64_two_mul, ``LeanNative.Proofs.uint64_four_mul
+  , ``LeanNative.Proofs.uint64_eight_mul, ``LeanNative.Proofs.uint64_div_two
+  , ``LeanNative.Proofs.uint64_div_four, ``LeanNative.Proofs.uint64_div_eight
+  , ``LeanNative.Proofs.uint64_add_self_shl_one, ``LeanNative.Proofs.uint64_add_assoc_const
+  , ``LeanNative.Proofs.uint64_and_mask_coalesce, ``LeanNative.Proofs.uint64_or_mask_coalesce
+  , ``LeanNative.Proofs.uint64_xor_mask_coalesce, ``LeanNative.Proofs.uint64_mul_add_distrib_const
+  , ``LeanNative.Proofs.evalScalarExpr_add_self_u64, ``LeanNative.Proofs.evalScalarExpr_add_assoc_const_u64
+  , ``LeanNative.Proofs.evalScalarExpr_and_mask_coalesce_u64, ``LeanNative.Proofs.evalScalarExpr_or_mask_coalesce_u64
+  , ``LeanNative.Proofs.evalScalarExpr_xor_mask_coalesce_u64, ``LeanNative.Proofs.evalScalarExpr_mul_add_distrib_const_u64
+  , ``LeanNative.Spec.meta_verified_contract_compose_sound, ``LeanNative.Spec.meta_validator_rejects_semantic_mutants
+  , ``LeanNative.Spec.meta_limb256_mul_lo_homomorphism, ``LeanNative.Spec.meta_unbox_tuple_full_elim_sound
+  , ``LeanNative.Spec.meta_double_shift_mask_and_fma_sound, ``LeanNative.Proofs.unboxTupleDeadElim_refines
+  , ``LeanNative.Proofs.uint64_shr_shl_mask_collapse, ``LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64
+  , ``LeanNative.Proofs.evalScalarExpr_fma_fusion_u64, ``LeanNative.Proofs.uint64_rotl_comm_or
   , ``LeanNative.Spec.small_trip_prefers_cpu_simd, ``LeanNative.Spec.matrix_contraction_prefers_tpu_mxu
   , ``LeanNative.Spec.federated_node_effective_cost_monotone_in_queue, ``LeanNative.Spec.composeAffineBudget_eval
   , ``LeanNative.Spec.affine_step_budget_monotone, ``LeanNative.Spec.bootstrap_shift_step_budget_sound
@@ -163,6 +111,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.nested_range_tuple_mut_gate_sound, ``LeanNative.Spec.non_unit_step_rejects_nested_range_mut
   , ``LeanNative.Spec.early_return_ctor_strip_gate_sound, ``LeanNative.Spec.escaping_ctor_rejects_early_return_strip
   , ``LeanNative.Spec.nested_2d_range_forin_gate_sound, ``LeanNative.Spec.non_scalar_inner_idx_rejects_2d_range_forin
+  , ``LeanNative.Spec.inbody_range_forin_elision_gate_sound, ``LeanNative.Spec.escaping_range_rejects_inbody_elision
+  , ``LeanNative.Spec.pingpong_sarray_swap_sroa_gate_sound, ``LeanNative.Spec.aliased_buffers_reject_pingpong_swap
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

@@ -481,9 +481,10 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.canUnboxNestedProdWhile ⟨8, false, true⟩ && LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩ &&
     LeanNative.Spec.canRewriteTupleSArrayFill ⟨248, 248, 64, 64, 64, true⟩ && LeanNative.Spec.canUnboxNatBoolWhile ⟨true, true, false⟩ &&
     LeanNative.Spec.canRewriteMixedSArrayWhile ⟨true, true, false⟩ && LeanNative.Spec.canRewriteNestedRangeTupleMut ⟨246, 248, 248, 1⟩ &&
-    LeanNative.Spec.canStripEarlyReturnCtor ⟨true, true, false⟩ && LeanNative.Spec.canRewriteNested2DRangeForIn ⟨248, 1, true, true⟩
+    LeanNative.Spec.canStripEarlyReturnCtor ⟨true, true, false⟩ && LeanNative.Spec.canRewriteNested2DRangeForIn ⟨248, 1, true, true⟩ &&
+    LeanNative.Spec.canElideInBodyRangeAlloc ⟨0, 1, false, true⟩ && LeanNative.Spec.canSwapPingPongSArray ⟨248, 248, true, true⟩
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 161
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 165
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"

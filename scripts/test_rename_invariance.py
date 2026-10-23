@@ -46,15 +46,19 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         assert m_csr, f"Missing {fn_csr}"
         assert "lean_copy_expand_array" in c3[m_csr.start() : m_csr.start() + 1400], f"Sub-pass 2E failed on {fn_csr}"
 
-    # 1d. Verify Pass 2 2D outer->inner Range.forIn' and indirect gather fast-paths on renamed SpectralNorm & CSR
+    # 1d. Verify Pass 2 2D/3D outer->inner Range.forIn', stack Range elision, and indirect gather fast-paths
     for fn_2d in [
         "renamedTaskSpectralNorm_spec__1___redArg",
         "renamedTaskSpectralNorm_spec__3___redArg",
         "renamedTaskSparseMatmulCsr_spec__2___redArg",
+        "renamedTaskSparseMatmulCsr_spec__3___redArg",
+        "renamedTaskMatmulTiledU64_spec__1___redArg",
+        "renamedTaskMatmulTiledU64_spec__2___redArg",
+        "renamedTaskMatmulTiledU64_spec__3___redArg",
     ]:
         m_2d = re.search(rf"LEAN_EXPORT (?:lean_object\*|uint64_t) [^\n]*{fn_2d}\([^)]*\)\{{", c3)
         assert m_2d, f"Missing {fn_2d}"
-        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 1800], f"Pass 2 2D failed on {fn_2d}"
+        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 1800], f"Pass 2 2D/3D failed on {fn_2d}"
 
     # 2. Verify Pass 3 interprocedural scalar companion emission and outer-loop scalarization
     for inner_fn in [
