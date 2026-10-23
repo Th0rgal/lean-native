@@ -60,6 +60,7 @@ $CORE_BIN self-test
 $FULL_BIN self-test
 $CORE_BIN emit-cabi-bindings --lean LeanNative/Spec.lean --emit-header /tmp/ln_ci_spec_cabi.h --emit-rust /tmp/ln_ci_spec_cabi.rs --emit-fixtures /tmp/ln_ci_spec_fixtures.json
 grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_cabi.h
+grep -q "leannative_verify_no_runtime_slice_out" /tmp/ln_ci_spec_cabi.h
 grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_cabi.rs
 grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_fixtures.json
 $CORE_BIN compile --c-abi -o /tmp/ln_ci_fastcheck_cabi.c
@@ -93,11 +94,19 @@ $CC_BIN -O3 -Iruntime -I/tmp -x c - -o /tmp/ln_ci_trm_parity runtime/lean_native
 #include "lean_native_runtime.h"
 #include "ln_ci_spec_cabi.h"
 #include <stdio.h>
+extern uint32_t lean_native_cabi_swar_delim_scan(const uint8_t* ptr, size_t len, uint64_t* out_spans, size_t cap, uint64_t* state_io);
 int main(void) {
     int ok = lean_native_trm_matryoshka_parity_selftest();
     ok = ok && (leannative_verify_cabi_slice_io(16ULL, 48ULL, 4096ULL, 8ULL, 16ULL) == 1ULL);
     ok = ok && (leannative_verify_cabi_slice_io(16ULL, 48ULL, 512ULL, 8ULL, 16ULL) == 0ULL);
     ok = ok && (leannative_verify_cabi_slice_io(16ULL, 48ULL, 4096ULL, 32ULL, 16ULL) == 0ULL);
+    ok = ok && (leannative_verify_no_runtime_slice_out(0ULL, 0ULL, 0ULL, 8ULL, 16ULL) == 1ULL);
+    ok = ok && (leannative_verify_no_runtime_slice_out(1ULL, 0ULL, 0ULL, 8ULL, 16ULL) == 0ULL);
+    ok = ok && (leannative_pack_slice_span_u64(10ULL, 25ULL, 3ULL) == 0x0000000A00001903ULL);
+    uint64_t spans[8] = {0}; uint64_t state_io = 0ULL;
+    const uint8_t sample[] = "a|b\n<tag:v>";
+    uint32_t sc = lean_native_cabi_swar_delim_scan(sample, sizeof(sample) - 1, spans, 8, &state_io);
+    ok = ok && (sc == 4U) && (lean_native_span_kind(spans[0]) == 2U) && (lean_native_span_kind(spans[1]) == 1U);
     printf("MATRYOSHKA_TRM_C_RUNTIME_PARITY=%s\n", ok ? "PASSED" : "FAILED");
     return ok ? 0 : 1;
 }

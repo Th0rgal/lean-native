@@ -5,75 +5,53 @@ namespace LeanNative.Backend.LLVM
 
 open LeanNative.IR
 
-/-- Sanitize a Lean declaration name into a valid LLVM / C ABI symbol identifier. -/
 def sanitizeSymbol (s : String) : String :=
-  let chars := s.toList.map fun c =>
-    if c.isAlphanum || c == '_' then c else '_'
-  let res := String.ofList chars
+  let res := String.ofList (s.toList.map fun c => if c.isAlphanum || c == '_' then c else '_')
   if res.isEmpty then "ln_anon" else res
 
-/-- Target data layout string for LLVM 18. -/
 def targetDataLayout : TargetArch → String
-  | .x86_64 =>
-    "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-  | .arm64 =>
-    "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
-  | .nvptx64 =>
-    "e-i64:64-i128:128-v16:16-v32:32-n16:32:64"
-  | .hybridCpuGpu =>
-    "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+  | .x86_64 | .hybridCpuGpu => "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+  | .arm64 | .androidArm64 => "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
+  | .iosArm64 | .iosSimArm64 => "e-m:o-i64:64-i128:128-n32:64-S128"
+  | .wasm32 => "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"
+  | .nvptx64 => "e-i64:64-i128:128-v16:16-v32:32-n16:32:64"
 
-/-- CPU target triple for LLVM 18 (`x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`). -/
 def cpuTriple : TargetArch → String
-  | .arm64 => "aarch64-unknown-linux-gnu"
-  | _      => "x86_64-unknown-linux-gnu"
+  | .arm64 => "aarch64-unknown-linux-gnu" | .iosArm64 => "arm64-apple-ios"
+  | .iosSimArm64 => "arm64-apple-ios-simulator" | .androidArm64 => "aarch64-linux-android"
+  | .wasm32 => "wasm32-unknown-unknown" | _ => "x86_64-unknown-linux-gnu"
 
-/-- Canonical LLVM storage type used for SSA variable slots inside function bodies.
-    Scalar 64-bit values are stored as `i64`, 256-bit EVM values (`.u256`, `.i256`) as `i256`,
-    and pointers/arrays/storageMaps as `ptr` to guarantee uniform type safety across ANF control flow. -/
 def slotLLVMType : LNIRType → String
   | .objPtr | .taggedPtr | .sarray _ | .rawPtr _ | .storageMap => "ptr"
   | .u256 | .i256 => "i256"
-  | .tuple fs =>
-    let inner := String.intercalate ", " (fs.map fun f => if f.is256Bit then "i256" else "i64")
-    "{ " ++ inner ++ " }"
+  | .tuple fs => "{ " ++ String.intercalate ", " (fs.map fun f => if f.is256Bit then "i256" else "i64") ++ " }"
   | _ => "i64"
 
-/-- Parameter/return LLVM type for function signatures. -/
-def sigLLVMType : LNIRType → String
-  | .unit => "void"
-  | ty => slotLLVMType ty
+def sigLLVMType : LNIRType → String | .unit => "void" | ty => slotLLVMType ty
 
 partial def collectScalarVars : ScalarExpr → List (VarId × LNIRType)
   | .constU64 _ | .constBool _ => []
   | .var id => [(id, .i64)]
   | .binOp _ l r => collectScalarVars l ++ collectScalarVars r
   | .unaryOp _ a => collectScalarVars a
-  | .select c t e => collectScalarVars c ++ collectScalarVars t ++ collectScalarVars e
-  | .fma a b c => collectScalarVars a ++ collectScalarVars b ++ collectScalarVars c
+  | .select c t e | .fma c t e => collectScalarVars c ++ collectScalarVars t ++ collectScalarVars e
 
 def collectExprVars : LNIRExpr → List (VarId × LNIRType)
   | .scalar e => collectScalarVars e
   | .constU256 _ => []
-  | .mulDivDown a b d => [(a, .u256), (b, .u256), (d, .u256)]
-  | .mulDivUp a b d => [(a, .u256), (b, .u256), (d, .u256)]
+  | .mulDivDown a b d | .mulDivUp a b d => [(a, .u256), (b, .u256), (d, .u256)]
   | .storageLoad m s => [(m, .storageMap), (s, .u256)]
   | .storageStore m s v => [(m, .storageMap), (s, .u256), (v, .u256)]
-  | .mkTuple fs => fs.map (fun v => (v, .i64))
+  | .mkTuple fs => fs.map (·, .i64)
   | .projTuple tv _ => [(tv, .tuple [.i64, .i64])]
-  | .allocCtor _ ofs sfs => ofs.map (fun v => (v, .objPtr)) ++ sfs.map (fun v => (v, .i64))
-  | .ctorGetObj cv _ => [(cv, .objPtr)]
-  | .ctorGetScalar cv _ _ => [(cv, .objPtr)]
-  | .isExclusive ov => [(ov, .objPtr)]
-  | .sarrayLen av => [(av, .objPtr)]
-  | .sarrayDataPtr av et => [(av, .sarray et)]
-  | .sarrayEnsureExclusive av et => [(av, .sarray et)]
+  | .allocCtor _ ofs sfs => ofs.map (·, .objPtr) ++ sfs.map (·, .i64)
+  | .ctorGetObj v _ | .ctorGetScalar v _ _ | .isExclusive v | .sarrayLen v | .unboxScalar v _ => [(v, .objPtr)]
+  | .sarrayDataPtr av et | .sarrayEnsureExclusive av et => [(av, .sarray et)]
   | .sarrayGet av iv et => [(av, .sarray et), (iv, .i64)]
   | .sarraySet av iv vv et => [(av, .sarray et), (iv, .i64), (vv, et)]
   | .rawLoad pv iv et => [(pv, .rawPtr et), (iv, .i64)]
   | .boxScalar vv ty => [(vv, ty)]
-  | .unboxScalar bv _ => [(bv, .objPtr)]
-  | .call _ args _ _ => args.map (fun v => (v, .i64))
+  | .call _ args _ _ => args.map (·, .i64)
 
 /-- Collect all `(VarId, LNIRType)` bindings and references in an `LNIRCode` block so we can pre-allocate
     type-consistent `alloca` slots in the function `entry` block. -/
@@ -942,10 +920,12 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
     scalar-unroll `shufflevector` overhead. -/
 def emitMetadataFooter (target : TargetArch) : String :=
   let cpuAttr := match target with
-    | .arm64 => "\"target-cpu\"=\"neoverse-v2\""
+    | .arm64 | .androidArm64 => "\"target-cpu\"=\"neoverse-v2\""
+    | .iosArm64 | .iosSimArm64 => "\"target-cpu\"=\"apple-m1\""
+    | .wasm32 => "\"target-features\"=\"+simd128\""
     | _      => "\"target-cpu\"=\"x86-64-v3\""
   let vecModeMeta := match target with
-    | .arm64 => "!8 = !{!\"llvm.loop.vectorize.scalable.enable\", i1 false}"
+    | .arm64 | .iosArm64 | .iosSimArm64 | .androidArm64 => "!8 = !{!\"llvm.loop.vectorize.scalable.enable\", i1 false}"
     | _      => "!8 = !{!\"llvm.loop.vectorize.width\", i32 4}"
   String.intercalate "\n" [
     s!"attributes #0 = \{ nounwind uwtable {cpuAttr} }",

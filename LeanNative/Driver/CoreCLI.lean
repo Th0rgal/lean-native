@@ -48,6 +48,10 @@ def toOptimizationCert (c : PassStepCert) : OptimizationCert where
 
 def parseTargetArch : String → TargetArch
   | "arm64" | "aarch64" => .arm64
+  | "ios" | "ios-arm64" | "arm64-apple-ios" => .iosArm64
+  | "ios-sim" | "ios-sim-arm64" | "arm64-apple-ios-simulator" => .iosSimArm64
+  | "android" | "android-arm64" | "aarch64-linux-android" => .androidArm64
+  | "wasm" | "wasm32" | "wasm32-unknown-unknown" => .wasm32
   | "nvptx" | "nvptx64" | "ptx" | "cuda" => .nvptx64
   | "hybrid" => .hybridCpuGpu
   | _ => .x86_64
@@ -226,12 +230,15 @@ def extractLeanSourceCAbiAndGuards (raw : String) : List CAbiBindingSig × List 
       if tr.startsWith "def " || tr.startsWith "abbrev " then
         match symOpt with
         | some sym =>
-          let headerLines := tr :: (rest.take 3 |>.takeWhile (fun l => !(l.trimAscii.toString.startsWith "def ") && !(l.trimAscii.toString.startsWith "@[")))
+          let headerLines := tr :: (rest.take 3 |>.takeWhile (fun l =>
+            let t := l.trimAscii.toString
+            !(t.startsWith "def ") && !(t.startsWith "@[") && !(t.startsWith "/--") && !(t.startsWith "--")))
           let fullSig := String.intercalate " " (headerLines.map (·.trimAscii.toString))
-          let afterDef := (fullSig.drop 4).trimAscii.toString
+          let sigHead := (fullSig.splitOn ":=").headD fullSig
+          let afterDef := (sigHead.drop 4).trimAscii.toString
           let leanName := String.ofList (afterDef.toList.takeWhile (fun c => c != ' ' && c != '(' && c != ':'))
-          let params := parseParamGroups fullSig
-          let (retC, retRs) := extractReturnTypeStr fullSig
+          let params := parseParamGroups sigHead
+          let (retC, retRs) := extractReturnTypeStr sigHead
           loop rest none ({ cSymbol := sym, leanName, params, retCType := retC, retRustType := retRs } :: sigs) guards'
         | none => loop rest none sigs guards'
       else loop rest symOpt sigs guards'
@@ -254,6 +261,12 @@ def emitCAbiHeaderFromSigs (sigs : List CAbiBindingSig) : String :=
     "#include <stdint.h>", "#include <stddef.h>",
     "typedef struct { const void* data; size_t len; size_t stride_bytes; } lean_native_flat_slice_t;",
     "typedef struct { void* data; size_t len; size_t cap; } lean_native_mut_slice_t;",
+    "/* Zero-Runtime SliceOut C-ABI Contract: packed u64 span (start:32 | len:24 | kind:8) */",
+    "typedef uint32_t (*lean_native_slice_out_scan_fn)(const uint8_t* ptr, size_t len, uint64_t* out_spans, size_t cap, uint64_t* state_io);",
+    "static inline uint64_t lean_native_pack_span(uint32_t start, uint32_t len, uint8_t kind) { return ((uint64_t)start << 32) | ((uint64_t)(len & 0xFFFFFFU) << 8) | (uint64_t)kind; }",
+    "static inline uint32_t lean_native_span_start(uint64_t span) { return (uint32_t)(span >> 32); }",
+    "static inline uint32_t lean_native_span_len(uint64_t span) { return (uint32_t)((span >> 8) & 0xFFFFFFU); }",
+    "static inline uint8_t lean_native_span_kind(uint64_t span) { return (uint8_t)(span & 0xFFU); }",
     "#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L",
     "_Static_assert(sizeof(lean_native_flat_slice_t) == 24, \"lean_native_flat_slice_t size == 24\");",
     "_Static_assert(sizeof(lean_native_mut_slice_t) == 24, \"lean_native_mut_slice_t size == 24\");",
@@ -273,6 +286,8 @@ def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) : String :=
     "pub struct LeanNativeFlatSlice { pub data: *const core::ffi::c_void, pub len: usize, pub stride_bytes: usize }",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
     "pub struct LeanNativeMutSlice { pub data: *mut core::ffi::c_void, pub len: usize, pub cap: usize }",
+    "pub type LeanNativeSliceOutScanFn = extern \"C\" fn(ptr: *const u8, len: usize, out_spans: *mut u64, cap: usize, state_io: *mut u64) -> u32;",
+    "#[inline] pub const fn lean_native_pack_span(start: u32, len: u32, kind: u8) -> u64 { ((start as u64) << 32) | (((len & 0xFF_FFFF) as u64) << 8) | (kind as u64) }",
     "extern \"C\" {"
   ] ++ declExterns ++ ["}", ""])
 
@@ -646,7 +661,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Backend.selectOptimalSearchBackend 8192 false true false false true false true == .FpgaLsc2 &&
     (emitZeroDepMathlibProof { declName := "tauceti_cert", stmtSrc := "x = y", cofactorTerms := [("h1", 1), ("h2", -1)], dagRwSteps := ["Nat.add_comm"], distilledLemmas := ["Nat.add_zero"], farkasWeights := [1, 2] }).startsWith "by\n" &&
     LeanNative.Spec.canBindCAbiSliceIo ⟨16, 48, 4096, 8, 16⟩ && !(LeanNative.Spec.canBindCAbiSliceIo ⟨16, 48, 4096, 32, 16⟩) &&
-    LeanNative.Spec.verifyCAbiSliceIoC 16 48 4096 8 16 == 1 && LeanNative.Spec.verifyCAbiSliceIoC 16 48 512 8 16 == 0
+    LeanNative.Spec.verifyCAbiSliceIoC 16 48 4096 8 16 == 1 && LeanNative.Spec.verifyCAbiSliceIoC 16 48 512 8 16 == 0 &&
+    LeanNative.Spec.canEmitZeroRuntimeSliceOut ⟨0, 0, 0, 8, 16⟩ && !(LeanNative.Spec.canEmitZeroRuntimeSliceOut ⟨1, 0, 0, 8, 16⟩) &&
+    LeanNative.Spec.packSliceSpanU64 10 25 3 == 0x0000000A00001903 &&
+    TargetArch.iosArm64.triple == "arm64-apple-ios" && TargetArch.androidArm64.triple == "aarch64-linux-android" &&
+    TargetArch.wasm32.triple == "wasm32-unknown-unknown" && TargetArch.iosSimArm64.symbolPrefix == "_"
   let specRaw ← if ← System.FilePath.pathExists "LeanNative/Spec.lean" then IO.FS.readFile "LeanNative/Spec.lean" else pure ""
   let (specSigs, specGuards) := extractLeanSourceCAbiAndGuards specRaw
   let cabiGenHdr := emitCAbiHeaderFromSigs (if specSigs.isEmpty then moduleToCAbiSigs optMod else specSigs)

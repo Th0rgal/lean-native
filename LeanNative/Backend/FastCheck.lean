@@ -222,112 +222,63 @@ def applyRelationalHintsToEnv (hints : List RelationalHint) (sampleIdx : Nat) (e
 /-- Propagate equality constraints (`x := rhs`) from precondition guards directly into `d.body`. -/
 def propagatePreconditionEqualities (d : LNIRDecl) : LNIRDecl × List ConstraintSub :=
   let subs := extractDeclConstraints d
-  if subs.isEmpty then
-    (d, [])
+  if subs.isEmpty then (d, [])
   else
-    let bodySubst := substLNIRCode subs d.body
     let bodyWithLets := subs.foldr (fun sub accCode =>
-      let pTy := match d.params.find? (fun p => p.id == sub.lhsVar) with
-        | some p => p.ty
-        | none => .i64
-      .letBind sub.lhsVar pTy (.scalar sub.rhsExpr) accCode
-    ) bodySubst
+      let pTy := ((d.params.find? (·.id == sub.lhsVar)).map (·.ty)).getD .i64
+      .letBind sub.lhsVar pTy (.scalar sub.rhsExpr) accCode) (substLNIRCode subs d.body)
     ({ d with body := bodyWithLets }, subs)
 
 /-! ## 2. Deterministic 64/256-Bit Boundary Value Tables + Pairwise Collision + SplitMix64 -/
 
-/-- Deterministic 64-bit boundary value table covering `Mathlib4` & `Verity` power-of-two and decimal bounds:
-    `0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 42, 63, 64, 100, 127, 128, 255, 256, 511, 512, 1000, 1024, 4096, 65535, 65536, 1000000, 2^32 - 1, 2^63, 2^64 - 1`. -/
 def boundaryU64Values : List UInt64 :=
   [ 0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 42, 63, 64, 100, 127, 128, 255, 256,
     511, 512, 1000, 1024, 4096, 65535, 65536, 1000000, 0xffffffff, 0x8000000000000000, 0xffffffffffffffff ]
 
-/-- Deterministic 256-bit EVM/Verity boundary value table:
-    `0, 1, 2, 2^64 - 1, 2^128 - 1, 2^255, 2^256 - 1, WAD (10^18), MAX_UINT256 - 1`. -/
 def boundaryU256Values : List UInt256 :=
   [ UInt256.zero, UInt256.one, UInt256.ofUInt64 2, UInt256.maxU64, UInt256.maxU128,
     UInt256.twoPow255, UInt256.max, UInt256.ofUInt64 1000000000000000000,
     ⟨0xfffffffffffffffe, 0xffffffffffffffff, 0xffffffffffffffff, 0xffffffffffffffff⟩ ]
 
-/-- Deterministic SplitMix64 PRNG step. -/
 def fastCheckSplitMix64 (state : UInt64) : UInt64 × UInt64 :=
   let s' := state + 0x9e3779b97f4a7c15
   let z1 := (s' ^^^ (s' >>> 30)) * 0xbf58476d1ce4e5b9
   let z2 := (z1 ^^^ (z1 >>> 27)) * 0x94d049bb133111eb
-  let out := z2 ^^^ (z2 >>> 31)
-  (out, s')
+  (z2 ^^^ (z2 >>> 31), s')
 
-/-- Generate a 256-bit `UInt256` from 4 SplitMix64 steps. -/
 def fastCheckGenU256 (seed : UInt64) : UInt256 :=
-  let (w0, s1) := fastCheckSplitMix64 seed
-  let (w1, s2) := fastCheckSplitMix64 s1
-  let (w2, s3) := fastCheckSplitMix64 s2
-  let (w3, _)  := fastCheckSplitMix64 s3
+  let (w0, s1) := fastCheckSplitMix64 seed; let (w1, s2) := fastCheckSplitMix64 s1
+  let (w2, s3) := fastCheckSplitMix64 s2; let (w3, _) := fastCheckSplitMix64 s3
   ⟨w0, w1, w2, w3⟩
 
-/-- Generate a single parameter `Val` and updated `HeapState` for sample index `sampleIdx`.
-    - `sampleIdx < 16`: draws from `boundaryU64Values` / `boundaryU256Values`.
-    - `16 ≤ sampleIdx < 32`: pairwise address/value collision generator (`x_i = x_j` across parameters).
-    - `sampleIdx ≥ 32`: parallel SplitMix64 per-thread stream. -/
 def genFastCheckParamVal (sampleIdx : Nat) (paramIdx : Nat) (ty : LNIRType) (st : HeapState) :
     Val × HeapState :=
   let isCollisionSample := 16 ≤ sampleIdx && sampleIdx < 32
   let effectiveParamIdx := if isCollisionSample then 0 else paramIdx
-  let baseSeed : UInt64 :=
-    (sampleIdx.toUInt64 + 1) * 0x9e3779b97f4a7c15 + effectiveParamIdx.toUInt64 * 0xbf58476d1ce4e5b9
+  let baseSeed : UInt64 := (sampleIdx.toUInt64 + 1) * 0x9e3779b97f4a7c15 + effectiveParamIdx.toUInt64 * 0xbf58476d1ce4e5b9
   let (r, _) := fastCheckSplitMix64 baseSeed
   match ty with
-  | .i1 =>
-    (.bool (r % 2 == 1), st)
+  | .i1 => (.bool (r % 2 == 1), st)
   | .u256 | .i256 =>
-    if sampleIdx < 16 then
-      let idx := (sampleIdx + effectiveParamIdx * 3) % boundaryU256Values.length
-      let w := boundaryU256Values[idx]?.getD UInt256.zero
-      (.u256 w, st)
-    else if isCollisionSample then
-      let idx := (sampleIdx - 16) % boundaryU256Values.length
-      let w := boundaryU256Values[idx]?.getD UInt256.one
-      (.u256 w, st)
-    else
-      (.u256 (fastCheckGenU256 baseSeed), st)
+    if sampleIdx < 16 then (.u256 (boundaryU256Values[(sampleIdx + effectiveParamIdx * 3) % boundaryU256Values.length]?.getD UInt256.zero), st)
+    else if isCollisionSample then (.u256 (boundaryU256Values[(sampleIdx - 16) % boundaryU256Values.length]?.getD UInt256.one), st)
+    else (.u256 (fastCheckGenU256 baseSeed), st)
   | .storageMap =>
     let mapId := st.nextId + 1
-    let initEntries : List (UInt256 × UInt256) :=
-      [ (UInt256.zero, UInt256.ofUInt64 1000)
-      , (UInt256.one, UInt256.ofUInt64 1000)
-      , (UInt256.ofUInt64 2, UInt256.ofUInt64 1000)
-      ]
-    let mapBuf : StorageMapBuffer := { id := mapId, entries := initEntries }
-    (.storageMapId mapId, { st with nextId := mapId, storageMaps := mapBuf :: st.storageMaps })
+    let initEntries := [(UInt256.zero, UInt256.ofUInt64 1000), (UInt256.one, UInt256.ofUInt64 1000), (UInt256.ofUInt64 2, UInt256.ofUInt64 1000)]
+    (.storageMapId mapId, { st with nextId := mapId, storageMaps := { id := mapId, entries := initEntries } :: st.storageMaps })
   | .sarray _ | .rawPtr _ =>
     let bufId := st.nextId + 1
-    let elems : List UInt64 := (List.range 16).map (fun i =>
-      let (er, _) := fastCheckSplitMix64 (r + i.toUInt64); er % 1024)
-    let buf : ArrayBuffer := { id := bufId, exclusive := true, data := elems.toArray }
+    let elems := (List.range 16).map (fun i => (fastCheckSplitMix64 (r + i.toUInt64)).1 % 1024)
     let val := match ty with | .rawPtr _ => Val.rawPtrId bufId | _ => Val.sarrayId bufId
-    (val, { st with buffers := buf :: st.buffers, nextId := bufId })
-  | .tuple fs =>
-    let vals := fs.mapIdx (fun idx _ =>
-      let (tr, _) := fastCheckSplitMix64 (r + idx.toUInt64 * 17)
-      Val.u64 (tr % 1024))
-    (.tuple vals, st)
-  | .unit =>
-    (.unit, st)
+    (val, { st with buffers := { id := bufId, exclusive := true, data := elems.toArray } :: st.buffers, nextId := bufId })
+  | .tuple fs => (.tuple (fs.mapIdx (fun idx _ => Val.u64 ((fastCheckSplitMix64 (r + idx.toUInt64 * 17)).1 % 1024))), st)
+  | .unit => (.unit, st)
   | _ =>
-    if sampleIdx < 16 then
-      let idx := (sampleIdx + effectiveParamIdx * 3) % boundaryU64Values.length
-      let v := boundaryU64Values[idx]?.getD 0
-      (.u64 v, st)
-    else if isCollisionSample then
-      let idx := (sampleIdx - 16) % boundaryU64Values.length
-      let v := boundaryU64Values[idx]?.getD 0
-      (.u64 v, st)
-    else
-      (.u64 r, st)
+    if sampleIdx < 16 then (.u64 (boundaryU64Values[(sampleIdx + effectiveParamIdx * 3) % boundaryU64Values.length]?.getD 0), st)
+    else if isCollisionSample then (.u64 (boundaryU64Values[(sampleIdx - 16) % boundaryU64Values.length]?.getD 0), st)
+    else (.u64 r, st)
 
-/-- Build a candidate `(VarEnv × HeapState)` for declaration `d` at `sampleIdx`,
-    applying equality constraint substitutions `subs`, upper-bound range folding `upperHints`,
-    and relational polytope projection `relHints` when `useConstraintProp = true`. -/
 def buildFastCheckSample (d : LNIRDecl) (subs : List ConstraintSub) (sampleIdx : Nat)
     (useConstraintProp : Bool) (upperHints : List (VarId × UInt64) := [])
     (relHints : List RelationalHint := []) : VarEnv × HeapState :=
@@ -338,102 +289,62 @@ def buildFastCheckSample (d : LNIRDecl) (subs : List ConstraintSub) (sampleIdx :
         match upperHints.lookup p.id, v with
         | some k, .u64 raw => if k > 0 then .u64 (raw % k) else v
         | _, _ => v
-      else
-        v
-    (curEnv.bind p.id vBounded, nextSt, pIdx + 1)
-  ) (VarEnv.empty, HeapState.empty, 0)
-  if !useConstraintProp then
-    (env0, st0)
+      else v
+    (curEnv.bind p.id vBounded, nextSt, pIdx + 1)) (VarEnv.empty, HeapState.empty, 0)
+  if !useConstraintProp then (env0, st0)
   else
     let envRel := if relHints.isEmpty then env0 else applyRelationalHintsToEnv relHints sampleIdx env0
     let envProp := subs.foldl (fun curEnv sub =>
-      match evalScalarExpr curEnv sub.rhsExpr with
-      | .ok v => curEnv.bind sub.lhsVar v
-      | .error _ => curEnv
-    ) envRel
+      match evalScalarExpr curEnv sub.rhsExpr with | .ok v => curEnv.bind sub.lhsVar v | .error _ => curEnv) envRel
     (envProp, st0)
 
 /-! ## 3. Certified Counterexample Validator (`certifyCounterexample`) & Soundness Theorem -/
 
-/-- A return value `v` is a falsifying counterexample iff it evaluates to boolean `false` or zero. -/
-def isCounterexampleVal (v : Val) : Bool :=
-  match v with
-  | .bool false => true
-  | .u64 0 => true
+def isCounterexampleVal : Val → Bool
+  | .bool false | .u64 0 => true
   | .u256 w => w == UInt256.zero
   | _ => false
 
-/-- Certified counterexample validator: re-evaluates `d.body` using the formal LNIR operational
-    semantics `evalCode` and returns `true` iff execution succeeds without UB and yields a
-    counterexample value (`isCounterexampleVal v = true`). -/
 def certifyCounterexample (fuel : Nat) (d : LNIRDecl) (env : VarEnv) (st : HeapState) : Bool :=
-  match evalCode fuel env st d.body with
-  | .ok (v, _) => isCounterexampleVal v
-  | .error _ => false
+  match evalCode fuel env st d.body with | .ok (v, _) => isCounterexampleVal v | .error _ => false
 
-/-- Machine-checked soundness theorem for `certifyCounterexample`:
-    Any counterexample accepted by `certifyCounterexample` is guaranteed to be a genuine
-    falsifying execution of `d.body` in the formal LNIR operational semantics (zero false positives). -/
 theorem certifyCounterexample_no_false_positive (fuel : Nat) (d : LNIRDecl) (env : VarEnv) (st : HeapState)
     (h : certifyCounterexample fuel d env st = true) :
     ∃ v st', evalCode fuel env st d.body = .ok (v, st') ∧ isCounterexampleVal v = true := by
   unfold certifyCounterexample at h
   cases heval : evalCode fuel env st d.body with
-  | error err =>
-    rw [heval] at h
-    contradiction
-  | ok pair =>
-    rcases pair with ⟨v, st'⟩
-    rw [heval] at h
-    exact ⟨v, st', rfl, h⟩
+  | error err => rw [heval] at h; contradiction
+  | ok pair => rcases pair with ⟨v, st'⟩; rw [heval] at h; exact ⟨v, st', rfl, h⟩
 
-/-- Empty constraint substitution is the identity on `ScalarExpr`. -/
 theorem substScalarExpr_nil (e : ScalarExpr) : substScalarExpr [] e = e := by
   induction e with
-  | constU64 _ => rfl
-  | constBool _ => rfl
-  | var _ => rfl
+  | constU64 _ | constBool _ | var _ => rfl
   | binOp op l r ihl ihr => simp only [substScalarExpr, ihl, ihr]
   | unaryOp op a iha => simp only [substScalarExpr, iha]
   | select c t f ihc iht ihf => simp only [substScalarExpr, ihc, iht, ihf]
   | fma a b c iha ihb ihc => simp only [substScalarExpr, iha, ihb, ihc]
 
-/-- Machine-checked soundness theorem for single-variable equality constraint substitution:
-    when `evalScalarExpr env rhs = .ok v` and `env x = some v`, substituting `x := rhs`
-    into any `ScalarExpr` preserves exact denotational evaluation under `env`. -/
 theorem substSingleConstraint_sound (env : VarEnv) (x : VarId) (rhs : ScalarExpr) (v : Val)
     (hrhs : evalScalarExpr env rhs = .ok v) (hx : env x = some v) (e : ScalarExpr) :
     evalScalarExpr env (substScalarExpr [{ lhsVar := x, rhsExpr := rhs }] e) = evalScalarExpr env e := by
   induction e with
-  | constU64 _ => rfl
-  | constBool _ => rfl
+  | constU64 _ | constBool _ => rfl
   | var id =>
     simp only [substScalarExpr, List.find?]
     cases h : (x == id) with
     | false => rfl
-    | true =>
-      have hid : x = id := of_decide_eq_true h
-      subst hid
-      simp only [hrhs, evalScalarExpr, hx]
-  | binOp op l r ihl ihr =>
-    simp only [substScalarExpr, evalScalarExpr, ihl, ihr]
-  | unaryOp op a iha =>
-    simp only [substScalarExpr, evalScalarExpr, iha]
-  | select c t f ihc iht ihf =>
-    simp only [substScalarExpr, evalScalarExpr, ihc, iht, ihf]
-  | fma a b c iha ihb ihc =>
-    simp only [substScalarExpr, evalScalarExpr, iha, ihb, ihc]
+    | true => have hid : x = id := of_decide_eq_true h; subst hid; simp only [hrhs, evalScalarExpr, hx]
+  | binOp op l r ihl ihr => simp only [substScalarExpr, evalScalarExpr, ihl, ihr]
+  | unaryOp op a iha => simp only [substScalarExpr, evalScalarExpr, iha]
+  | select c t f ihc iht ihf => simp only [substScalarExpr, evalScalarExpr, ihc, iht, ihf]
+  | fma a b c iha ihb ihc => simp only [substScalarExpr, evalScalarExpr, iha, ihb, ihc]
 
-/-- Machine-checked soundness theorem for `letBind` precondition constraint propagation:
-    wrapping `body` in `.letBind x ty (.scalar rhs) body` when `evalScalarExpr env rhs = .ok v`
-    evaluates identically to `body` under `env.bind x v`. -/
 theorem propagatePrecondition_letBind_sound (fuel : Nat) (env : VarEnv) (st : HeapState)
     (x : VarId) (ty : LNIRType) (rhs : ScalarExpr) (v : Val) (body : LNIRCode)
     (hrhs : evalScalarExpr env rhs = .ok v) :
     evalCode fuel env st (.letBind x ty (.scalar rhs) body) =
     evalCode fuel (env.bind x v) st body := by
-  rw [evalCode]
-  simp only [evalExpr, hrhs]
+  rw [evalCode]; simp only [evalExpr, hrhs]
 
 /-! ## 4. Precondition Satisfaction Tracking & Module FastCheck Runner -/
 
@@ -518,44 +429,31 @@ def runFastCheckDecl (d : LNIRDecl) (numSamples : Nat := 4096) (useConstraintPro
     match foundOpt with
     | some _ => (satAcc', foundOpt)
     | none =>
-      if !precondOk then
-        (satAcc', none)
-      else
-        match evalCode fuel env st activeDecl.body with
+      if !precondOk then (satAcc', none)
+      else match evalCode fuel env st activeDecl.body with
         | .ok (v, _) =>
-          if isCounterexampleVal v then
-            -- Validate candidate counterexample against original declaration via certifyCounterexample
-            if certifyCounterexample fuel d env st then
-              (satAcc', some (sampleIdx, formatWitnessEnv d env))
-            else
-              (satAcc', none)
-          else
-            (satAcc', none)
+          if isCounterexampleVal v && certifyCounterexample fuel d env st then
+            (satAcc', some (sampleIdx, formatWitnessEnv d env))
+          else (satAcc', none)
         | .error _ => (satAcc', none)
   ) (0, none)
   let isVacuous := satCount == 0
   match cexOpt with
   | some (idx, witnessStr) =>
-    { declName := d.name, status := "counterexample_found", passed := false,
-      counterexampleFound := true, certifiedCounterexample := true, vacuousPass := isVacuous,
-      samplesTested := numSamples, satisfiedPreconditionsCount := satCount,
-      constraintsPropagated := subs.length + relHints.length, witnessSummary := s!"sample#{idx}: {witnessStr}" }
+    { declName := d.name, status := "counterexample_found", passed := false, counterexampleFound := true,
+      certifiedCounterexample := true, vacuousPass := isVacuous, samplesTested := numSamples,
+      satisfiedPreconditionsCount := satCount, constraintsPropagated := subs.length + relHints.length, witnessSummary := s!"sample#{idx}: {witnessStr}" }
   | none =>
-    { declName := d.name, status := if isVacuous then "vacuous_pass" else "passed",
-      passed := !isVacuous, counterexampleFound := false, certifiedCounterexample := false,
-      vacuousPass := isVacuous, samplesTested := numSamples, satisfiedPreconditionsCount := satCount,
-      constraintsPropagated := subs.length + relHints.length, witnessSummary := "" }
+    { declName := d.name, status := if isVacuous then "vacuous_pass" else "passed", passed := !isVacuous,
+      counterexampleFound := false, certifiedCounterexample := false, vacuousPass := isVacuous, samplesTested := numSamples,
+      satisfiedPreconditionsCount := satCount, constraintsPropagated := subs.length + relHints.length, witnessSummary := "" }
 
-/-- Run FastCheck across all declarations in an `LNIRModule`. -/
-def runFastCheckModule (m : LNIRModule) (numSamples : Nat := 4096) (useConstraintProp : Bool := true) :
-    FastCheckReport :=
+def runFastCheckModule (m : LNIRModule) (numSamples : Nat := 4096) (useConstraintProp : Bool := true) : FastCheckReport :=
   let results := m.decls.map (fun d => runFastCheckDecl d numSamples useConstraintProp)
-  let cexCount := (results.filter (·.counterexampleFound)).length
-  let vacCount := (results.filter (·.vacuousPass)).length
-  { moduleName := m.moduleName, schemaVersion := "lean-native-fastcheck-v1",
-    numSamplesPerDecl := numSamples, useConstraintProp := useConstraintProp,
-    totalDecls := results.length, counterexamplesFound := cexCount, vacuousPasses := vacCount,
-    falsePositives := 0, declResults := results }
+  { moduleName := m.moduleName, schemaVersion := "lean-native-fastcheck-v1", numSamplesPerDecl := numSamples,
+    useConstraintProp := useConstraintProp, totalDecls := results.length,
+    counterexamplesFound := (results.filter (·.counterexampleFound)).length,
+    vacuousPasses := (results.filter (·.vacuousPass)).length, falsePositives := 0, declResults := results }
 
 private abbrev escapeJsonFC := LeanNative.IR.jsonEscape
 
@@ -729,6 +627,54 @@ def emitFastCheckCABI (m : LNIRModule) : String :=
     "uint64_t leannative_verify_cabi_slice_io(uint64_t row_count, uint64_t row_bytes, uint64_t max_buffer_bytes, uint64_t out_len, uint64_t out_cap) {",
     "    __uint128_t total = (__uint128_t)row_count * (__uint128_t)row_bytes;",
     "    return (max_buffer_bytes > 0ULL && total <= (__uint128_t)max_buffer_bytes && out_len <= out_cap) ? 1ULL : 0ULL;\n}\n",
+    "uint64_t leannative_pack_slice_span_u64(uint64_t start, uint64_t len, uint64_t kind) {",
+    "    return ((start & 0xFFFFFFFFULL) << 32) | ((len & 0xFFFFFFULL) << 8) | (kind & 0xFFULL);\n}\n",
+    "uint64_t leannative_verify_no_runtime_slice_out(uint64_t undef_syms, uint64_t alloc_count, uint64_t rc_count, uint64_t out_len, uint64_t out_cap) {",
+    "    return (undef_syms == 0ULL && alloc_count == 0ULL && rc_count == 0ULL && out_len <= out_cap) ? 1ULL : 0ULL;\n}\n",
+    "/* Zero-Runtime SliceOut C-ABI Span Pack: (start:32 | len:24 | kind:8) & SWAR/NEON 4-Delimiter Byte Scan ('\\n', '|', '<', ':') */",
+    "static inline uint64_t lean_native_pack_span_u64(uint32_t start, uint32_t len, uint8_t kind) {",
+    "    return ((uint64_t)start << 32) | ((uint64_t)(len & 0xFFFFFFU) << 8) | (uint64_t)kind;\n}\n",
+    "static inline uint64_t lean_native_swar_has_zero_u64(uint64_t v) {",
+    "    return (v - 0x0101010101010101ULL) & ~v & 0x8080808080808080ULL;\n}\n",
+    "#if defined(__ARM_NEON) || defined(__ARM_NEON__)\n#include <arm_neon.h>\n#endif\n",
+    "uint32_t lean_native_cabi_swar_delim_scan(const uint8_t* __restrict__ ptr, size_t len, uint64_t* __restrict__ out_spans, size_t cap, uint64_t* __restrict__ state_io) {",
+    "    if (!ptr || (cap > 0 && !out_spans)) return 0U;",
+    "    uint32_t count = 0U, seg_start = state_io ? (uint32_t)(*state_io & 0xFFFFFFFFULL) : 0U;",
+    "    size_t i = 0;",
+    "#if defined(__ARM_NEON) || defined(__ARM_NEON__)",
+    "    uint8x16_t v_nl = vdupq_n_u8(0x0AU), v_pipe = vdupq_n_u8(0x7CU), v_lt = vdupq_n_u8(0x3CU), v_col = vdupq_n_u8(0x3AU);",
+    "    for (; i + 16 <= len && count < cap; i += 16) {",
+    "        uint8x16_t chunk = vld1q_u8(ptr + i);",
+    "        uint8x16_t m = vorrq_u8(vorrq_u8(vceqq_u8(chunk, v_nl), vceqq_u8(chunk, v_pipe)), vorrq_u8(vceqq_u8(chunk, v_lt), vceqq_u8(chunk, v_col)));",
+    "        if (vmaxvq_u8(m) != 0) {",
+    "            for (size_t k = 0; k < 16 && count < cap; ++k) {",
+    "                uint8_t b = ptr[i + k];",
+    "                uint8_t kind = (b == 0x0AU) ? 1U : ((b == 0x7CU) ? 2U : ((b == 0x3CU) ? 3U : ((b == 0x3AU) ? 4U : 0U)));",
+    "                if (kind) { uint32_t pos = (uint32_t)(i + k); out_spans[count++] = lean_native_pack_span_u64(seg_start, pos - seg_start, kind); seg_start = pos + 1U; }",
+    "            }",
+    "        }",
+    "    }",
+    "#else",
+    "    for (; i + 8 <= len && count < cap; i += 8) {",
+    "        uint64_t w = 0ULL; __builtin_memcpy(&w, ptr + i, 8);",
+    "        uint64_t m = lean_native_swar_has_zero_u64(w ^ 0x0A0A0A0A0A0A0A0AULL) | lean_native_swar_has_zero_u64(w ^ 0x7C7C7C7C7C7C7C7CULL) |",
+    "                     lean_native_swar_has_zero_u64(w ^ 0x3C3C3C3C3C3C3C3CULL) | lean_native_swar_has_zero_u64(w ^ 0x3A3A3A3A3A3A3A3AULL);",
+    "        if (m != 0ULL) {",
+    "            for (size_t k = 0; k < 8 && count < cap; ++k) {",
+    "                uint8_t b = ptr[i + k];",
+    "                uint8_t kind = (b == 0x0AU) ? 1U : ((b == 0x7CU) ? 2U : ((b == 0x3CU) ? 3U : ((b == 0x3AU) ? 4U : 0U)));",
+    "                if (kind) { uint32_t pos = (uint32_t)(i + k); out_spans[count++] = lean_native_pack_span_u64(seg_start, pos - seg_start, kind); seg_start = pos + 1U; }",
+    "            }",
+    "        }",
+    "    }",
+    "#endif",
+    "    for (; i < len && count < cap; ++i) {",
+    "        uint8_t b = ptr[i];",
+    "        uint8_t kind = (b == 0x0AU) ? 1U : ((b == 0x7CU) ? 2U : ((b == 0x3CU) ? 3U : ((b == 0x3AU) ? 4U : 0U)));",
+    "        if (kind) { uint32_t pos = (uint32_t)i; out_spans[count++] = lean_native_pack_span_u64(seg_start, pos - seg_start, kind); seg_start = pos + 1U; }",
+    "    }",
+    "    if (state_io) *state_io = (uint64_t)seg_start;",
+    "    return count;\n}\n",
     emitCABIFarkasCheckI64,
     "\n#ifdef __cplusplus\n}\n#endif\n"
   ]

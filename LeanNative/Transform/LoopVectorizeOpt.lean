@@ -9,44 +9,28 @@ namespace LeanNative.Transform
 
 open LeanNative.IR
 
-/-- Contract `a * b + c` and `c + a * b` into `ScalarExpr.fma a b c` for SIMD/GPU FMA lowering. -/
 def contractFmaScalar : ScalarExpr → ScalarExpr
   | .constU64 v => .constU64 v
   | .constBool b => .constBool b
   | .var id => .var id
   | .binOp .add lhs rhs =>
-    let l' := contractFmaScalar lhs
-    let r' := contractFmaScalar rhs
+    let l' := contractFmaScalar lhs; let r' := contractFmaScalar rhs
     match l', r' with
-    | .binOp .mul a b, c => .fma a b c
-    | c, .binOp .mul a b => .fma a b c
+    | .binOp .mul a b, c | c, .binOp .mul a b => .fma a b c
     | _, _ => .binOp .add l' r'
-  | .binOp op lhs rhs =>
-    .binOp op (contractFmaScalar lhs) (contractFmaScalar rhs)
-  | .unaryOp op arg =>
-    .unaryOp op (contractFmaScalar arg)
-  | .select c t f =>
-    .select (contractFmaScalar c) (contractFmaScalar t) (contractFmaScalar f)
-  | .fma a b c =>
-    .fma (contractFmaScalar a) (contractFmaScalar b) (contractFmaScalar c)
+  | .binOp op lhs rhs => .binOp op (contractFmaScalar lhs) (contractFmaScalar rhs)
+  | .unaryOp op arg => .unaryOp op (contractFmaScalar arg)
+  | .select c t f => .select (contractFmaScalar c) (contractFmaScalar t) (contractFmaScalar f)
+  | .fma a b c => .fma (contractFmaScalar a) (contractFmaScalar b) (contractFmaScalar c)
 
-/-- Check whether a `seqFor` step body consists solely of unboxed scalar operations
-    and contiguous `rawLoad`/`rawStore` accesses (eligible for SIMD vectorization). -/
 def isSimdVectorizableBody : LNIRCode → Bool
-  | .letBind _ ty (.scalar _) k =>
-    ty.isUnboxedScalar && isSimdVectorizableBody k
-  | .letBind _ ty (.constU256 _) k =>
-    ty.isUnboxedScalar && isSimdVectorizableBody k
-  | .letBind _ ty (.mulDivDown _ _ _) k =>
-    ty.isUnboxedScalar && isSimdVectorizableBody k
-  | .letBind _ ty (.mulDivUp _ _ _) k =>
+  | .letBind _ ty (.scalar _) k | .letBind _ ty (.constU256 _) k
+  | .letBind _ ty (.mulDivDown _ _ _) k | .letBind _ ty (.mulDivUp _ _ _) k =>
     ty.isUnboxedScalar && isSimdVectorizableBody k
   | .letBind _ ty (.rawLoad _ _ elemTy) k =>
     ty.isUnboxedScalar && elemTy.isUnboxedScalar && isSimdVectorizableBody k
-  | .rawStore _ _ _ elemTy k =>
-    elemTy.isUnboxedScalar && isSimdVectorizableBody k
-  | .ite _ t e =>
-    isSimdVectorizableBody t && isSimdVectorizableBody e
+  | .rawStore _ _ _ elemTy k => elemTy.isUnboxedScalar && isSimdVectorizableBody k
+  | .ite _ t e => isSimdVectorizableBody t && isSimdVectorizableBody e
   | .ret _ => true
   | _ => false
 
@@ -97,6 +81,34 @@ def removeMatchingDecRef (objVar : VarId) (count : Nat) : LNIRCode → Option LN
     (removeMatchingDecRef objVar count k).map (.parFor out len ins elemTy kernel)
   | _ => none
 
+/-- Check whether a scalar expression is an ASCII delimiter byte equality test (`b == '\n'`, `b == '|'`, `b == '<'`, `b == ':'`). -/
+def isAsciiDelimByteMatch : ScalarExpr → Bool
+  | .binOp .eq (.var _) (.constU64 c) | .binOp .eq (.constU64 c) (.var _) => c < 128
+  | .binOp .bitOr l r | .select l r (.constBool false) => isAsciiDelimByteMatch l && isAsciiDelimByteMatch r
+  | _ => false
+
+/-- Check whether `code` contains an unboxed byte load + ASCII delimiter comparison eligible for 64-bit SWAR / ARM64 NEON (`vceqq_u8` + `vmaxvq_u8`) lowering. -/
+def isSwarNeonByteScanBody : LNIRCode → Bool
+  | .letBind _ _ (.rawLoad _ _ .i8) k => isSwarNeonByteScanBody k
+  | .letBind _ _ (.scalar e) k => isAsciiDelimByteMatch e || isSwarNeonByteScanBody k
+  | .ite _ t e => isSwarNeonByteScanBody t || isSwarNeonByteScanBody e
+  | _ => false
+
+/-- Verify that an `LNIRCode` block has zero Lean runtime allocations, reference-counting ops, or boxed scalar conversions (`NoRuntimeCheck`, `nm -u == 0`). -/
+def checkNoRuntimeCode : LNIRCode → Bool
+  | .letBind _ _ (.allocCtor _ _ _) _ | .letBind _ _ (.boxScalar _ _) _
+  | .letBind _ _ (.unboxScalar _ _) _ | .letBind _ _ (.sarrayEnsureExclusive _ _) _ => false
+  | .letBind _ _ _ k => checkNoRuntimeCode k
+  | .rawStore _ _ _ _ k => checkNoRuntimeCode k
+  | .incRef _ _ _ | .decRef _ _ _ => false
+  | .ite _ t e => checkNoRuntimeCode t && checkNoRuntimeCode e
+  | .seqFor _ _ _ _ _ _ s k => checkNoRuntimeCode s && checkNoRuntimeCode k
+  | .parFor _ _ _ _ _ k => checkNoRuntimeCode k
+  | .ret _ | .unreachable => true
+
+def checkNoRuntimeDecl (d : LNIRDecl) : Bool :=
+  d.params.all (fun p => p.ty.isUnboxedScalar || p.borrow) && checkNoRuntimeCode d.body
+
 /-- Attempt to recognize an in-place `rawLoad` + `fma` + `rawStore` `seqFor` step body
     (`out[i] = in[i] * scale + bias`) for SIMD/GPU parallel kernel promotion. -/
 def tryMatchMapScaleBiasStep (idxVar accVar : VarId) (stepBody : LNIRCode) :
@@ -112,7 +124,7 @@ def tryMatchMapScaleBiasStep (idxVar accVar : VarId) (stepBody : LNIRCode) :
       none
   | _ => none
 
-/-- Optimize loop bodies for SIMD vectorization, FMA contraction, and borrowed RC elision. -/
+/-- Optimize loop bodies for SIMD vectorization, SWAR/NEON byte scanning, FMA contraction, and borrowed RC elision. -/
 def optimizeCodeLoopVectorize (inLoop : Bool) (code : LNIRCode) : LNIRCode × Nat :=
   match code with
   | .incRef objVar count k =>
@@ -141,7 +153,7 @@ def optimizeCodeLoopVectorize (inLoop : Bool) (code : LNIRCode) : LNIRCode × Na
     let (e', vc2) := optimizeCodeLoopVectorize inLoop elseBranch
     (.ite condVar t' e', vc1 + vc2)
   | .seqFor idxVar loVar hiVar accVar accInit accTy stepBody k =>
-    let isSimd := isSimdVectorizableBody stepBody
+    let isSimd := isSimdVectorizableBody stepBody || isSwarNeonByteScanBody stepBody
     let (stepBody', vc1) := optimizeCodeLoopVectorize true stepBody
     let (k', vc2) := optimizeCodeLoopVectorize inLoop k
     let bonus := if isSimd then 1 else 0
@@ -169,7 +181,6 @@ def loopVectorizeOptDecl (d : LNIRDecl) : LNIRDecl × Nat :=
   let isGpuCand' := d.isGpuCand || (gpuTypesOk && hasVecMem && hasRawMemoryAccess body')
   ({ d with params := params', body := body', isGpuCand := isGpuCand' }, vecCount)
 
-/-- Loop Vectorization, FMA Contraction & Borrow RC Elision Pass (`LoopVectorizeOpt`). -/
 def loopVectorizeOptPass : TransformPass where
   name := "LoopVectorizeOpt"
   assurance := .verifiedKernelProof
@@ -178,33 +189,13 @@ def loopVectorizeOptPass : TransformPass where
     let inHash := d.structuralHash
     let (d', vecCount) := loopVectorizeOptDecl d
     let outHash := d'.structuralHash
-    let changed := inHash != outHash || d != d'
-    let cert : PassStepCert := {
-      passName := "LoopVectorizeOpt"
-      declName := d.name
-      inputHash := inHash
-      outputHash := outHash
-      changed := changed
-      assurance := .verifiedKernelProof
-      theoremRef := "LeanNative.Proofs.LoopOptProofs.hoistExclusivity_sound"
-      notes := s!"Analyzed and annotated {vecCount} SIMD/data-parallel loop/borrow regions (!llvm.loop.vectorize.enable)"
-    }
-    (d', cert)
+    (d', { passName := "LoopVectorizeOpt", declName := d.name, inputHash := inHash, outputHash := outHash,
+           changed := inHash != outHash || d != d', assurance := .verifiedKernelProof,
+           theoremRef := "LeanNative.Proofs.LoopOptProofs.hoistExclusivity_sound",
+           notes := s!"Analyzed and annotated {vecCount} SIMD/data-parallel loop/borrow regions (!llvm.loop.vectorize.enable)" })
 
-/-- The canonical 4-pass verified optimization pipeline in `LeanNative.Transform`. -/
-def defaultPasses : List TransformPass := [
-  algebraicOptPass,
-  unboxTupleSROAPass,
-  hoistExclusivityPass,
-  loopVectorizeOptPass
-]
-
-/-- Run the complete 4-pass verified optimization pipeline on a single `LNIRDecl`. -/
-def runDefaultPipelineDecl (d : LNIRDecl) : LNIRDecl × List PassStepCert :=
-  runPassPipelineDecl defaultPasses d
-
-/-- Run the complete 4-pass verified optimization pipeline on an `LNIRModule`. -/
-def runDefaultPipeline (m : LNIRModule) : LNIRModule × List PassStepCert :=
-  runPassPipeline defaultPasses m
+def defaultPasses : List TransformPass := [algebraicOptPass, unboxTupleSROAPass, hoistExclusivityPass, loopVectorizeOptPass]
+def runDefaultPipelineDecl (d : LNIRDecl) : LNIRDecl × List PassStepCert := runPassPipelineDecl defaultPasses d
+def runDefaultPipeline (m : LNIRModule) : LNIRModule × List PassStepCert := runPassPipeline defaultPasses m
 
 end LeanNative.Transform

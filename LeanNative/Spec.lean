@@ -967,9 +967,39 @@ theorem overflow_out_len_rejects_cabi_slice_io (inp : CAbiSliceIoInput)
 def verifyCAbiSliceIoC (rowCount rowBytes maxBufferBytes outLen outCap : UInt64) : UInt64 :=
   if canBindCAbiSliceIo ⟨rowCount.toNat, rowBytes.toNat, maxBufferBytes.toNat, outLen.toNat, outCap.toNat⟩ then 1 else 0
 
+/-- Pack a borrowed slice span `(start:32 | len:24 | kind:8)` into a single unboxed `UInt64` (`SliceOut` C-ABI). -/
+@[inline, export leannative_pack_slice_span_u64]
+def packSliceSpanU64 (start len kind : UInt64) : UInt64 :=
+  ((start &&& 0xFFFFFFFF) <<< 32) ||| ((len &&& 0xFFFFFF) <<< 8) ||| (kind &&& 0xFF)
+
+/-- Zero-Runtime `NoRuntimeCheck` & `SliceOut` C-ABI gate (`nm -u == 0`, zero `lean_alloc_*`/RC/closures). -/
+structure NoRuntimeSliceOutInput where
+  (undefRuntimeSyms allocCount rcOpCount outLen outCap : Nat)
+  deriving Repr, DecidableEq, BEq
+def canEmitZeroRuntimeSliceOut (inp : NoRuntimeSliceOutInput) : Bool :=
+  decide (inp.undefRuntimeSyms = 0) && decide (inp.allocCount = 0) && decide (inp.rcOpCount = 0) && decide (inp.outLen ≤ inp.outCap)
+theorem no_runtime_slice_out_gate_sound (inp : NoRuntimeSliceOutInput) :
+    canEmitZeroRuntimeSliceOut inp = true ↔
+      (inp.undefRuntimeSyms = 0 ∧ inp.allocCount = 0 ∧ inp.rcOpCount = 0 ∧ inp.outLen ≤ inp.outCap) := by
+  simp [canEmitZeroRuntimeSliceOut, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def noRuntimeSliceOutMetaSpec : MetaGateSpec NoRuntimeSliceOutInput
+    (fun inp => inp.undefRuntimeSyms = 0 ∧ inp.allocCount = 0 ∧ inp.rcOpCount = 0 ∧ inp.outLen ≤ inp.outCap) :=
+  ⟨canEmitZeroRuntimeSliceOut, fun inp => (no_runtime_slice_out_gate_sound inp).mp,
+   fun inp => (no_runtime_slice_out_gate_sound inp).mpr, ⟨0, 0, 0, 8, 16⟩, ⟨1, 0, 0, 8, 16⟩, rfl, rfl⟩
+theorem runtime_sym_rejects_slice_out (inp : NoRuntimeSliceOutInput)
+    (h_sym : 0 < inp.undefRuntimeSyms) : canEmitZeroRuntimeSliceOut inp = false :=
+  noRuntimeSliceOutMetaSpec.rejects_unsafe inp (by omega)
+
+@[inline, export leannative_verify_no_runtime_slice_out]
+def verifyNoRuntimeSliceOutC (undefSyms allocCount rcCount outLen outCap : UInt64) : UInt64 :=
+  if canEmitZeroRuntimeSliceOut ⟨undefSyms.toNat, allocCount.toNat, rcCount.toNat, outLen.toNat, outCap.toNat⟩ then 1 else 0
+
 #guard verifyCAbiSliceIoC 16 48 4096 8 16 == 1
 #guard verifyCAbiSliceIoC 16 48 512 8 16 == 0
 #guard verifyCAbiSliceIoC 16 48 4096 32 16 == 0
+#guard packSliceSpanU64 10 25 3 == 0x0000000A00001903
+#guard verifyNoRuntimeSliceOutC 0 0 0 8 16 == 1
+#guard verifyNoRuntimeSliceOutC 1 0 0 8 16 == 0
 
 /-- Wave 15–18 structural loop-peephole, 1D `_scalar` hoisting, entry-guard unrolling, & dead-tail elision gate (`ln_c_opt`). -/
 structure Wave15To18StructuralGateInput where

@@ -35,6 +35,10 @@ end AssuranceLevel
 inductive TargetArch where
   | x86_64
   | arm64
+  | iosArm64
+  | iosSimArm64
+  | androidArm64
+  | wasm32
   | nvptx64
   | hybridCpuGpu
   deriving Repr, DecidableEq, Inhabited, BEq
@@ -44,8 +48,16 @@ namespace TargetArch
 def triple : TargetArch → String
   | .x86_64       => "x86_64-unknown-linux-gnu"
   | .arm64        => "aarch64-unknown-linux-gnu"
+  | .iosArm64     => "arm64-apple-ios"
+  | .iosSimArm64  => "arm64-apple-ios-simulator"
+  | .androidArm64 => "aarch64-linux-android"
+  | .wasm32       => "wasm32-unknown-unknown"
   | .nvptx64      => "nvptx64-nvidia-cuda"
   | .hybridCpuGpu => "hybrid-cpu-nvptx64"
+
+def symbolPrefix : TargetArch → String
+  | .iosArm64 | .iosSimArm64 => "_"
+  | _ => ""
 
 end TargetArch
 
