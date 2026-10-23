@@ -1,4 +1,12 @@
-# Lean Native (`lean-native` v0.5)
+<p align="center">
+  <img src="logo.svg" width="108" alt="lean-native" />
+</p>
+
+<h1 align="center">lean-native</h1>
+
+<p align="center">
+  <strong>Formally validated native &amp; GPU compiler and counterexample engine for Lean 4.</strong>
+</p>
 
 **Lean Native (`lean-native`)** is a high-performance, formally validated, self-optimizing native compiler and counterexample engine for **Lean 4** (`leanprover/lean4:v4.35.0`) targeting **x86-64**, **ARM64**, **NVIDIA CUDA (MLIR / NVVM / PTX 8.0)**, and **Apple Metal (MSL 3.0)** with native **256-bit EVM/Verity (`u256`/`i256`/`StorageMap`)** support, achieving performance approaching or exceeding optimized Rust/C++ while preserving Lean's semantics through **173 machine-checked in-kernel proofs** (`0 sorryAx`, `84/84` tight specs in `LeanNative/Spec.lean` audited by `turbo-lean audit-spec`), a **pinned formal executable specification ([`LeanNative/Spec.lean`](LeanNative/Spec.lean))**, **segregated optimization plugins ([`LeanNative/Transform/Plugins.lean`](LeanNative/Transform/Plugins.lean))**, and **Season 8 `turbo-lean` integration**.
 
