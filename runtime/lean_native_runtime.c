@@ -657,6 +657,13 @@ static inline int32_t lean_native_avx2_hsum_epi32(__m256i v) {
 #endif
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 static inline int32_t lean_native_neon_dot16_s8(const int32_t* a32, const int8_t* b8) {
+#if defined(__ARM_FEATURE_DOTPROD)
+    int8_t a8[16];
+    for (int k = 0; k < 16; ++k) a8[k] = (int8_t)a32[k];
+    int8x16_t va = vld1q_s8(a8);
+    int8x16_t vb = vld1q_s8(b8);
+    return vaddvq_s32(vdotq_s32(vdupq_n_s32(0), va, vb));
+#else
     int16_t a16[16];
     for (int k = 0; k < 16; ++k) a16[k] = (int16_t)a32[k];
     int16x8_t va0 = vld1q_s16(a16);
@@ -669,6 +676,7 @@ static inline int32_t lean_native_neon_dot16_s8(const int32_t* a32, const int8_t
     acc = vmlal_s16(acc, vget_low_s16(va1), vget_low_s16(vb1));
     acc = vmlal_s16(acc, vget_high_s16(va1), vget_high_s16(vb1));
     return vaddvq_s32(acc);
+#endif
 }
 static inline int32_t lean_native_neon_dot16_u8s8(const uint8_t* a8, const int8_t* b8) {
     uint8x16_t va = vld1q_u8(a8);
@@ -1129,7 +1137,8 @@ static inline int lean_native_ablate_skip_s1(void) {
     int v = __atomic_load_n(&s_skip, __ATOMIC_RELAXED);
     if (v >= 0) return v;
     const char* env = getenv("LEAN_NATIVE_ABLATE_SKIP_S1");
-    v = (env && strcmp(env, "1") == 0) ? 1 : 0;
+    /* Rule 7 Pareto Ratchet: S0 -> S2/S3 is the default (+2.6% faster E2E); set LEAN_NATIVE_ABLATE_SKIP_S1=0 to force S1. */
+    v = (env && strcmp(env, "0") == 0) ? 0 : 1;
     __atomic_store_n(&s_skip, v, __ATOMIC_RELAXED);
     return v;
 }
