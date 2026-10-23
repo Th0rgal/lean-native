@@ -21,6 +21,7 @@ inductive BinOp where
   | addChecked256  -- 256-bit checked addition (traps/errors on overflow >= 2^256)
   | subChecked256  -- 256-bit checked subtraction (traps/errors on underflow < 0)
   | mulChecked256  -- 256-bit checked multiplication (traps/errors on overflow >= 2^256)
+  | clmul64        -- carry-less multiply of two UInt64s; low 64 bits of the 128-bit product (pclmulqdq imm=0x00)
   deriving Repr, DecidableEq, Inhabited, BEq
 
 /-- Unary operators in LNIR. -/

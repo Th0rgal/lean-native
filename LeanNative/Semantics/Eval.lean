@@ -12,6 +12,17 @@ def Val.toU256? : Val → Option UInt256
   | .u64 x  => some (UInt256.ofUInt64 x)
   | _       => none
 
+/-- Carry-less product of two `UInt64`s, low 64 bits only (`pclmulqdq` imm=0x00). No 0x87 reduction. -/
+def clmul64Lo (a b : UInt64) : UInt64 :=
+  let rec go (i : Nat) (acc : UInt64) : UInt64 :=
+    match i with
+    | 0 => acc
+    | n + 1 =>
+      let bit := (b >>> n.toUInt64) &&& 1
+      let acc := if bit == 1 then acc ^^^ (a <<< n.toUInt64) else acc
+      go n acc
+  go 64 0
+
 /-- Total, deterministic evaluation of binary scalar operators on `Val` (64-bit and 256-bit EVM). -/
 def evalBinOp (op : BinOp) (v1 v2 : Val) : Except UBError Val :=
   match op with
@@ -138,6 +149,10 @@ def evalBinOp (op : BinOp) (v1 v2 : Val) : Except UBError Val :=
       | some res => .ok (.u256 res)
       | none => .error (.arithmeticOverflow "mulChecked256 overflow")
     | _, _ => .error (.typeError "mulChecked256 requires u256/u64 operands")
+  | .clmul64 =>
+    match v1, v2 with
+    | .u64 a, .u64 b => .ok (.u64 (clmul64Lo a b))
+    | _, _ => .error (.typeError "clmul64 requires u64 operands")
 
 /-- Total, deterministic evaluation of unary scalar operators on `Val`. -/
 def evalUnaryOp (op : UnaryOp) (v : Val) : Except UBError Val :=
