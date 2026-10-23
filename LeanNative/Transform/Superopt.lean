@@ -376,6 +376,69 @@ def superoptSynthRules : List SynthRule :=
           | some k => [ScalarExpr.binOp .shl x (.constU64 k)]
           | none => []
         | _ => [] }
+  , { name := "add_sub_cancel"
+      apply := fun
+        | .binOp .sub (.binOp .add x y) z =>
+          if z == y then [x]
+          else if z == x then [y]
+          else []
+        | _ => [] }
+  , { name := "distributive_bitwise_and"
+      apply := fun
+        | .binOp .bitOr (.binOp .bitAnd a b) (.binOp .bitAnd c d) =>
+          if a == c then [ScalarExpr.binOp .bitAnd a (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitOr b d))]
+          else if a == d then [ScalarExpr.binOp .bitAnd a (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitOr b c))]
+          else if b == c then [ScalarExpr.binOp .bitAnd b (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitOr a d))]
+          else if b == d then [ScalarExpr.binOp .bitAnd b (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitOr a c))]
+          else []
+        | .binOp .bitXor (.binOp .bitAnd a b) (.binOp .bitAnd c d) =>
+          if a == c then [ScalarExpr.binOp .bitAnd a (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitXor b d))]
+          else if a == d then [ScalarExpr.binOp .bitAnd a (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitXor b c))]
+          else if b == c then [ScalarExpr.binOp .bitAnd b (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitXor a d))]
+          else if b == d then [ScalarExpr.binOp .bitAnd b (LeanNative.Proofs.rewriteScalarVerified (.binOp .bitXor a c))]
+          else []
+        | _ => [] }
+  , { name := "xor_self_cancel"
+      apply := fun
+        | .binOp .bitXor (.binOp .bitXor x y) z =>
+          if z == y then [x]
+          else if z == x then [y]
+          else []
+        | .binOp .bitXor z (.binOp .bitXor x y) =>
+          if z == y then [x]
+          else if z == x then [y]
+          else []
+        | _ => [] }
+  , { name := "assoc_sub_const"
+      apply := fun
+        | .binOp .sub (.binOp .sub inner (.constU64 c1)) (.constU64 c2) =>
+          let cSum := c1 + c2
+          if cSum == 0 then [inner] else [ScalarExpr.binOp .sub inner (.constU64 cSum)]
+        | .binOp .sub (.binOp .add inner (.constU64 c1)) (.constU64 c2) =>
+          let cDiff := c1 - c2
+          if cDiff == 0 then [inner] else [ScalarExpr.binOp .add inner (.constU64 cDiff)]
+        | _ => [] }
+  , { name := "sub_masked_clear"
+      apply := fun
+        | .binOp .sub x (.binOp .bitAnd a b) =>
+          if x == a then [ScalarExpr.binOp .bitAnd x (.unaryOp .not b)]
+          else if x == b then [ScalarExpr.binOp .bitAnd x (.unaryOp .not a)]
+          else []
+        | _ => [] }
+  , { name := "and_plus_or_to_add"
+      apply := fun
+        | .binOp .add (.binOp .bitAnd x y) (.binOp .bitOr u v)
+        | .binOp .add (.binOp .bitOr x y) (.binOp .bitAnd u v) =>
+          if (x == u && y == v) || (x == v && y == u) then [ScalarExpr.binOp .add x y]
+          else []
+        | _ => [] }
+  , { name := "xor_or_and_to_or"
+      apply := fun
+        | .binOp .bitOr (.binOp .bitXor x y) (.binOp .bitAnd u v)
+        | .binOp .bitOr (.binOp .bitAnd x y) (.binOp .bitXor u v) =>
+          if (x == u && y == v) || (x == v && y == u) then [ScalarExpr.binOp .bitOr x y]
+          else []
+        | _ => [] }
   ]
 
 /-- Apply all declarative `superoptSynthRules` to a top-level `ScalarExpr`. -/
@@ -427,6 +490,11 @@ def normSymSuperoptStep (s : SymExpr) : SymExpr :=
       -- Associative addition: (x + c1) + c2 -> x + (c1 + c2)
       | .binOp .add inner (.constU64 c1), .constU64 c2 =>
         normSymExpr (.binOp .add inner (.constU64 (c1 + c2)))
+      -- Disjoint bit decomposition: (x &&& y) + (x ||| y) -> x + y
+      | .binOp .bitAnd a b, .binOp .bitOr u v
+      | .binOp .bitOr a b, .binOp .bitAnd u v =>
+        if (a == u && b == v) || (a == v && b == u) then normSymExpr (.binOp .add a b)
+        else s0
       | _, _ => s0
   -- Shift composition: (x <<< k1) <<< k2 -> x <<< (k1 + k2)
   | .binOp .shl (.binOp .shl x (.constU64 k1)) (.constU64 k2) =>
@@ -446,13 +514,50 @@ def normSymSuperoptStep (s : SymExpr) : SymExpr :=
     if k1 == k2 && k1 < 64 then
       normSymExpr (.binOp .bitAnd x (.constU64 (0xffffffffffffffff >>> k1)))
     else s0
-  -- Bitwise mask composition
+  -- Bitwise mask composition and distributive factoring
+  | .binOp .sub (.binOp .add x y) z =>
+    if z == y then x
+    else if z == x then y
+    else
+      match y, z with
+      | .constU64 c1, .constU64 c2 =>
+        let cDiff := c1 - c2
+        if cDiff == 0 then x else normSymExpr (.binOp .add x (.constU64 cDiff))
+      | _, _ => s0
+  | .binOp .sub (.binOp .sub x (.constU64 c1)) (.constU64 c2) =>
+    let cSum := c1 + c2
+    if cSum == 0 then x else normSymExpr (.binOp .sub x (.constU64 cSum))
+  | .binOp .sub x (.binOp .bitAnd a b) =>
+    if x == a then normSymExpr (.binOp .bitAnd x (.unaryOp .not b))
+    else if x == b then normSymExpr (.binOp .bitAnd x (.unaryOp .not a))
+    else s0
+  | .binOp .bitOr (.binOp .bitXor x y) (.binOp .bitAnd u v)
+  | .binOp .bitOr (.binOp .bitAnd x y) (.binOp .bitXor u v) =>
+    if (x == u && y == v) || (x == v && y == u) then normSymExpr (.binOp .bitOr x y)
+    else s0
+  | .binOp .bitXor (.binOp .bitXor x y) z =>
+    if z == y then x
+    else if z == x then y
+    else
+      match y, z with
+      | .constU64 m1, .constU64 m2 => normSymExpr (.binOp .bitXor x (.constU64 (m1 ^^^ m2)))
+      | _, _ => s0
   | .binOp .bitAnd (.binOp .bitAnd x (.constU64 m1)) (.constU64 m2) =>
     normSymExpr (.binOp .bitAnd x (.constU64 (m1 &&& m2)))
   | .binOp .bitOr (.binOp .bitOr x (.constU64 m1)) (.constU64 m2) =>
     normSymExpr (.binOp .bitOr x (.constU64 (m1 ||| m2)))
-  | .binOp .bitXor (.binOp .bitXor x (.constU64 m1)) (.constU64 m2) =>
-    normSymExpr (.binOp .bitXor x (.constU64 (m1 ^^^ m2)))
+  | .binOp .bitOr (.binOp .bitAnd a b) (.binOp .bitAnd c d) =>
+    if a == c then normSymExpr (.binOp .bitAnd a (normSymExpr (.binOp .bitOr b d)))
+    else if a == d then normSymExpr (.binOp .bitAnd a (normSymExpr (.binOp .bitOr b c)))
+    else if b == c then normSymExpr (.binOp .bitAnd b (normSymExpr (.binOp .bitOr a d)))
+    else if b == d then normSymExpr (.binOp .bitAnd b (normSymExpr (.binOp .bitOr a c)))
+    else s0
+  | .binOp .bitXor (.binOp .bitAnd a b) (.binOp .bitAnd c d) =>
+    if a == c then normSymExpr (.binOp .bitAnd a (normSymExpr (.binOp .bitXor b d)))
+    else if a == d then normSymExpr (.binOp .bitAnd a (normSymExpr (.binOp .bitXor b c)))
+    else if b == c then normSymExpr (.binOp .bitAnd b (normSymExpr (.binOp .bitXor a d)))
+    else if b == d then normSymExpr (.binOp .bitAnd b (normSymExpr (.binOp .bitXor a c)))
+    else s0
   -- Division/modulo by power of two
   | .binOp .div (.binOp .div x (.constU64 d1)) (.constU64 d2) =>
     match powerOfTwoShift? d1, powerOfTwoShift? d2 with

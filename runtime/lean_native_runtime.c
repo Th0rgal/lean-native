@@ -1,6 +1,11 @@
 #include "lean_native_runtime.h"
 #include <stdlib.h>
 #include <string.h>
+#if defined(__unix__) || defined(__APPLE__)
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/file.h>
+#endif
 #if defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -1098,6 +1103,71 @@ int lean_native_verify_indexed_witness_recert(
     return violated;
 }
 
+int lean_native_fpga_ulx3s_available(void) {
+    static int s_cached = -1;
+    int cached = __atomic_load_n(&s_cached, __ATOMIC_RELAXED);
+    if (cached >= 0) {
+        return cached;
+    }
+    const char* enable_env = getenv("LEAN_NATIVE_ENABLE_ULX3S");
+    if (!enable_env || strcmp(enable_env, "1") != 0) {
+        __atomic_store_n(&s_cached, 0, __ATOMIC_RELAXED);
+        return 0;
+    }
+#if defined(__unix__) || defined(__APPLE__)
+    const char* dev_path = getenv("LEAN_NATIVE_ULX3S_DEV");
+    if (!dev_path || !dev_path[0]) {
+        dev_path = "/dev/serial/by-id/usb-FER-RADIONA-EMARD_ULX3S_FPGA_85K_v3.0.8_D01623-if00-port0";
+    }
+    int fd = open(dev_path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) {
+        __atomic_store_n(&s_cached, 0, __ATOMIC_RELAXED);
+        return 0;
+    }
+    int lock_ok = (flock(fd, LOCK_EX | LOCK_NB) == 0);
+    if (lock_ok) {
+        (void)flock(fd, LOCK_UN);
+    }
+    close(fd);
+    int res = lock_ok ? 1 : 0;
+    __atomic_store_n(&s_cached, res, __ATOMIC_RELAXED);
+    return res;
+#else
+    __atomic_store_n(&s_cached, 0, __ATOMIC_RELAXED);
+    return 0;
+#endif
+}
+
+int lean_native_fpga_ulx3s_try_fastcheck(
+    uint64_t base_seed,
+    uint64_t goal_idx,
+    size_t n_samples,
+    const int32_t* rpn_opcodes,
+    uint64_t arg0,
+    uint64_t arg1,
+    uint64_t* out_sample_idx
+) {
+    (void)base_seed;
+    (void)goal_idx;
+    (void)n_samples;
+    (void)rpn_opcodes;
+    (void)arg0;
+    (void)arg1;
+    if (!out_sample_idx || !lean_native_fpga_ulx3s_available()) {
+        return 0;
+    }
+    const char* sim_idx_env = getenv("LEAN_NATIVE_ULX3S_CANDIDATE_IDX");
+    if (sim_idx_env && sim_idx_env[0]) {
+        char* endp = NULL;
+        unsigned long long cand = strtoull(sim_idx_env, &endp, 0);
+        if (endp && endp != sim_idx_env) {
+            *out_sample_idx = (uint64_t)cand;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int lean_native_rpn_u256_fastcheck_goal(
     uint64_t base_seed,
     uint64_t goal_idx,
@@ -1112,6 +1182,16 @@ int lean_native_rpn_u256_fastcheck_goal(
     }
     if (!rpn_opcodes || n_samples == 0) {
         return 0;
+    }
+    uint64_t fpga_cand = UINT64_MAX;
+    if (lean_native_fpga_ulx3s_try_fastcheck(base_seed, goal_idx, n_samples, rpn_opcodes, arg0, arg1, &fpga_cand)) {
+        if (fpga_cand < (uint64_t)n_samples &&
+            lean_native_verify_indexed_witness_recert(base_seed, goal_idx, fpga_cand, rpn_opcodes, arg0, arg1)) {
+            if (out_min_sample_idx) {
+                *out_min_sample_idx = fpga_cand;
+            }
+            return 1;
+        }
     }
     for (size_t s = 0; s < n_samples; ++s) {
         if (lean_native_verify_indexed_witness_recert(base_seed, goal_idx, (uint64_t)s, rpn_opcodes, arg0, arg1)) {
