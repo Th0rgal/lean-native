@@ -843,5 +843,41 @@ theorem escaping_sarray_rejects_stack_sroa (inp : MultiSArrayStackSROAInput)
     (h_esc : inp.noHeapEscape = false) : canMaterializeStackSArraySROA inp = false :=
   multiSArrayStackSROAMetaSpec.rejects_unsafe inp (by simp [h_esc])
 
+/-- Stack-promoted `Range.mk` (`lean_alloc_ctor(0, 3, 0)`) & `lean_dec_ref_known` elision gate (`ln_c_opt` Pass 3b Peephole E). -/
+structure StackPromotedRangeElisionInput where
+  (ctorTag numObjs : Nat) (rangeEscapes singleDecRefKnown : Bool)
+  deriving Repr, DecidableEq, BEq
+def canPromoteRangeCtorToStack (inp : StackPromotedRangeElisionInput) : Bool :=
+  decide (inp.ctorTag = 0) && decide (inp.numObjs = 3) && !inp.rangeEscapes && inp.singleDecRefKnown
+theorem stack_promoted_range_elision_gate_sound (inp : StackPromotedRangeElisionInput) :
+    canPromoteRangeCtorToStack inp = true ↔
+      (inp.ctorTag = 0 ∧ inp.numObjs = 3 ∧ inp.rangeEscapes = false ∧ inp.singleDecRefKnown = true) := by
+  simp [canPromoteRangeCtorToStack, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def stackPromotedRangeElisionMetaSpec : MetaGateSpec StackPromotedRangeElisionInput
+    (fun inp => inp.ctorTag = 0 ∧ inp.numObjs = 3 ∧ inp.rangeEscapes = false ∧ inp.singleDecRefKnown = true) :=
+  ⟨canPromoteRangeCtorToStack, fun inp => (stack_promoted_range_elision_gate_sound inp).mp,
+   fun inp => (stack_promoted_range_elision_gate_sound inp).mpr, ⟨0, 3, false, true⟩, ⟨0, 3, true, true⟩, rfl, rfl⟩
+theorem escaping_range_ctor_rejects_stack_promotion (inp : StackPromotedRangeElisionInput)
+    (h_esc : inp.rangeEscapes = true) : canPromoteRangeCtorToStack inp = false :=
+  stackPromotedRangeElisionMetaSpec.rejects_unsafe inp (by simp [h_esc])
+
+/-- Inter-iteration `repeatM` 3-tuple `SArray` (`(x, y, z, scalars...)`) SROA & `_scalar` lowering gate (`ln_c_opt` Pass 2B/3). -/
+structure RepeatMTripleSArraySROAInput where
+  (tagX tagY tagZ : Nat) (scalarHelperInlined : Bool)
+  deriving Repr, DecidableEq, BEq
+def canScalarizeRepeatMTripleSArray (inp : RepeatMTripleSArraySROAInput) : Bool :=
+  decide (inp.tagX = 248) && decide (inp.tagY = 248) && decide (inp.tagZ = 248) && inp.scalarHelperInlined
+theorem repeatm_triple_sarray_sroa_gate_sound (inp : RepeatMTripleSArraySROAInput) :
+    canScalarizeRepeatMTripleSArray inp = true ↔
+      (inp.tagX = 248 ∧ inp.tagY = 248 ∧ inp.tagZ = 248 ∧ inp.scalarHelperInlined = true) := by
+  simp [canScalarizeRepeatMTripleSArray, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def repeatMTripleSArraySROAMetaSpec : MetaGateSpec RepeatMTripleSArraySROAInput
+    (fun inp => inp.tagX = 248 ∧ inp.tagY = 248 ∧ inp.tagZ = 248 ∧ inp.scalarHelperInlined = true) :=
+  ⟨canScalarizeRepeatMTripleSArray, fun inp => (repeatm_triple_sarray_sroa_gate_sound inp).mp,
+   fun inp => (repeatm_triple_sarray_sroa_gate_sound inp).mpr, ⟨248, 248, 248, true⟩, ⟨248, 248, 248, false⟩, rfl, rfl⟩
+theorem uninlined_helper_rejects_triple_sarray_sroa (inp : RepeatMTripleSArraySROAInput)
+    (h_no : inp.scalarHelperInlined = false) : canScalarizeRepeatMTripleSArray inp = false :=
+  repeatMTripleSArraySROAMetaSpec.rejects_unsafe inp (by simp [h_no])
+
 end LeanNative.Spec
 

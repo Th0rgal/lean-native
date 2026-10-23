@@ -78,6 +78,10 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__1___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__2___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__3___redArg_scalar",
+        "l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00renamedTaskNbody_spec__0___redArg_scalar",
+        "l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00renamedTaskNbody_spec__1___redArg_scalar",
+        "l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00renamedTaskNbody_spec__2___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskNbody_spec__3___redArg_scalar",
     ]:
         assert f"void {inner_fn}(" in c3, f"Missing scalar helper {inner_fn}"
 
@@ -92,6 +96,13 @@ def verify_rename_invariance(raw_c_path: str) -> None:
     assert m_sar != -1 and "return (uint64_t)(((int64_t)(" in c3[m_sar : m_sar + 400], "Peephole D return-diamond failed on l_sar64__16"
     m_sn5 = c3.find("LEAN_EXPORT lean_object* l___private_Init_While_0__repeatM_erased___at___00renamedTaskSpectralNorm_spec__5___redArg(uint64_t ")
     assert m_sn5 != -1 and "ln_st_v_" in c3[m_sn5 : m_sn5 + 3200], "Peephole E stack Range elision failed on SpectralNorm_spec__5"
+    for fn_pe in [
+        "renamedTaskNbody_spec__1___redArg",
+        "renamedTaskSparseMatmulCsr_spec__4___redArg",
+        "renamedTaskMatmulTiledU64",
+    ]:
+        m_pe = re.search(rf"LEAN_EXPORT [^\n]*(?:lean_object\*|uint64_t) [^\n]*{fn_pe}\([^)]*\)\{{", c3)
+        assert m_pe and "ln_st_v_" in c3[m_pe.start() : m_pe.start() + 12000], f"Peephole E stack Range elision failed on {fn_pe}"
 
     # 3. Verify Pass 3b structural peepholes (mulHi __uint128_t and __builtin_popcountll)
     assert "__uint128_t" in c3, "Pass 3b mulHi __uint128_t peephole did not fire on renamed C"

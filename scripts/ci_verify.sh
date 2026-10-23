@@ -16,15 +16,15 @@ export PATH="$ROOT_DIR/../turbo-lean/target/release:/var/lib/sandboxed-node/cach
 BASE_REF="HEAD"
 for arg in "$@"; do
   if [[ "$arg" == "--sync-docs" ]]; then
-    grep -q "169 machine-checked in-kernel proofs" README.md
-    grep -q "80/80" README.md
-    grep -q "169/169" AGENTS.md
+    grep -q "173 machine-checked in-kernel proofs" README.md
+    grep -q "84/84" README.md
+    grep -q "173/173" AGENTS.md
   else
     BASE_REF="$arg"
   fi
 done
-grep -q "169 machine-checked in-kernel proofs" README.md
-grep -q "169/169" AGENTS.md
+grep -q "173 machine-checked in-kernel proofs" README.md
+grep -q "173/173" AGENTS.md
 EXTRA_PR_FLAGS="${LEAN_NATIVE_PR_FLAGS:-}"
 
 echo "=================================================================="
@@ -49,15 +49,15 @@ if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> Running turbo-lean audit-spec on LeanNative/Spec.lean..."
   turbo-lean --json audit-spec LeanNative/Spec.lean > /tmp/ln_ci_audit_spec.json
   grep -q '"vacuous_specs": 0' /tmp/ln_ci_audit_spec.json
-  grep -q '"tight_specs": 80' /tmp/ln_ci_audit_spec.json
-  echo "  -> turbo-lean audit-spec: 80/80 tight in Spec.lean (0 vacuous specs)!"
+  grep -q '"tight_specs": 84' /tmp/ln_ci_audit_spec.json
+  echo "  -> turbo-lean audit-spec: 84/84 tight in Spec.lean (0 vacuous specs)!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (169 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (173 theorems) & Self-Tests..."
 $CORE_BIN self-test
 $FULL_BIN self-test
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 169" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 173" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."

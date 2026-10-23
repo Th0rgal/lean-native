@@ -115,6 +115,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.pingpong_sarray_swap_sroa_gate_sound, ``LeanNative.Spec.aliased_buffers_reject_pingpong_swap
   , ``LeanNative.Spec.sar64_return_diamond_peephole_gate_sound, ``LeanNative.Spec.wide_shift_rejects_sar64_diamond
   , ``LeanNative.Spec.multi_sarray_stack_sroa_gate_sound, ``LeanNative.Spec.escaping_sarray_rejects_stack_sroa
+  , ``LeanNative.Spec.stack_promoted_range_elision_gate_sound, ``LeanNative.Spec.escaping_range_ctor_rejects_stack_promotion
+  , ``LeanNative.Spec.repeatm_triple_sarray_sroa_gate_sound, ``LeanNative.Spec.uninlined_helper_rejects_triple_sarray_sroa
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
