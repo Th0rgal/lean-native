@@ -41,6 +41,7 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/Th0rgal/turbo-lean.git /tmp/turbo-lean
           cd /tmp/turbo-lean
+          (cd lean && lake build)
           cargo build --release --bin turbo-lean
           cp target/release/turbo-lean "$HOME/.cargo/bin/turbo-lean"
 
