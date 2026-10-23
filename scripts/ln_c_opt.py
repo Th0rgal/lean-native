@@ -691,6 +691,138 @@ def apply_pass2_range_forin(c_text):
     out_parts.append(c_text[last_idx:])
     c_text = "".join(out_parts)
 
+    # Wave 10A: Unimodular 4x4 register-blocked micro-kernel for 3D affine matmul Range.forIn' nests
+    # Detects any spec__3 -> spec__2 -> spec__1 chain where spec__1 is a row-SAXPY (C[row_i + j] += a_ik * B[row_k + j])
+    for m_mm3 in list(re.finditer(
+        r"LEAN_EXPORT inline __attribute__\(\(always_inline\)\) lean_object\* (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(([^)]*)\)\{\n"
+        r"\{\n"
+        r"lean_object\* ([a-zA-Z0-9_]+) = lean_ctor_get\(([a-zA-Z0-9_]+), 1\);\n"
+        r"lean_object\* ([a-zA-Z0-9_]+) = lean_ctor_get\(\4, 2\);\n"
+        r"if \(lean_is_scalar\(([a-zA-Z0-9_]+)\) && lean_is_scalar\(\3\) && \5 == lean_box\(1\) && lean_obj_tag\(([a-zA-Z0-9_]+)\) == 248\) \{\n"
+        r"size_t ln_i = lean_unbox\(\6\);\n"
+        r"size_t ln_stop = lean_unbox\(\3\);\n"
+        r"size_t ln_limit = ln_stop;\n"
+        r"for \(; ln_i < ln_limit; \+\+ln_i\) \{\n"
+        r"[^\n]*\n"
+        r"size_t [a-zA-Z0-9_]+ = 0;\n"
+        r"[a-zA-Z0-9_]+ = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(lean_box\(ln_i\), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), \12, \7, lean_box\([a-zA-Z0-9_]+\)\);\n",
+        c_text
+    )):
+        fn_mm3, p_str3, stop_v3, range_v3, step_v3, i_v3, c_v3, fn_mm2, dim_v3, a_v3, b_v3, r_inner3 = (
+            m_mm3.group(1), m_mm3.group(2), m_mm3.group(3), m_mm3.group(4), m_mm3.group(5),
+            m_mm3.group(6), m_mm3.group(7), m_mm3.group(8), m_mm3.group(9), m_mm3.group(10),
+            m_mm3.group(11), m_mm3.group(12)
+        )
+        m_mm2 = re.search(
+            r"LEAN_EXPORT inline __attribute__\(\(always_inline\)\) lean_object\* " + re.escape(fn_mm2) + r"\([^)]*\)\{\n"
+            r".*?size_t [a-zA-Z0-9_]+ = [a-zA-Z0-9_]+ \* [a-zA-Z0-9_]+;\n"
+            r"[^\n]*\n"
+            r"[a-zA-Z0-9_]+ = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(",
+            c_text, re.DOTALL
+        )
+        if not m_mm2:
+            continue
+        fn_mm1 = m_mm2.group(1)
+        if f"LEAN_EXPORT inline __attribute__((always_inline)) lean_object* {fn_mm1}(" not in c_text:
+            continue
+        mm_tile = (
+            f"if ({i_v3} == lean_box(0) && lean_is_scalar({dim_v3}) && {stop_v3} == {dim_v3} && {step_v3} == lean_box(1) && "
+            f"lean_obj_tag({a_v3}) == 248 && lean_obj_tag({b_v3}) == 248 && lean_obj_tag({c_v3}) == 248) {{\n"
+            f"size_t ln_d = lean_unbox({dim_v3}), ln_tot = ln_d * ln_d;\n"
+            f"if (ln_sarray_u64_size({a_v3}) >= ln_tot && ln_sarray_u64_size({b_v3}) >= ln_tot && ln_sarray_u64_size({c_v3}) >= ln_tot) {{\n"
+            f"{c_v3} = ln_sarray_ensure_exclusive_u64({c_v3});\n"
+            f"const uint64_t* __restrict__ ln_pa = ln_sarray_u64_ptr({a_v3});\n"
+            f"const uint64_t* __restrict__ ln_pb = ln_sarray_u64_ptr({b_v3});\n"
+            f"uint64_t* __restrict__ ln_pc = ln_sarray_u64_ptr({c_v3});\n"
+            f"size_t ln_r = 0;\n"
+            f"for (; ln_r + 3 < ln_d; ln_r += 4) {{\n"
+            f"uint64_t* __restrict__ c0 = ln_pc + (ln_r + 0) * ln_d;\n"
+            f"uint64_t* __restrict__ c1 = ln_pc + (ln_r + 1) * ln_d;\n"
+            f"uint64_t* __restrict__ c2 = ln_pc + (ln_r + 2) * ln_d;\n"
+            f"uint64_t* __restrict__ c3 = ln_pc + (ln_r + 3) * ln_d;\n"
+            f"for (size_t ln_k = 0; ln_k < ln_d; ++ln_k) {{\n"
+            f"uint64_t a0 = ln_pa[(ln_r + 0) * ln_d + ln_k], a1 = ln_pa[(ln_r + 1) * ln_d + ln_k];\n"
+            f"uint64_t a2 = ln_pa[(ln_r + 2) * ln_d + ln_k], a3 = ln_pa[(ln_r + 3) * ln_d + ln_k];\n"
+            f"const uint64_t* __restrict__ bk = ln_pb + ln_k * ln_d;\n"
+            f"for (size_t ln_j = 0; ln_j < ln_d; ++ln_j) {{\n"
+            f"uint64_t bv = bk[ln_j];\n"
+            f"c0[ln_j] += a0 * bv; c1[ln_j] += a1 * bv; c2[ln_j] += a2 * bv; c3[ln_j] += a3 * bv;\n"
+            f"}}\n}}\n}}\n"
+            f"for (; ln_r < ln_d; ++ln_r) {{\n"
+            f"uint64_t* __restrict__ cr = ln_pc + ln_r * ln_d;\n"
+            f"for (size_t ln_k = 0; ln_k < ln_d; ++ln_k) {{\n"
+            f"uint64_t ar = ln_pa[ln_r * ln_d + ln_k];\n"
+            f"const uint64_t* __restrict__ bk = ln_pb + ln_k * ln_d;\n"
+            f"for (size_t ln_j = 0; ln_j < ln_d; ++ln_j) cr[ln_j] += ar * bk[ln_j];\n"
+            f"}}\n}}\n"
+            f"lean_dec({i_v3});\n"
+            f"return {c_v3};\n}}\n}}\n"
+        )
+        old_hdr3 = f"lean_object* {step_v3} = lean_ctor_get({range_v3}, 2);\n"
+        pos3 = m_mm3.start()
+        idx_h3 = c_text.find(old_hdr3, pos3)
+        if idx_h3 != -1:
+            c_text = c_text[:idx_h3 + len(old_hdr3)] + mm_tile + c_text[idx_h3 + len(old_hdr3):]
+
+    # Wave 10B: CSR row-dot-product hoisting & 2-way ILP unroll for outer->inner CSR Range.forIn' nests
+    for m_csr3 in list(re.finditer(
+        r"LEAN_EXPORT inline __attribute__\(\(always_inline\)\) lean_object\* (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(([^)]*)\)\{\n"
+        r"\{\n"
+        r"lean_object\* ([a-zA-Z0-9_]+) = lean_ctor_get\(([a-zA-Z0-9_]+), 1\);\n"
+        r"lean_object\* ([a-zA-Z0-9_]+) = lean_ctor_get\(\4, 2\);\n"
+        r"if \(lean_is_scalar\(([a-zA-Z0-9_]+)\) && lean_is_scalar\(\3\) && \5 == lean_box\(1\) && lean_is_scalar\(([a-zA-Z0-9_]+)\) && lean_obj_tag\(([a-zA-Z0-9_]+)\) == 248\) \{\n"
+        r".*?"
+        r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(lean_box\([a-zA-Z0-9_]+\), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), \(lean_object\*\)&[a-zA-Z0-9_]+, [a-zA-Z0-9_]+, lean_box\([a-zA-Z0-9_]+\)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(\9, ([a-zA-Z0-9_]+)\);\n"
+        r"ln_ptr_\8\[ln_i\] = \14;\n",
+        c_text, re.DOTALL
+    )):
+        fn_csr3, stop_c3, range_c3, step_c3, i_c3, nnz_c3, out_c3, fn_csr2, col_c3, val_c3, x_c3, bias_c3 = (
+            m_csr3.group(1), m_csr3.group(3), m_csr3.group(4), m_csr3.group(5), m_csr3.group(6),
+            m_csr3.group(7), m_csr3.group(8), m_csr3.group(10), m_csr3.group(11), m_csr3.group(12),
+            m_csr3.group(13), m_csr3.group(15)
+        )
+        m_csr2 = re.search(
+            r"LEAN_EXPORT inline __attribute__\(\(always_inline\)\) uint64_t " + re.escape(fn_csr2) + r"\([^)]*\)\{\n"
+            r".*?lean_unbox\(ln_aptr_[a-zA-Z0-9_]+\[ln_nt_[a-zA-Z0-9_]+\]\);",
+            c_text, re.DOTALL
+        )
+        if not m_csr2:
+            continue
+        csr_fast = (
+            f"if ({i_c3} == lean_box(0) && lean_is_scalar({stop_c3}) && {step_c3} == lean_box(1) && lean_is_scalar({nnz_c3}) && "
+            f"lean_obj_tag({col_c3}) == 246 && lean_obj_tag({val_c3}) == 248 && lean_obj_tag({x_c3}) == 248 && lean_obj_tag({out_c3}) == 248) {{\n"
+            f"size_t ln_rows = lean_unbox({stop_c3}), ln_nnz = lean_unbox({nnz_c3}), ln_tot = ln_rows * ln_nnz;\n"
+            f"if (lean_array_size({col_c3}) >= ln_tot && ln_sarray_u64_size({val_c3}) >= ln_tot && ln_sarray_u64_size({out_c3}) >= ln_rows) {{\n"
+            f"{out_c3} = ln_sarray_ensure_exclusive_u64({out_c3});\n"
+            f"lean_object* const* __restrict__ ln_pcol = (lean_object* const*)lean_array_cptr({col_c3});\n"
+            f"const uint64_t* __restrict__ ln_pval = ln_sarray_u64_ptr({val_c3});\n"
+            f"const uint64_t* __restrict__ ln_px = ln_sarray_u64_ptr({x_c3});\n"
+            f"size_t ln_szx = ln_sarray_u64_size({x_c3});\n"
+            f"uint64_t* __restrict__ ln_pout = ln_sarray_u64_ptr({out_c3});\n"
+            f"for (size_t ln_r = 0; ln_r < ln_rows; ++ln_r) {{\n"
+            f"size_t ln_base = ln_r * ln_nnz, ln_k = 0;\n"
+            f"uint64_t s0 = 0ULL, s1 = 0ULL;\n"
+            f"for (; ln_k + 1 < ln_nnz; ln_k += 2) {{\n"
+            f"size_t c0 = lean_unbox(ln_pcol[ln_base + ln_k]), c1 = lean_unbox(ln_pcol[ln_base + ln_k + 1]);\n"
+            f"uint64_t x0 = (c0 < ln_szx) ? ln_px[c0] : 0ULL, x1 = (c1 < ln_szx) ? ln_px[c1] : 0ULL;\n"
+            f"s0 += ln_pval[ln_base + ln_k] * x0; s1 += ln_pval[ln_base + ln_k + 1] * x1;\n"
+            f"}}\n"
+            f"for (; ln_k < ln_nnz; ++ln_k) {{\n"
+            f"size_t c0 = lean_unbox(ln_pcol[ln_base + ln_k]);\n"
+            f"s0 += ln_pval[ln_base + ln_k] * ((c0 < ln_szx) ? ln_px[c0] : 0ULL);\n"
+            f"}}\n"
+            f"ln_pout[ln_r] = (s0 + s1) + {bias_c3};\n"
+            f"}}\n"
+            f"lean_dec({i_c3}); lean_dec({nnz_c3});\n"
+            f"return {out_c3};\n}}\n}}\n"
+        )
+        old_hc3 = f"lean_object* {step_c3} = lean_ctor_get({range_c3}, 2);\n"
+        pos_c3 = m_csr3.start()
+        idx_hc3 = c_text.find(old_hc3, pos_c3)
+        if idx_hc3 != -1:
+            c_text = c_text[:idx_hc3 + len(old_hc3)] + csr_fast + c_text[idx_hc3 + len(old_hc3):]
+
     # Sub-pass 2B: 3-tuple of sarrays Range.forIn' loop (e.g. benchNbody_spec__0, benchNbody_spec__1, benchNbody_spec__2)
     sarray_3tuple_forin_fns = {}
     out_parts = []
@@ -1294,7 +1426,173 @@ def apply_pass2_range_forin(c_text):
                     continue
         out_parts.append(f)
     out_parts.append(c_text[last_idx:])
-    return "".join(out_parts)
+    c_text = "".join(out_parts)
+
+    # Wave 9A: General Array_forIn_x27Unsafe_loop multi-pass LSD radix histogram+prefix-scan+scatter fusion
+    # Matches any Array_forIn_x27Unsafe_loop over a shifts SArray calling 3 Range_forIn_x27_loop helpers (histogram, scan, scatter)
+    for m_rx in list(re.finditer(
+        r"(LEAN_EXPORT (?:inline __attribute__\(\(always_inline\)\) )?lean_object\* (l___private_Init_Data_Array_Basic_0__Array_forIn_x27Unsafe_loop___at___00[a-zA-Z0-9_]+)\()([^)]+)(\)\{\n)"
+        r"_start:\n\{\n"
+        r"uint8_t ([a-zA-Z0-9_]+);\n"
+        r"\5 = lean_usize_dec_lt\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"if \(\5 == 0\)\n\{\nreturn ([a-zA-Z0-9_]+);\n\}\nelse\n\{\n"
+        r"[^\n]+\n"
+        r"([a-zA-Z0-9_]+) = lean_ctor_get\(\8, 0\);\n"
+        r"lean_inc\(\9\);\n"
+        r"([a-zA-Z0-9_]+) = lean_ctor_get\(\8, 1\);\n"
+        r"lean_inc\(\10\);\n"
+        r"lean_dec_ref\(\8\);\n"
+        r"([a-zA-Z0-9_]+) = lean_unsigned_to_nat\(0u\);\n"
+        r"([a-zA-Z0-9_]+) = ln_sarray_uget_u64\(([a-zA-Z0-9_]+), \6\);\n"
+        r"[a-zA-Z0-9_]+ = lean_obj_once\([^\n]+\);\n"
+        r"[a-zA-Z0-9_]+ = \12;\n"
+        r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(\9, [a-zA-Z0-9_]+, ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+, \11\);\n"
+        r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
+        r"[a-zA-Z0-9_]+ = lean_obj_once\([^\n]+\);\n"
+        r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(\14, [a-zA-Z0-9_]+, [a-zA-Z0-9_]+, \11\);\n"
+        r".*?"
+        r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(\9, [a-zA-Z0-9_]+, \16, [a-zA-Z0-9_]+, \11\);\n",
+        c_text, re.DOTALL
+    )):
+        fn_hdr, p_str_rx = m_rx.group(1), m_rx.group(3)
+        fn_hist, fn_scan, fn_scat = m_rx.group(15), m_rx.group(18), m_rx.group(20)
+        if not (f"lean_object* {fn_hist}(" in c_text and f"lean_object* {fn_scan}(" in c_text and f"lean_object* {fn_scat}(" in c_text):
+            continue
+        p_decls_rx = [
+            f"{'size_t' if idx in (2, 3) else 'lean_object*'} p_{idx} = {p.strip().split()[-1]};\n"
+            for idx, p in enumerate(p_str_rx.split(","))
+        ]
+        rx_fast = (
+            "{\n"
+            + "".join(p_decls_rx)
+            + "lean_object* r_start = lean_ctor_get(p_0, 0), *r_stop = lean_ctor_get(p_0, 1), *r_step = lean_ctor_get(p_0, 2);\n"
+            + "lean_object* b_buf = lean_ctor_get(p_4, 0), *b_tmp = lean_ctor_get(p_4, 1);\n"
+            + "if (r_start == lean_box(0) && lean_is_scalar(r_stop) && r_step == lean_box(1) && lean_obj_tag(p_1) == 248 && lean_obj_tag(b_tmp) == 248 && lean_obj_tag(b_buf) == 248) {\n"
+            + "size_t n = lean_unbox(r_stop);\n"
+            + "if (ln_sarray_u64_size(b_tmp) >= n && ln_sarray_u64_size(b_buf) >= n && ln_sarray_u64_size(p_1) >= p_2) {\n"
+            + "lean_inc(b_tmp); lean_inc(b_buf); lean_dec(p_4);\n"
+            + "b_tmp = ln_sarray_ensure_exclusive_u64(b_tmp); b_buf = ln_sarray_ensure_exclusive_u64(b_buf);\n"
+            + "const uint64_t* shifts = ln_sarray_u64_ptr(p_1);\n"
+            + "if (p_3 == 0 && p_2 == 4 && shifts[0] == 0ULL && shifts[1] == 8ULL && shifts[2] == 16ULL && shifts[3] == 24ULL) {\n"
+            + "size_t c0[256] = {0}, c1[256] = {0}, c2[256] = {0}, c3[256] = {0};\n"
+            + "size_t o0[256], o1[256], o2[256], o3[256];\n"
+            + "uint64_t* __restrict__ p0 = ln_sarray_u64_ptr(b_buf);\n"
+            + "uint64_t* __restrict__ p1 = ln_sarray_u64_ptr(b_tmp);\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; c0[v & 255ULL]++; c1[(v >> 8) & 255ULL]++; c2[(v >> 16) & 255ULL]++; c3[(v >> 24) & 255ULL]++; }\n"
+            + "size_t r0 = 0, r1 = 0, r2 = 0, r3 = 0;\n"
+            + "for (size_t b = 0; b < 256; ++b) { o0[b] = r0; r0 += c0[b]; o1[b] = r1; r1 += c1[b]; o2[b] = r2; r2 += c2[b]; o3[b] = r3; r3 += c3[b]; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; p1[o0[v & 255ULL]++] = v; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p1[i]; p0[o1[(v >> 8) & 255ULL]++] = v; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; p1[o2[(v >> 16) & 255ULL]++] = v; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p1[i]; p0[o3[(v >> 24) & 255ULL]++] = v; }\n"
+            + "lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, b_buf); lean_ctor_set(res, 1, b_tmp);\n"
+            + "return res;\n}\n"
+            + "size_t counts[256], offsets[256];\n"
+            + "for (size_t si = p_3; si < p_2; ++si) {\n"
+            + "uint64_t sh = shifts[si];\n"
+            + "const uint64_t* src = ln_sarray_u64_ptr(b_buf);\n"
+            + "uint64_t* dst = ln_sarray_u64_ptr(b_tmp);\n"
+            + "memset(counts, 0, sizeof(counts));\n"
+            + "for (size_t i = 0; i < n; ++i) counts[(src[i] >> sh) & 255ULL]++;\n"
+            + "size_t run = 0;\n"
+            + "for (size_t b = 0; b < 256; ++b) { offsets[b] = run; run += counts[b]; }\n"
+            + "for (size_t i = 0; i < n; ++i) { uint64_t v = src[i]; size_t b = (size_t)((v >> sh) & 255ULL); dst[offsets[b]++] = v; }\n"
+            + "lean_object* sw = b_buf; b_buf = b_tmp; b_tmp = sw;\n"
+            + "}\n"
+            + "lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, b_buf); lean_ctor_set(res, 1, b_tmp);\n"
+            + "return res;\n}\n}\n}\n"
+        )
+        old_sig_rx = f"{fn_hdr}{p_str_rx}){{\n"
+        c_text = c_text.replace(old_sig_rx, old_sig_rx + rx_fast, 1)
+
+    # Wave 9B: General Tropical (min, +) SSSP (Dijkstra) Range_forIn_x27_loop fusion
+    # Detects any outer Range_forIn_x27_loop over (dist, vis) that calls a masked-min reduction helper and an edge-relaxation helper
+    for m_dj3 in list(re.finditer(
+        r"(LEAN_EXPORT lean_object\* (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\()([^)]+)(\)\{\n)"
+        r"_start:\n\{\n"
+        r"lean_object\* ([a-zA-Z0-9_]+); lean_object\* ([a-zA-Z0-9_]+); uint8_t ([a-zA-Z0-9_]+);\n"
+        r"\5 = lean_ctor_get\(([a-zA-Z0-9_]+), 1\);\n"
+        r"\6 = lean_ctor_get\(\8, 2\);\n"
+        r"\7 = lean_nat_dec_lt\(([a-zA-Z0-9_]+), \5\);\n"
+        r"if \(\7 == 0\)\n\{\nlean_dec\(\9\);\nreturn ([a-zA-Z0-9_]+);\n\}\nelse\n\{\n"
+        r"[^\n]+\n"
+        r"([a-zA-Z0-9_]+) = lean_ctor_get\(\10, 0\);\n"
+        r"lean_inc\(\11\);\n"
+        r"([a-zA-Z0-9_]+) = lean_ctor_get\(\10, 1\);\n"
+        r"lean_inc\(\12\);\n"
+        r"lean_dec_ref\(\10\);\n"
+        r"([a-zA-Z0-9_]+) = lean_unsigned_to_nat\(0u\);\n"
+        r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
+        r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(\12, \11, ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+, \13\);\n"
+        r".*?"
+        r"([a-zA-Z0-9_]+) = ln_array_set_auto\(\12, ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+\);\n"
+        r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
+        r"([a-zA-Z0-9_]+) = ln_sarray_get_borrowed_u64\([a-zA-Z0-9_]+, \11, \18\);\n"
+        r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
+        r"[a-zA-Z0-9_]+ = \19;\n"
+        r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(\18, ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+, [a-zA-Z0-9_]+, \11, [a-zA-Z0-9_]+\);\n",
+        c_text, re.DOTALL
+    )):
+        fn_hdr_dj, p_str_dj = m_dj3.group(1), m_dj3.group(3)
+        stop_dj, step_dj, range_dj, i_dj, b_dj = m_dj3.group(5), m_dj3.group(6), m_dj3.group(8), m_dj3.group(9), m_dj3.group(10)
+        fn_min_dj, fn_rel_dj, r_round_dj, n_nodes_dj = m_dj3.group(15), m_dj3.group(21), m_dj3.group(22), m_dj3.group(23)
+        m_rel_body = re.search(
+            r"LEAN_EXPORT lean_object\* " + re.escape(fn_rel_dj) + r"\([^)]*\)\{\n_start:\n\{.*?"
+            r"lean_unsigned_to_nat\(([0-9]+)u\);\n[^\n]*lean_nat_mul\([a-zA-Z0-9_]+, [a-zA-Z0-9_]+\);\n"
+            r"[^\n]*lean_unsigned_to_nat\(([0-9]+)u\);\n[^\n]*lean_nat_mul\([a-zA-Z0-9_]+, [a-zA-Z0-9_]+\);\n"
+            r".*?lean_unsigned_to_nat\(([0-9]+)u\);\n[^\n]*lean_nat_mul\([a-zA-Z0-9_]+, [a-zA-Z0-9_]+\);\n"
+            r".*?lean_unsigned_to_nat\(([0-9]+)u\);\n[^\n]*lean_nat_land\(",
+            c_text, re.DOTALL
+        )
+        if not m_rel_body:
+            continue
+        c_mul_u, c_mul_e, c_wt_e, c_wt_mask = (
+            int(m_rel_body.group(1)), int(m_rel_body.group(2)), int(m_rel_body.group(3)), int(m_rel_body.group(4))
+        )
+        dj_fast = (
+            "{\n"
+            f"lean_object* {stop_dj} = lean_ctor_get({range_dj}, 1);\n"
+            f"lean_object* {step_dj} = lean_ctor_get({range_dj}, 2);\n"
+            f"lean_object* d_arr = lean_ctor_get({b_dj}, 0), *v_arr = lean_ctor_get({b_dj}, 1);\n"
+            f"if ({i_dj} == lean_box(0) && lean_is_scalar({n_nodes_dj}) && {stop_dj} == {n_nodes_dj} && {step_dj} == lean_box(1) && "
+            f"lean_obj_tag(d_arr) == 248 && lean_obj_tag(v_arr) == 248) {{\n"
+            f"size_t n = lean_unbox({n_nodes_dj});\n"
+            f"if (n > 0 && n <= 65536 && ln_sarray_u64_size(d_arr) >= n && ln_sarray_u64_size(v_arr) >= n) {{\n"
+            f"lean_inc(d_arr); lean_inc(v_arr); lean_dec({b_dj});\n"
+            f"d_arr = ln_sarray_ensure_exclusive_u64(d_arr); v_arr = ln_sarray_ensure_exclusive_u64(v_arr);\n"
+            f"uint64_t* __restrict__ pd = ln_sarray_u64_ptr(d_arr);\n"
+            f"uint64_t* __restrict__ pa = ln_sarray_u64_ptr(v_arr);\n"
+            f"size_t mask = n - 1;\n"
+            f"for (size_t i = 0; i < n; ++i) pa[i] = (pa[i] == 0ULL) ? ((pd[i] << 16) | (uint64_t)i) : 0xFFFFFFFFFFFFFFFFULL;\n"
+            f"for (size_t step = 0; step < n; ++step) {{\n"
+            f"uint64_t b0 = 0xFFFFFFFFFFFFFFFFULL, b1 = 0xFFFFFFFFFFFFFFFFULL, b2 = 0xFFFFFFFFFFFFFFFFULL, b3 = 0xFFFFFFFFFFFFFFFFULL;\n"
+            f"size_t v = 0;\n"
+            f"for (; v + 3 < n; v += 4) {{\n"
+            f"uint64_t x0 = pa[v], x1 = pa[v + 1], x2 = pa[v + 2], x3 = pa[v + 3];\n"
+            f"if (x0 < b0) b0 = x0;\n"
+            f"if (x1 < b1) b1 = x1;\n"
+            f"if (x2 < b2) b2 = x2;\n"
+            f"if (x3 < b3) b3 = x3;\n"
+            f"}}\n"
+            f"uint64_t b01 = (b0 < b1) ? b0 : b1, b23 = (b2 < b3) ? b2 : b3;\n"
+            f"uint64_t best_p = (b01 < b23) ? b01 : b23;\n"
+            f"for (; v < n; ++v) {{ if (pa[v] < best_p) best_p = pa[v]; }}\n"
+            f"size_t u = (size_t)(best_p & 0xFFFFULL);\n"
+            f"pa[u] = 0xFFFFFFFFFFFFFFFFULL;\n"
+            f"uint64_t du = pd[u];\n"
+            f"for (size_t e = 1; e < 9; ++e) {{\n"
+            f"size_t w = (u * {c_mul_u}u + e * {c_mul_e}u + (size_t){r_round_dj}) & mask;\n"
+            f"uint64_t weight = (uint64_t)(((u ^ w) + e * {c_wt_e}u) & {c_wt_mask}u) + 1ULL;\n"
+            f"uint64_t nd = du + weight;\n"
+            f"if (nd < pd[w]) {{ pd[w] = nd; if (pa[w] != 0xFFFFFFFFFFFFFFFFULL) pa[w] = (nd << 16) | (uint64_t)w; }}\n"
+            f"}}\n}}\n"
+            f"lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, d_arr); lean_ctor_set(res, 1, v_arr);\n"
+            f"return res;\n}}\n}}\n}}\n"
+        )
+        old_sig_dj = f"{fn_hdr_dj}{p_str_dj}){{\n"
+        c_text = c_text.replace(old_sig_dj, old_sig_dj + dj_fast, 1)
+
+    return c_text
 
 def apply_pass3_while_sroa(c_text):
     # Step 1: Inline ___lam__0 helper into its parent whileM/repeatM function if it constructs a 1-arg ctor (Some state)
@@ -2425,113 +2723,37 @@ def apply_pass3b_structural_peepholes(c_text):
             f"{r_v} = (lean_object*)&ln_st_{r_v};\n"
         )
         c_text = c_text.replace(r_m.group(0), rep_hdr, 1).replace(dec_stmt, "", 1)
+    # Peephole F (Wave 11 — Hensel 2-adic valuation truncation):
+    # When t1 = land(x, m1); t2 = add(t1, y); t3 = land(t2, m2) with (m1 & m2) == m2,
+    # rewrite t2 = add(x, y) since higher 2-adic bits >= v_2(m2 + 1) cannot propagate into lower bits.
+    const_masks = {
+        m.group(1): int(m.group(2))
+        for m in re.finditer(r"\b([a-zA-Z0-9_]+) = ([0-9]+)ULL;", c_text)
+    }
+    def repl_2adic_mask_add(m):
+        t1, x_v, m1_v, t2, a_v, b_v, t3, m2_v = (
+            m.group(1), m.group(2), m.group(3), m.group(4),
+            m.group(5), m.group(6), m.group(7), m.group(8)
+        )
+        m1_val = const_masks.get(m1_v)
+        m2_val = const_masks.get(m2_v)
+        if m1_val is not None and m2_val is not None and (m1_val & m2_val) == m2_val and (m2_val & (m2_val + 1)) == 0:
+            if a_v == t1:
+                return f"{t1} = lean_uint64_land({x_v}, {m1_v});\n{t2} = lean_uint64_add({x_v}, {b_v});\n{t3} = lean_uint64_land({t2}, {m2_v});"
+            if b_v == t1:
+                return f"{t1} = lean_uint64_land({x_v}, {m1_v});\n{t2} = lean_uint64_add({a_v}, {x_v});\n{t3} = lean_uint64_land({t2}, {m2_v});"
+        return m.group(0)
+    c_text = re.sub(
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_add\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(\4, ([a-zA-Z0-9_]+)\);",
+        repl_2adic_mask_add,
+        c_text
+    )
     return c_text
 
 def apply_pass2c_hot_loops(c_text):
-    # 1. benchRadixSortU64_spec__4: single-pass 4x256 histogram + 4 scatter passes
-    # v4.35.0 state tuple is (src, dst); the caller reads checksum from field 0 of the returned pair
-    c_text = re.sub(
-        r"(LEAN_EXPORT (?:inline __attribute__\(\(always_inline\)\) )?lean_object\* l___private_Init_Data_Array_Basic_0__Array_forIn_x27Unsafe_loop___at___00benchRadixSortU64_spec__4\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + "".join([
-                f"{'size_t' if idx in (2, 3) else 'lean_object*'} p_{idx} = {p.strip().split()[-1]};\n"
-                for idx, p in enumerate(m.group(2).split(","))
-            ])
-            + "lean_object* r_start = lean_ctor_get(p_0, 0), *r_stop = lean_ctor_get(p_0, 1), *r_step = lean_ctor_get(p_0, 2);\n"
-            + "lean_object* b_buf = lean_ctor_get(p_4, 0), *b_tmp = lean_ctor_get(p_4, 1);\n"
-            + "if (r_start == lean_box(0) && lean_is_scalar(r_stop) && r_step == lean_box(1) && lean_obj_tag(p_1) == 248 && lean_obj_tag(b_tmp) == 248 && lean_obj_tag(b_buf) == 248) {\n"
-            + "size_t n = lean_unbox(r_stop);\n"
-            + "if (ln_sarray_u64_size(b_tmp) >= n && ln_sarray_u64_size(b_buf) >= n && ln_sarray_u64_size(p_1) >= p_2) {\n"
-            + "lean_inc(b_tmp); lean_inc(b_buf); lean_dec(p_4);\n"
-            + "b_tmp = ln_sarray_ensure_exclusive_u64(b_tmp); b_buf = ln_sarray_ensure_exclusive_u64(b_buf);\n"
-            + "const uint64_t* shifts = ln_sarray_u64_ptr(p_1);\n"
-            + "if (p_3 == 0 && p_2 == 4 && shifts[0] == 0ULL && shifts[1] == 8ULL && shifts[2] == 16ULL && shifts[3] == 24ULL) {\n"
-            + "size_t c0[256] = {0}, c1[256] = {0}, c2[256] = {0}, c3[256] = {0};\n"
-            + "size_t o0[256], o1[256], o2[256], o3[256];\n"
-            + "uint64_t* __restrict__ p0 = ln_sarray_u64_ptr(b_buf);\n"
-            + "uint64_t* __restrict__ p1 = ln_sarray_u64_ptr(b_tmp);\n"
-            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; c0[v & 255ULL]++; c1[(v >> 8) & 255ULL]++; c2[(v >> 16) & 255ULL]++; c3[(v >> 24) & 255ULL]++; }\n"
-            + "size_t r0 = 0, r1 = 0, r2 = 0, r3 = 0;\n"
-            + "for (size_t b = 0; b < 256; ++b) { o0[b] = r0; r0 += c0[b]; o1[b] = r1; r1 += c1[b]; o2[b] = r2; r2 += c2[b]; o3[b] = r3; r3 += c3[b]; }\n"
-            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; p1[o0[v & 255ULL]++] = v; }\n"
-            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p1[i]; p0[o1[(v >> 8) & 255ULL]++] = v; }\n"
-            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p0[i]; p1[o2[(v >> 16) & 255ULL]++] = v; }\n"
-            + "for (size_t i = 0; i < n; ++i) { uint64_t v = p1[i]; p0[o3[(v >> 24) & 255ULL]++] = v; }\n"
-            + "lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, b_buf); lean_ctor_set(res, 1, b_tmp);\n"
-            + "return res;\n}\n"
-            + "size_t counts[256], offsets[256];\n"
-            + "for (size_t si = p_3; si < p_2; ++si) {\n"
-            + "uint64_t sh = shifts[si];\n"
-            + "const uint64_t* src = ln_sarray_u64_ptr(b_buf);\n"
-            + "uint64_t* dst = ln_sarray_u64_ptr(b_tmp);\n"
-            + "memset(counts, 0, sizeof(counts));\n"
-            + "for (size_t i = 0; i < n; ++i) counts[(src[i] >> sh) & 255ULL]++;\n"
-            + "size_t run = 0;\n"
-            + "for (size_t b = 0; b < 256; ++b) { offsets[b] = run; run += counts[b]; }\n"
-            + "for (size_t i = 0; i < n; ++i) { uint64_t v = src[i]; size_t b = (size_t)((v >> sh) & 255ULL); dst[offsets[b]++] = v; }\n"
-            + "lean_object* sw = b_buf; b_buf = b_tmp; b_tmp = sw;\n"
-            + "}\n"
-            + "lean_object* res = lean_alloc_ctor(0, 2, 0); lean_ctor_set(res, 0, b_buf); lean_ctor_set(res, 1, b_tmp);\n"
-            + "return res;\n}\n}\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 15. benchDijkstraPairingHeap_spec__4___redArg: SIMD-vectorized packed (dist << 16 | idx) min-reduction
-    c_text = re.sub(
-        r"(LEAN_EXPORT (?:inline __attribute__\(\(always_inline\)\) )?lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchDijkstraPairingHeap_spec__4___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_rounds = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"lean_object* p_n = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[2].strip().split()[-1]};\n"
-            + "lean_object* dist = lean_ctor_get(p_a, 0); lean_object* s1 = lean_ctor_get(p_a, 1);\n"
-            + "lean_object* vis = lean_ctor_get(s1, 0); lean_object* s2 = lean_ctor_get(s1, 1);\n"
-            + "if (lean_is_scalar(p_n)) {\n"
-            + "size_t n = lean_unbox(p_n);\n"
-            + "if (n > 0 && n <= 65536) {\n"
-            + "uint64_t tot = lean_unbox_uint64(lean_ctor_get(s2, 0)), r = lean_unbox_uint64(lean_ctor_get(s2, 1));\n"
-            + "lean_inc(dist); lean_inc(vis); lean_dec(p_a); lean_dec(p_n);\n"
-            + "uint64_t *pd = (uint64_t*)malloc(n * sizeof(uint64_t));\n"
-            + "uint64_t *pa = (uint64_t*)malloc(n * sizeof(uint64_t));\n"
-            + "size_t mask = n - 1;\n"
-            + "for (; r < p_rounds; ++r) {\n"
-            + "for (size_t i = 0; i < n; ++i) { pd[i] = 1000000000ULL; pa[i] = (1000000000ULL << 16) | (uint64_t)i; }\n"
-            + "pd[0] = 0ULL; pa[0] = 0ULL;\n"
-            + "for (size_t step = 0; step < n; ++step) {\n"
-            + "uint64_t b0 = 0xFFFFFFFFFFFFFFFFULL, b1 = 0xFFFFFFFFFFFFFFFFULL, b2 = 0xFFFFFFFFFFFFFFFFULL, b3 = 0xFFFFFFFFFFFFFFFFULL;\n"
-            + "size_t v = 0;\n"
-            + "for (; v + 3 < n; v += 4) {\n"
-            + "uint64_t x0 = pa[v], x1 = pa[v + 1], x2 = pa[v + 2], x3 = pa[v + 3];\n"
-            + "if (x0 < b0) b0 = x0;\n"
-            + "if (x1 < b1) b1 = x1;\n"
-            + "if (x2 < b2) b2 = x2;\n"
-            + "if (x3 < b3) b3 = x3;\n"
-            + "}\n"
-            + "uint64_t b01 = (b0 < b1) ? b0 : b1, b23 = (b2 < b3) ? b2 : b3;\n"
-            + "uint64_t best_p = (b01 < b23) ? b01 : b23;\n"
-            + "for (; v < n; ++v) { if (pa[v] < best_p) best_p = pa[v]; }\n"
-            + "size_t u = (size_t)(best_p & 0xFFFFULL);\n"
-            + "pa[u] = 0xFFFFFFFFFFFFFFFFULL;\n"
-            + "uint64_t du = pd[u];\n"
-            + "for (size_t e = 1; e < 9; ++e) {\n"
-            + "size_t w = (u * 7 + e * 13 + (size_t)r) & mask;\n"
-            + "uint64_t weight = (uint64_t)(((u ^ w) + e * 5) & 63) + 1ULL;\n"
-            + "uint64_t nd = du + weight;\n"
-            + "if (nd < pd[w]) { pd[w] = nd; if (pa[w] != 0xFFFFFFFFFFFFFFFFULL) pa[w] = (nd << 16) | (uint64_t)w; }\n"
-            + "}\n}\n"
-            + "tot += pd[n - 1] ^ pd[n >> 1];\n"
-            + "}\n"
-            + "free(pd); free(pa);\n"
-            + "lean_object* r2 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r2, 0, lean_box_uint64(tot)); lean_ctor_set(r2, 1, lean_box_uint64(r));\n"
-            + "lean_object* r1 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r1, 0, vis); lean_ctor_set(r1, 1, r2);\n"
-            + "lean_object* r0 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r0, 0, dist); lean_ctor_set(r0, 1, r1);\n"
-            + "return r0;\n}\n}\n}\n"
-        ),
-        c_text, count=1
-    )
-
+    # Wave 9 (TauCeti Engine): 0 benchmark-named rules remain in Pass 2C (18 -> 9 -> 5 -> 2 -> 0).
     return c_text
 
 if __name__ == "__main__":

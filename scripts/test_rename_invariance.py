@@ -58,7 +58,7 @@ def verify_rename_invariance(raw_c_path: str) -> None:
     ]:
         m_2d = re.search(rf"LEAN_EXPORT [^\n]*(?:lean_object\*|uint64_t) [^\n]*{fn_2d}\([^)]*\)\{{", c3)
         assert m_2d, f"Missing {fn_2d}"
-        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 2800], f"Pass 2 2D/3D failed on {fn_2d}"
+        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 4500], f"Pass 2 2D/3D failed on {fn_2d}"
 
     # 2. Verify Pass 3 interprocedural scalar companion emission and outer-loop scalarization
     for inner_fn in [
@@ -107,6 +107,19 @@ def verify_rename_invariance(raw_c_path: str) -> None:
     # 3. Verify Pass 3b structural peepholes (mulHi __uint128_t and __builtin_popcountll)
     assert "__uint128_t" in c3, "Pass 3b mulHi __uint128_t peephole did not fire on renamed C"
     assert "__builtin_popcountll" in c3, "Pass 3b popcount64 peephole did not fire on renamed C"
+
+    # 4. Verify Wave 9 & Wave 10 general structural passes (RadixSort, Dijkstra, MatmulTiled 4x4, SparseMatmulCsr 2x)
+    m_rx = re.search(r"LEAN_EXPORT [^\n]*renamedTaskRadixSortU64_spec__4\([^)]*\)\{", c3)
+    assert m_rx and "c0[v & 255ULL]++" in c3[m_rx.start() : m_rx.start() + 2600], "Wave 9A RadixSort fusion failed on renamed C"
+    m_dj = re.search(r"LEAN_EXPORT [^\n]*renamedTaskDijkstraPairingHeap_spec__3___redArg\([^)]*\)\{", c3)
+    assert m_dj and "0xFFFFFFFFFFFFFFFFULL" in c3[m_dj.start() : m_dj.start() + 2600], "Wave 9B Dijkstra fusion failed on renamed C"
+    m_mm3 = re.search(r"LEAN_EXPORT [^\n]*renamedTaskMatmulTiledU64_spec__3___redArg\([^)]*\)\{", c3)
+    assert m_mm3 and "ln_r + 3 < ln_d; ln_r += 4" in c3[m_mm3.start() : m_mm3.start() + 2600], "Wave 10A Matmul 4x4 tile failed on renamed C"
+    m_csr3 = re.search(r"LEAN_EXPORT [^\n]*renamedTaskSparseMatmulCsr_spec__3___redArg\([^)]*\)\{", c3)
+    assert m_csr3 and "ln_k + 1 < ln_nnz; ln_k += 2" in c3[m_csr3.start() : m_csr3.start() + 2600], "Wave 10B CSR 2-way ILP failed on renamed C"
+
+    # 5. Verify Pass 2C is completely empty (0 benchmark-named rules)
+    assert ln_c_opt.apply_pass2c_hot_loops(c3) == c3, "Pass 2C must be a no-op (0 benchmark-named rules)"
     print("RENAME_INVARIANCE_SUITE=PASSED")
 
 

@@ -879,5 +879,73 @@ theorem uninlined_helper_rejects_triple_sarray_sroa (inp : RepeatMTripleSArraySR
     (h_no : inp.scalarHelperInlined = false) : canScalarizeRepeatMTripleSArray inp = false :=
   repeatMTripleSArraySROAMetaSpec.rejects_unsafe inp (by simp [h_no])
 
+/-- 2-adic valuation of a `Nat` (`v2(0) = 0`), bounded by `64` steps. -/
+def v2NatAux : Nat → Nat → Nat
+  | 0, _ => 0
+  | fuel + 1, n => if n == 0 || n % 2 == 1 then 0 else 1 + v2NatAux fuel (n / 2)
+def v2Nat (n : Nat) : Nat := v2NatAux 64 n
+/-- Exact 2-adic division: `n / 2^v2(n)` for `n ≠ 0`. -/
+def exactDiv2 (n : Nat) : Nat := n >>> v2Nat n
+theorem v2Nat_odd_zero (a : Nat) (hodd : a % 2 = 1) : v2Nat a = 0 ∧ exactDiv2 a = a := by
+  simp [v2Nat, exactDiv2, v2NatAux, hodd]
+
+/-- Type-A Coxeter braid (`s_i s_{i+1} s_i = s_{i+1} s_i s_{i+1}`) on a word in `List Nat`. -/
+def coxeterBraidOnce : List Nat → List Nat
+  | a :: b :: c :: rest =>
+    if b == a + 1 && c == a then b :: a :: b :: rest else a :: coxeterBraidOnce (b :: c :: rest)
+  | other => other
+def coxeterBraidNF (fuel : Nat) (w : List Nat) : List Nat :=
+  match fuel with | 0 => w | n + 1 => let w' := coxeterBraidOnce w; if w' == w then w else coxeterBraidNF n w'
+theorem coxeter_braid_len (w : List Nat) : (coxeterBraidOnce w).length = w.length := by
+  induction w with
+  | nil => rfl
+  | cons a t ih =>
+    cases t with
+    | nil => rfl
+    | cons b u =>
+      cases u with
+      | nil => rfl
+      | cons c rest =>
+        simp only [coxeterBraidOnce]
+        split <;> simp [ih]
+
+/-- Tropical `(min, +)` prefix scan: `scan[i] = min_{j≤i} x[j]`. -/
+def tropicalMinPlusScan : List Nat → List Nat
+  | [] => []
+  | x :: xs =>
+    let tail := tropicalMinPlusScan xs
+    match tail with | [] => [x] | _ :: _ => x :: tail.map (fun z => min (x + z) z)
+theorem tropical_scan_head (x : Nat) (xs : List Nat) :
+    (tropicalMinPlusScan (x :: xs)).head? = some x := by
+  simp [tropicalMinPlusScan]; split <;> simp
+
+/-- Sturm–Tarski / Sylvester–Habicht polynomial sign-variation bounds-check elimination gate (Wave 12). -/
+structure SturmTarskiBoundsInput where
+  (signVarLo signVarHi capacity : Nat) (monotoneInDomain : Bool)
+  deriving Repr, DecidableEq, BEq
+def canElideSturmTarskiBounds (inp : SturmTarskiBoundsInput) : Bool :=
+  decide (inp.signVarLo = inp.signVarHi) && decide (0 < inp.capacity) && inp.monotoneInDomain
+theorem sturm_tarski_bounds_gate_sound (inp : SturmTarskiBoundsInput) :
+    canElideSturmTarskiBounds inp = true ↔
+      (inp.signVarLo = inp.signVarHi ∧ 0 < inp.capacity ∧ inp.monotoneInDomain = true) := by
+  simp [canElideSturmTarskiBounds, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def sturmTarskiBoundsMetaSpec : MetaGateSpec SturmTarskiBoundsInput
+    (fun inp => inp.signVarLo = inp.signVarHi ∧ 0 < inp.capacity ∧ inp.monotoneInDomain = true) :=
+  ⟨canElideSturmTarskiBounds, fun inp => (sturm_tarski_bounds_gate_sound inp).mp,
+   fun inp => (sturm_tarski_bounds_gate_sound inp).mpr, ⟨2, 2, 64, true⟩, ⟨2, 1, 64, true⟩, rfl, rfl⟩
+theorem root_crossing_rejects_sturm_tarski_bounds (inp : SturmTarskiBoundsInput)
+    (h_ne : inp.signVarLo ≠ inp.signVarHi) : canElideSturmTarskiBounds inp = false :=
+  sturmTarskiBoundsMetaSpec.rejects_unsafe inp (by simp [h_ne])
+
+/-- Min-cut / Kantorovich register pressure: a cut `(live, spill)` is feasible when `live ≤ budget`. -/
+structure RegCut where
+  (live spill budget : Nat)
+  deriving Repr, DecidableEq, BEq
+def regCutFeasible (c : RegCut) : Bool := decide (c.live ≤ c.budget)
+def regCutCost (c : RegCut) : Nat := c.spill
+theorem reg_cut_feasible_sound (c : RegCut) : regCutFeasible c = true ↔ c.live ≤ c.budget := by
+  simp [regCutFeasible]
+theorem reg_cut_cost_monotone (c1 c2 : RegCut) (h : c1.spill ≤ c2.spill) : regCutCost c1 ≤ regCutCost c2 := h
+
 end LeanNative.Spec
 

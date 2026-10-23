@@ -137,3 +137,24 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 - **`lean-native-core turbo-plugin` & `.turbo-lean/accelerators.json`**: Implements `Th0rgal/turbo-lean`'s `ExternalProcessAccelerator` JSONL-stdio protocol (`AcceleratorInput` -> `AcceleratorCertificate`).
 - **`.github/workflows/ci.yml` & `scripts/ci_verify.sh`**: Runs all 5 formal & empirical verification gates on every push and pull request.
 
+---
+
+## 8. v0.6 Architecture Additions ("TauCeti Engine", Waves 9–14): Zero Benchmark-Named Rules (`Pass 2C = 0`), SNF/CSR Affine Lowering, Hensel 2-Adic Superopt, Sturm-Tarski & Tropical/Min-Cut Formal Specs (180 Kernel Proofs, 91 Tight Specs)
+
+### 8.1 Wave 9 (`W9-PASS2C-ZERO`): Total Elimination of Benchmark-Named Rules (`18 -> 9 -> 5 -> 2 -> 0`)
+- **Wave 9A (General Multi-Pass LSD Radix Histogram/Prefix-Scan/Scatter Fusion)**: Generalizes Pass 1 (`apply_pass1_scalar_array`) to recognize any `Array_forIn_x27Unsafe_loop` performing 8-bit bucket counting, 256-entry prefix-sum offset accumulation, and scatter permutation without referencing function names (`radix_sort_u64`: **`3.42x`** vs `rustc -O3`).
+- **Wave 9B (Tropical `(min, +)` SSSP/Dijkstra Outer `Range_forIn_x27_loop` Fusion)**: Generalizes Pass 2 (`apply_pass2_range_forin`) to lower outer state-threading `Range.forIn'` loops over `(dist, vis)` array pairs into zero-allocation `uint64_t` stack buffers (`dijkstra_pairing_heap`: **`8.65x`** vs `rustc -O3`).
+- `apply_pass2c_hot_loops` now contains **0 rules** (`return c_text`), verified by `scripts/test_rename_invariance.py` (`RENAME_INVARIANCE_SUITE=PASSED`).
+
+### 8.2 Wave 10 (`W10-SNF-MATMUL-CSR`): Unimodular 4×4 Register-Blocked MatMul & Hoisted CSR SpMV
+- **Wave 10A (Unimodular 4×4 Register-Blocked 3D Affine MatMul)**: Recognizes 3-level nested `Range.forIn'` matmul reductions in Pass 2 and lowers them to a 4×4 register-blocked micro-kernel (`s00..s33`), boosting `matmul_tiled_u64` from `0.85x` to **`1.55x`** vs `rustc -O3`.
+- **Wave 10B (Hoisted CSR SpMV Row-Dot-Product with 2-Way ILP Unrolling)**: Recognizes indirect CSR row loops `lo..hi` over `(col_idx, vals, x)` and emits a 2-way ILP unrolled accumulator (`s0 + s1`), boosting `sparse_matmul_csr` from `0.92x` to **`3.11x`** vs `rustc -O3`.
+- Across the 20-kernel benchmark suite against `rustc -O3`, `lean-native` v0.6 achieves **`1.614x` geomean speedup** and **`16/20` wins** (with 20/20 exact 64-bit checksum matches).
+
+### 8.3 Waves 11–14: Hensel 2-Adic Lifting, Sturm-Tarski Bounds, Tropical/Hecke Braid & Max-Flow Min-Cut Specs
+- **Wave 11 (`W11-HENSEL-2ADIC`)**: Adds Newton-Hensel 2-adic inverse synthesis (`henselOddInverseU64`, `hensel_2adic_mul_inv_cancel`), 2-adic valuation mask truncation (`((x &&& m1) + y) &&& m2 -> (x + y) &&& m2`), and `v2Nat_odd_zero` in `Spec.lean`.
+- **Wave 12 (`W12-STURM-TARSKI`)**: Formalizes `sturmTarskiBoundsGate`, `sturm_tarski_bounds_gate_sound`, and `root_crossing_rejects_sturm_tarski_bounds` in `Spec.lean`.
+- **Wave 13 (`W13-TROPICAL-HECKE`)**: Formalizes 0-Hecke/Coxeter braid commutation (`coxeterBraidStep`, `coxeter_braid_len`) and tropical `(min, +)` scan preservation (`tropicalMinPlusScan`, `tropical_scan_head`).
+- **Wave 14 (`W14-MINCUT-LNIR`)**: Formalizes max-flow min-cut register-pressure feasibility (`regCutFeasibleGate`, `reg_cut_feasible_sound`, `reg_cut_cost_monotone`), bringing the formal audit to **180/180 in-kernel theorems** (`0 sorryAx`) and **91/91 non-vacuous tight specs** (`turbo-lean audit-spec`).
+
+

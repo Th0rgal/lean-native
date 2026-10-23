@@ -77,51 +77,13 @@ structure HardwareCostProfile where
 namespace HardwareCostProfile
 
 /-- Built-in default hardware cost profile for a `SuperoptTarget`. -/
-def forTarget (t : SuperoptTarget) : HardwareCostProfile :=
-  match t with
-  | .x86_64 => {
-      profileId := "x86_64_skylake_avx2"
-      target := .x86_64
-      llvmTargetCpu := "x86-64-v3"
-      mulCost := 4
-      divModCost := 24
-      fmaCost := 3
-      mulChecked256Cost := 4
-    }
-  | .arm64 => {
-      profileId := "arm64_grace_neoverse_v2"
-      target := .arm64
-      llvmTargetCpu := "neoverse-v2"
-      mulCost := 4
-      divModCost := 24
-      fmaCost := 2
-      mulChecked256Cost := 4
-    }
-  | .cuda_ptx => {
-      profileId := "cuda_blackwell_gb10_sm121"
-      target := .cuda_ptx
-      llvmTargetCpu := "neoverse-v2"
-      smArch := "sm_90"
-      mulCost := 5
-      divModCost := 36
-      fmaCost := 2
-      mulChecked256Cost := 5
-      minGpuElements := 65536
-      gpuBlockThreads := 256
-      matmulTileDim := 16
-    }
-  | .apple_metal => {
-      profileId := "apple_silicon_m3_metal"
-      target := .apple_metal
-      llvmTargetCpu := "apple-m3"
-      mulCost := 5
-      divModCost := 36
-      fmaCost := 2
-      mulChecked256Cost := 5
-      minGpuElements := 32768
-      gpuBlockThreads := 256
-      matmulTileDim := 16
-    }
+def forTarget : SuperoptTarget → HardwareCostProfile
+  | .x86_64 => { profileId := "x86_64_skylake_avx2", target := .x86_64, llvmTargetCpu := "x86-64-v3" }
+  | .arm64 => { profileId := "arm64_grace_neoverse_v2", target := .arm64, llvmTargetCpu := "neoverse-v2", fmaCost := 2 }
+  | .cuda_ptx => { profileId := "cuda_blackwell_gb10_sm121", target := .cuda_ptx, llvmTargetCpu := "neoverse-v2",
+                   smArch := "sm_90", mulCost := 5, divModCost := 36, fmaCost := 2, mulChecked256Cost := 5 }
+  | .apple_metal => { profileId := "apple_silicon_m3_metal", target := .apple_metal, llvmTargetCpu := "apple-m3",
+                      mulCost := 5, divModCost := 36, fmaCost := 2, mulChecked256Cost := 5, minGpuElements := 32768 }
 
 private def extractJsonAfterColon (raw : String) (key : String) : Option String :=
   match raw.splitOn ("\"" ++ key ++ "\"") with
@@ -248,10 +210,15 @@ def symExprToScalarExpr? : SymExpr → Option ScalarExpr
     and return its base-2 shift exponent `k ∈ [0, 63]`. -/
 def powerOfTwoShift? (d : UInt64) : Option UInt64 :=
   if d == 0 || (d &&& (d - 1)) != 0 then none
-  else
-    (List.range 64).findSome? (fun k =>
-      let ku := k.toUInt64
-      if (1 : UInt64) <<< ku == d then some ku else none)
+  else (List.range 64).findSome? (fun k => let ku := k.toUInt64; if (1 : UInt64) <<< ku == d then some ku else none)
+
+/-- Hensel 2-adic Newton inverse lifting over `Z / 2^64 Z`: for odd `d`, returns `inv` with `d * inv == 1`. -/
+def henselOddInverseU64 (d : UInt64) : UInt64 :=
+  let x0 := d * (2 - d * d)
+  let x1 := x0 * (2 - d * x0)
+  let x2 := x1 * (2 - d * x1)
+  let x3 := x2 * (2 - d * x2)
+  x3 * (2 - d * x3)
 
 /-- Deduplicate a list of `ScalarExpr` candidates while preserving order. -/
 def dedupScalarExprs (es : List ScalarExpr) : List ScalarExpr :=
@@ -439,6 +406,14 @@ def superoptSynthRules : List SynthRule :=
           if (x == u && y == v) || (x == v && y == u) then [ScalarExpr.binOp .bitOr x y]
           else []
         | _ => [] }
+  , { name := "hensel_2adic_mul_inv_cancel"
+      apply := fun
+        | .binOp .mul (.binOp .mul x (.constU64 c1)) (.constU64 c2) =>
+          let prod := c1 * c2
+          if prod == 1 then [x] else [ScalarExpr.binOp .mul x (.constU64 prod)]
+        | .binOp .bitAnd (.binOp .add (.binOp .bitAnd x (.constU64 m1)) y) (.constU64 m2) =>
+          if (m1 &&& m2) == m2 then [ScalarExpr.binOp .bitAnd (.binOp .add x y) (.constU64 m2)] else []
+        | _ => [] }
   ]
 
 /-- Apply all declarative `superoptSynthRules` to a top-level `ScalarExpr`. -/
@@ -576,7 +551,14 @@ def normSymSuperoptStep (s : SymExpr) : SymExpr :=
   | .binOp .mul x (.constU64 d) =>
     match powerOfTwoShift? d with
     | some k => normSymExpr (.binOp .shl x (.constU64 k))
-    | none => s0
+    | none =>
+      match x with
+      | .binOp .mul inner (.constU64 c1) =>
+        let prod := c1 * d
+        if prod == 1 then inner else normSymExpr (.binOp .mul inner (.constU64 prod))
+      | _ => s0
+  | .binOp .bitAnd (.binOp .add (.binOp .bitAnd x (.constU64 m1)) y) (.constU64 m2) =>
+    if (m1 &&& m2) == m2 then normSymExpr (.binOp .bitAnd (.binOp .add x y) (.constU64 m2)) else s0
   | _ => s0
 
 /-- Recursive bottom-up superoptimizer canonicalizer on `SymExpr`. -/
@@ -850,31 +832,11 @@ def superoptModuleWithProfile (p : HardwareCostProfile) (m : LNIRModule) : LNIRM
 private abbrev escapeJsonSO := LeanNative.IR.jsonEscape
 
 def SuperoptRewriteRecord.toJson (r : SuperoptRewriteRecord) : String :=
-  "{" ++
-  s!"\"declName\":\"{escapeJsonSO r.declName}\"," ++
-  s!"\"target\":\"{escapeJsonSO r.target}\"," ++
-  s!"\"originalExpr\":\"{escapeJsonSO r.originalExpr}\"," ++
-  s!"\"synthesizedExpr\":\"{escapeJsonSO r.synthesizedExpr}\"," ++
-  s!"\"costBefore\":{r.costBefore}," ++
-  s!"\"costAfter\":{r.costAfter}," ++
-  s!"\"fastCheckPassed\":{if r.fastCheckPassed then "true" else "false"}," ++
-  s!"\"symbolicTVPassed\":{if r.symbolicTVPassed then "true" else "false"}," ++
-  s!"\"kernelProofVerified\":{if r.kernelProofVerified then "true" else "false"}," ++
-  s!"\"theoremRef\":\"{escapeJsonSO r.theoremRef}\"" ++
-  "}"
+  s!"\{\"declName\":\"{escapeJsonSO r.declName}\",\"target\":\"{escapeJsonSO r.target}\",\"originalExpr\":\"{escapeJsonSO r.originalExpr}\",\"synthesizedExpr\":\"{escapeJsonSO r.synthesizedExpr}\",\"costBefore\":{r.costBefore},\"costAfter\":{r.costAfter},\"fastCheckPassed\":{r.fastCheckPassed},\"symbolicTVPassed\":{r.symbolicTVPassed},\"kernelProofVerified\":{r.kernelProofVerified},\"theoremRef\":\"{escapeJsonSO r.theoremRef}\"}"
 
 def SuperoptReport.toJson (r : SuperoptReport) : String :=
   let recsJson := String.intercalate "," (r.records.map SuperoptRewriteRecord.toJson)
-  "{" ++
-  s!"\"schemaVersion\":\"{escapeJsonSO r.schemaVersion}\"," ++
-  s!"\"moduleName\":\"{escapeJsonSO r.moduleName}\"," ++
-  s!"\"target\":\"{escapeJsonSO r.target}\"," ++
-  s!"\"totalDecls\":{r.totalDecls}," ++
-  s!"\"rewritesApplied\":{r.rewritesApplied}," ++
-  s!"\"totalCostBefore\":{r.totalCostBefore}," ++
-  s!"\"totalCostAfter\":{r.totalCostAfter}," ++
-  s!"\"records\":[{recsJson}]" ++
-  "}"
+  s!"\{\"schemaVersion\":\"{escapeJsonSO r.schemaVersion}\",\"moduleName\":\"{escapeJsonSO r.moduleName}\",\"target\":\"{escapeJsonSO r.target}\",\"totalDecls\":{r.totalDecls},\"rewritesApplied\":{r.rewritesApplied},\"totalCostBefore\":{r.totalCostBefore},\"totalCostAfter\":{r.totalCostAfter},\"records\":[{recsJson}]}"
 
 def SuperoptReport.formatSummary (r : SuperoptReport) : String :=
   let header :=

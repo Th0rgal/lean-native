@@ -7,46 +7,21 @@ open LeanNative.IR
 
 /-!
 # Capability-Probed Adapter for `Th0rgal/turbo-lean` (`LeanNative.TurboLean.Adapter`)
-
-Provides a zero-hard-dependency, zero-Python, capability-probed integration layer between
-`lean-native` and `Th0rgal/turbo-lean`:
-1. **Pure Lean 4 RFC-Compliant BLAKE3 Implementation**: Computes bit-for-bit identical 256-bit
-   BLAKE3 digests matching `blake3::Hasher` in `Th0rgal/turbo-lean` in `< 0.05 ms` with zero
-   external dependencies and zero Python subprocesses.
-2. **Capability Probing (`TurboLeanConfig`)**:
-   - Honors `LEAN_NATIVE_NO_TURBO=1` to force self-contained standalone execution.
-   - Probes `LEAN_NATIVE_TURBO_BIN` or `turbo-lean` in `PATH`.
-   - Probes `LEAN_NATIVE_TURBO_URL` or `~/.cache/turbo-lean/zygote_daemon.json`.
-3. **Shared Schemas & Domain Separators**:
-   - `TheoremShardSpec` (`"theorem-shard-v1:"`)
-   - `ConstantAuditReport` (exact JSON serialization matching `TurboLean/Inspector.lean`)
-   - `VerificationReceipt` (`"turbo-lean-verification-receipt-v1"`)
-4. **Native Zero-Python Operations**:
-   - `computeBlake3DomainHash`
-   - `checkShardWithFallback`
-   - `fastCheckRewrite` / `fastCheckCounterexample` (native 64-bit & 256-bit boundary + SplitMix64 search)
-   - `emitVerificationReceipt` / `verifyReceiptFile` / `emitAndVerifyReceipt`
+Zero-hard-dependency, zero-Python integration layer: RFC-compliant BLAKE3, `TurboLeanConfig` probing,
+shared schemas (`TheoremShardSpec`, `ConstantAuditReport`, `VerificationReceipt`), and fast counterexample search.
 -/
 
-/-- Domain separator for content-addressed theorem shards (`Th0rgal/turbo-lean`). -/
 def theoremShardDomain : String := "theorem-shard-v1:"
-
-/-- Domain separator for cryptographic verification receipts (`Th0rgal/turbo-lean`). -/
 def verificationReceiptDomain : String := "turbo-lean-verification-receipt-v1"
 
 /-! ## 1. Self-Contained RFC-Compliant Pure Lean 4 BLAKE3 Implementation -/
 
 namespace Blake3
 
-def IV : Array UInt32 := #[
-  0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-  0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
-]
+def IV : Array UInt32 := #[0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19]
 abbrev iv : Array UInt32 := IV
-
 def MSG_PERMUTATION : Array Nat := #[2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]
 abbrev msgPermutation : Array Nat := MSG_PERMUTATION
-
 def CHUNK_START : UInt32 := 1
 def CHUNK_END   : UInt32 := 2
 def PARENT      : UInt32 := 4
@@ -59,14 +34,10 @@ abbrev flagRoot       : UInt32 := ROOT
 @[inline] def rotr32 (x : UInt32) (n : UInt32) : UInt32 := (x >>> n) ||| (x <<< (32 - n))
 
 @[inline] def g (state : Array UInt32) (a b c d : Nat) (mx my : UInt32) : Array UInt32 :=
-  let va := state[a]! + state[b]! + mx
-  let vd := rotr32 (state[d]! ^^^ va) 16
-  let vc := state[c]! + vd
-  let vb := rotr32 (state[b]! ^^^ vc) 12
-  let va := va + vb + my
-  let vd := rotr32 (vd ^^^ va) 8
-  let vc := vc + vd
-  let vb := rotr32 (vb ^^^ vc) 7
+  let va := state[a]! + state[b]! + mx; let vd := rotr32 (state[d]! ^^^ va) 16
+  let vc := state[c]! + vd; let vb := rotr32 (state[b]! ^^^ vc) 12
+  let va := va + vb + my; let vd := rotr32 (vd ^^^ va) 8
+  let vc := vc + vd; let vb := rotr32 (vb ^^^ vc) 7
   (((state.set! a va).set! b vb).set! c vc).set! d vd
 
 @[inline] def roundFn (state : Array UInt32) (m : Array UInt32) : Array UInt32 :=
@@ -75,66 +46,42 @@ abbrev flagRoot       : UInt32 := ROOT
 
 @[inline] def permute (m : Array UInt32) : Array UInt32 := MSG_PERMUTATION.map (fun idx => m[idx]!)
 
-def compress (cv : Array UInt32) (blockWords : Array UInt32) (counter : UInt64)
-    (blockLen : UInt32) (flags : UInt32) : Array UInt32 :=
-  let st0 : Array UInt32 := #[
-    cv[0]!, cv[1]!, cv[2]!, cv[3]!, cv[4]!, cv[5]!, cv[6]!, cv[7]!,
-    IV[0]!, IV[1]!, IV[2]!, IV[3]!, counter.toUInt32, (counter >>> 32).toUInt32, blockLen, flags
-  ]
-  let (st, _) := (List.range 7).foldl (fun (st, m) r =>
-    (roundFn st m, if r < 6 then permute m else m)
-  ) (st0, blockWords)
-  (List.range 8).foldl (fun acc i =>
-    (acc.set! i (acc[i]! ^^^ acc[i + 8]!)).set! (i + 8) (acc[i + 8]! ^^^ cv[i]!)
-  ) st
+def compress (cv : Array UInt32) (blockWords : Array UInt32) (counter : UInt64) (blockLen : UInt32) (flags : UInt32) : Array UInt32 :=
+  let st0 : Array UInt32 := #[cv[0]!, cv[1]!, cv[2]!, cv[3]!, cv[4]!, cv[5]!, cv[6]!, cv[7]!,
+    IV[0]!, IV[1]!, IV[2]!, IV[3]!, counter.toUInt32, (counter >>> 32).toUInt32, blockLen, flags]
+  let (st, _) := (List.range 7).foldl (fun (st, m) r => (roundFn st m, if r < 6 then permute m else m)) (st0, blockWords)
+  (List.range 8).foldl (fun acc i => (acc.set! i (acc[i]! ^^^ acc[i + 8]!)).set! (i + 8) (acc[i + 8]! ^^^ cv[i]!)) st
 
 def blockBytesToWords (bytes : ByteArray) (offset : Nat) (len : Nat) : Array UInt32 :=
-  let getByte (k : Nat) : UInt32 :=
-    if k < len && offset + k < bytes.size then (bytes.get! (offset + k)).toUInt32 else 0
+  let getByte (k : Nat) : UInt32 := if k < len && offset + k < bytes.size then (bytes.get! (offset + k)).toUInt32 else 0
   (Array.range 16).map (fun w =>
     let base := w * 4
     getByte base ||| (getByte (base + 1) <<< 8) ||| (getByte (base + 2) <<< 16) ||| (getByte (base + 3) <<< 24))
 
 def wordToHexLE (w : UInt32) : String :=
   let hexChars := "0123456789abcdef".toList
-  let byteHex (b : UInt32) : List Char :=
-    [hexChars[((b >>> 4) &&& 0xf).toNat]?.getD '0', hexChars[(b &&& 0xf).toNat]?.getD '0']
+  let byteHex (b : UInt32) : List Char := [hexChars[((b >>> 4) &&& 0xf).toNat]?.getD '0', hexChars[(b &&& 0xf).toNat]?.getD '0']
   String.ofList (byteHex (w &&& 0xff) ++ byteHex ((w >>> 8) &&& 0xff) ++ byteHex ((w >>> 16) &&& 0xff) ++ byteHex ((w >>> 24) &&& 0xff))
 
-def cvToHex (cv : Array UInt32) : String :=
-  String.join ((List.range 8).map (fun i => wordToHexLE cv[i]!))
+def cvToHex (cv : Array UInt32) : String := String.join ((List.range 8).map (fun i => wordToHexLE cv[i]!))
 
-/-- Compute the 8-word chaining value (or root output) for a single <=1024-byte chunk. -/
-def hashChunk (bytes : ByteArray) (chunkOffset : Nat) (chunkLen : Nat)
-    (chunkCounter : UInt64) (isRoot : Bool) : Array UInt32 :=
+def hashChunk (bytes : ByteArray) (chunkOffset : Nat) (chunkLen : Nat) (chunkCounter : UInt64) (isRoot : Bool) : Array UInt32 :=
   let numBlocks := if chunkLen == 0 then 1 else (chunkLen + 63) / 64
   (List.range numBlocks).foldl (fun cv bIdx =>
     let blkOffset := chunkOffset + bIdx * 64
-    let rem := chunkLen - bIdx * 64
-    let blkLen := if chunkLen == 0 then 0 else Nat.min 64 rem
-    let flags : UInt32 :=
-      (if bIdx == 0 then CHUNK_START else 0) |||
-      (if bIdx + 1 == numBlocks then
-        CHUNK_END ||| (if isRoot then ROOT else 0)
-       else 0)
-    let words := blockBytesToWords bytes blkOffset blkLen
-    let out16 := compress cv words chunkCounter blkLen.toUInt32 flags
-    out16.extract 0 8
-  ) IV
+    let blkLen := if chunkLen == 0 then 0 else Nat.min 64 (chunkLen - bIdx * 64)
+    let flags : UInt32 := (if bIdx == 0 then CHUNK_START else 0) ||| (if bIdx + 1 == numBlocks then CHUNK_END ||| (if isRoot then ROOT else 0) else 0)
+    (compress cv (blockBytesToWords bytes blkOffset blkLen) chunkCounter blkLen.toUInt32 flags).extract 0 8) IV
 
-/-- Merge pairs of 8-word chaining values on the Merkle stack using explicit fuel. -/
 def mergeStack (fuel : Nat) (stack : List (Array UInt32)) (count : Nat) (isFinalChunk : Bool) : List (Array UInt32) :=
   match fuel with
   | 0 => stack
   | fuel' + 1 =>
     if count % 2 == 1 then stack
-    else
-      match stack with
+    else match stack with
       | rightCv :: leftCv :: rest =>
-        let isRoot := isFinalChunk && rest.isEmpty && (count / 2 == 1)
-        let flags := PARENT ||| (if isRoot then ROOT else 0)
-        let merged := (compress IV (leftCv ++ rightCv) 0 64 flags).extract 0 8
-        mergeStack fuel' (merged :: rest) (count / 2) isFinalChunk
+        let flags := PARENT ||| (if isFinalChunk && rest.isEmpty && (count / 2 == 1) then ROOT else 0)
+        mergeStack fuel' (((compress IV (leftCv ++ rightCv) 0 64 flags).extract 0 8) :: rest) (count / 2) isFinalChunk
       | _ => stack
 
 /-- Collapse remaining chaining values on the Merkle stack to the root chaining value. -/
@@ -1069,17 +1016,9 @@ def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   catch _ => pure ()
   let batchOnly := (batchEnv.map trimStr).getD "" == "1" || rawMode == "local"
   return {
-    enabled := rawMode != "off"
-    mode := rawMode
-    spoolDir := spoolDir
-    tmpSpool := s!"/tmp/sandboxed-telemetry-{uidStr}"
-    remoteUrl := remoteUrl
-    token := token
-    ns := ns
-    machineId := machineId
-    projectId := projectId
-    sessionId := sessionId
-    batchOnly := batchOnly
+    enabled := rawMode != "off", mode := rawMode, spoolDir := spoolDir
+    tmpSpool := s!"/tmp/sandboxed-telemetry-{uidStr}", remoteUrl := remoteUrl, token := token
+    ns := ns, machineId := machineId, projectId := projectId, sessionId := sessionId, batchOnly := batchOnly
   }
 
 end TelemetryConfig
@@ -1089,17 +1028,14 @@ end TelemetryConfig
 def storeTelemetryBlob (cfg : TelemetryConfig) (payload : String) : IO String := do
   let digest := blake3Hex payload
   let refStr := s!"blake3:{digest}"
-  if !cfg.enabled || cfg.mode == "metrics" then
-    return refStr
+  if !cfg.enabled || cfg.mode == "metrics" then return refStr
   for baseDir in [cfg.spoolDir, cfg.tmpSpool] do
     try
       let blobsDir : System.FilePath := s!"{baseDir}/blobs"
       IO.FS.createDirAll blobsDir
       let blobPath : System.FilePath := blobsDir / digest
-      if !(← blobPath.pathExists) then
-        IO.FS.writeFile blobPath payload
-    catch _ =>
-      pure ()
+      if !(← blobPath.pathExists) then IO.FS.writeFile blobPath payload
+    catch _ => pure ()
   return refStr
 
 private abbrev escapeJsonBlob := LeanNative.IR.jsonEscape
