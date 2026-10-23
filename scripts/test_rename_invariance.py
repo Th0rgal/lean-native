@@ -19,7 +19,7 @@ def verify_rename_invariance(raw_c_path: str) -> None:
 
     c1 = ln_c_opt.apply_pass1_scalar_array(renamed)
     c2 = ln_c_opt.apply_pass2_range_forin(c1)
-    c3 = ln_c_opt.apply_pass3_while_sroa(c2)
+    c3 = ln_c_opt.apply_pass3b_structural_peepholes(ln_c_opt.apply_pass3_while_sroa(c2))
 
     # 1. Verify Sub-pass 2D (Range.forIn' push preallocation) fired on renamed init loops
     for fn in [
@@ -56,9 +56,9 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "renamedTaskMatmulTiledU64_spec__2___redArg",
         "renamedTaskMatmulTiledU64_spec__3___redArg",
     ]:
-        m_2d = re.search(rf"LEAN_EXPORT (?:lean_object\*|uint64_t) [^\n]*{fn_2d}\([^)]*\)\{{", c3)
+        m_2d = re.search(rf"LEAN_EXPORT [^\n]*(?:lean_object\*|uint64_t) [^\n]*{fn_2d}\([^)]*\)\{{", c3)
         assert m_2d, f"Missing {fn_2d}"
-        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 1800], f"Pass 2 2D/3D failed on {fn_2d}"
+        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 2800], f"Pass 2 2D/3D failed on {fn_2d}"
 
     # 2. Verify Pass 3 interprocedural scalar companion emission and outer-loop scalarization
     for inner_fn in [
@@ -74,6 +74,10 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__3___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRegexDfaStep_spec__2___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRegexDfaStep_spec__3___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__0___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__1___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__2___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskFannkuchRedux_spec__3___redArg_scalar",
     ]:
         assert f"void {inner_fn}(" in c3, f"Missing scalar helper {inner_fn}"
 
@@ -82,6 +86,12 @@ def verify_rename_invariance(raw_c_path: str) -> None:
     m_mb0_end = c3.find("\nLEAN_EXPORT ", m_mb0)
     assert "lean_alloc_ctor" not in c3[m_mb0:m_mb0_end], "Early-return ctor not stripped in Mandelbrot _scalar"
     assert "((int64_t)(" in c3[m_mb0:m_mb0_end], "Peephole D arithmetic shift did not fire in Mandelbrot _scalar"
+
+    # 2c. Verify Peephole D return-diamond (sar64) and Peephole E in-body stack Range elision (SpectralNorm)
+    m_sar = c3.find("LEAN_EXPORT uint64_t l_sar64__16(uint64_t ")
+    assert m_sar != -1 and "return (uint64_t)(((int64_t)(" in c3[m_sar : m_sar + 400], "Peephole D return-diamond failed on l_sar64__16"
+    m_sn5 = c3.find("LEAN_EXPORT lean_object* l___private_Init_While_0__repeatM_erased___at___00renamedTaskSpectralNorm_spec__5___redArg(uint64_t ")
+    assert m_sn5 != -1 and "ln_st_v_" in c3[m_sn5 : m_sn5 + 3200], "Peephole E stack Range elision failed on SpectralNorm_spec__5"
 
     # 3. Verify Pass 3b structural peepholes (mulHi __uint128_t and __builtin_popcountll)
     assert "__uint128_t" in c3, "Pass 3b mulHi __uint128_t peephole did not fire on renamed C"

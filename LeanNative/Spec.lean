@@ -402,43 +402,26 @@ theorem mulDivDown_zero_denom (a b : Nat) : mulDivDownNat a b 0 = 0 ∧ mulDivUp
 
 /-! ## 7. Non-Negative Linear Combination / Farkas Certificates (`Nat`) -/
 
-/-- Dot product of two lists of natural numbers (`∑_j u_j * v_j`). -/
 def dotNat : List Nat → List Nat → Nat
-  | [], _ => 0
-  | _, [] => 0
+  | [], _ | _, [] => 0
   | a :: as, b :: bs => a * b + dotNat as bs
 
-/-- Weighted column sum (`∑_i weights_i * matrix_{i, colIdx}`). -/
 def weightedColSum : List Nat → List (List Nat) → Nat → Nat
-  | [], _, _ => 0
-  | _, [], _ => 0
-  | w :: ws, row :: rows, colIdx =>
-    w * row.getD colIdx 0 + weightedColSum ws rows colIdx
+  | [], _, _ | _, [], _ => 0
+  | w :: ws, row :: rows, colIdx => w * row.getD colIdx 0 + weightedColSum ws rows colIdx
 
-/-- Helper checking column dominance `obj_j ≤ weightedColSum weights matrix j` for `j < n`. -/
 def checkFarkasCols (weights : List Nat) (matrix : List (List Nat)) (obj : List Nat) : Nat → Bool
   | 0 => true
-  | j + 1 =>
-    checkFarkasCols weights matrix obj j &&
-    decide (obj.getD j 0 ≤ weightedColSum weights matrix j)
+  | j + 1 => checkFarkasCols weights matrix obj j && decide (obj.getD j 0 ≤ weightedColSum weights matrix j)
 
-/-- Boolean certificate checker for non-negative Farkas linear combinations over `Nat`:
-    verifies (a) for every column `j < obj.length`, `obj.getD j 0 ≤ weightedColSum weights matrix j`,
-    and (b) `dotNat weights rhs ≤ bound`. -/
 def checkFarkasNat (weights : List Nat) (matrix : List (List Nat)) (rhs : List Nat) (obj : List Nat) (bound : Nat) : Bool :=
-  checkFarkasCols weights matrix obj obj.length &&
-  decide (dotNat weights rhs ≤ bound)
+  checkFarkasCols weights matrix obj obj.length && decide (dotNat weights rhs ≤ bound)
 
 theorem dotNat_nil_left (v : List Nat) : dotNat [] v = 0 := rfl
+theorem dotNat_nil_right (u : List Nat) : dotNat u [] = 0 := by cases u <;> rfl
+theorem dotNat_cons (a b : Nat) (as bs : List Nat) : dotNat (a :: as) (b :: bs) = a * b + dotNat as bs := rfl
 
-theorem dotNat_nil_right (u : List Nat) : dotNat u [] = 0 := by
-  cases u <;> rfl
-
-theorem dotNat_cons (a b : Nat) (as bs : List Nat) :
-    dotNat (a :: as) (b :: bs) = a * b + dotNat as bs := rfl
-
-theorem dotNat_le_of_pointwise_le (u v x : List Nat)
-    (h : ∀ j, j < u.length → u.getD j 0 ≤ v.getD j 0) :
+theorem dotNat_le_of_pointwise_le (u v x : List Nat) (h : ∀ j, j < u.length → u.getD j 0 ≤ v.getD j 0) :
     dotNat u x ≤ dotNat v x := by
   induction u generalizing v x with
   | nil => rw [dotNat_nil_left]; exact Nat.zero_le _
@@ -461,16 +444,11 @@ def weightedColVec (weights : List Nat) (matrix : List (List Nat)) : Nat → Nat
 
 private theorem weightedColVec_zero_weights (matrix : List (List Nat)) (len colIdx : Nat) (x : List Nat) :
     dotNat (weightedColVec [] matrix len colIdx) x = 0 := by
-  induction len generalizing colIdx x with
-  | zero => rfl
-  | succ len ih => cases x <;> simp [weightedColVec, weightedColSum, dotNat_nil_right, dotNat_cons, ih]
+  induction len generalizing colIdx x <;> cases x <;> simp [weightedColVec, weightedColSum, dotNat_nil_left, dotNat_nil_right, dotNat_cons, *]
 
 private theorem weightedColVec_zero_matrix (weights : List Nat) (len colIdx : Nat) (x : List Nat) :
     dotNat (weightedColVec weights [] len colIdx) x = 0 := by
-  induction len generalizing colIdx x with
-  | zero => rfl
-  | succ len ih =>
-    cases x <;> cases weights <;> simp [weightedColVec, weightedColSum, dotNat_nil_right, dotNat_cons, ih]
+  induction len generalizing colIdx x <;> cases x <;> cases weights <;> simp [weightedColVec, weightedColSum, dotNat_nil_left, dotNat_nil_right, dotNat_cons, *]
 
 private theorem weightedColVec_dot_split (w : Nat) (ws : List Nat) (row : List Nat) (rows : List (List Nat))
     (colIdx : Nat) (x : List Nat) :
@@ -578,40 +556,25 @@ def checkMonotoneOffsets4 (lo o0 o1 o2 o3 totalLen : Nat) : Bool :=
 
 /-- Project raw draws `(d0, d1, d2, d3)` into the monotone polytope `lo ≤ o0 ≤ o1 ≤ o2 ≤ o3 ≤ lo + d0 + d1 + d2 + d3`. -/
 def sampleMonotoneOffsets4 (lo d0 d1 d2 d3 : Nat) : Nat × Nat × Nat × Nat :=
-  let o0 := lo + d0
-  let o1 := o0 + d1
-  let o2 := o1 + d2
-  let o3 := o2 + d3
-  (o0, o1, o2, o3)
-
+  let o0 := lo + d0; let o1 := o0 + d1; let o2 := o1 + d2; let o3 := o2 + d3; (o0, o1, o2, o3)
 theorem sampleMonotoneOffsets4_valid (lo d0 d1 d2 d3 extra : Nat) :
     let (o0, o1, o2, o3) := sampleMonotoneOffsets4 lo d0 d1 d2 d3
     checkMonotoneOffsets4 lo o0 o1 o2 o3 (o3 + extra) = true := by
   simp [sampleMonotoneOffsets4, checkMonotoneOffsets4]
 
 /-- Hash-table load-factor invariant `2 * count ≤ cap` (`count ≤ cap / 2`). -/
-def checkLoadFactorHalf (count cap : Nat) : Bool :=
-  decide (2 * count ≤ cap)
-
+def checkLoadFactorHalf (count cap : Nat) : Bool := decide (2 * count ≤ cap)
 theorem sampleLoadFactorHalf_valid (rawCount cap : Nat) (h_pos : 0 < cap / 2 + 1) :
     checkLoadFactorHalf (rawCount % (cap / 2 + 1)) cap = true := by
-  simp [checkLoadFactorHalf]
-  have h_lt : rawCount % (cap / 2 + 1) < cap / 2 + 1 := Nat.mod_lt rawCount h_pos
-  omega
+  have := Nat.mod_lt rawCount h_pos; simp [checkLoadFactorHalf]; omega
 
 /-- Zero-copy `ByteSlice` view `(offset, len)` inside a backing buffer of length `backingLen`. -/
 structure ByteSliceView where
-  backingLen : Nat
-  offset     : Nat
-  len        : Nat
+  (backingLen offset len : Nat)
   deriving Repr, DecidableEq, BEq
-
-def isValidByteSlice (s : ByteSliceView) : Bool :=
-  decide (s.offset + s.len ≤ s.backingLen)
-
+def isValidByteSlice (s : ByteSliceView) : Bool := decide (s.offset + s.len ≤ s.backingLen)
 def subSliceView (s : ByteSliceView) (subOff subLen : Nat) : ByteSliceView :=
   { backingLen := s.backingLen, offset := s.offset + subOff, len := subLen }
-
 theorem subSliceView_valid (s : ByteSliceView) (subOff subLen : Nat)
     (h_parent : isValidByteSlice s = true) (h_sub : subOff + subLen ≤ s.len) :
     isValidByteSlice (subSliceView s subOff subLen) = true := by
@@ -620,9 +583,7 @@ theorem subSliceView_valid (s : ByteSliceView) (subOff subLen : Nat)
 
 /-- Grace-Blackwell `cuMemGetInfo` pre-flight memory headroom gate. -/
 structure GpuMemoryHeadroomInput where
-  freeBytes : Nat
-  requiredBytes : Nat
-  safetyMargin : Nat
+  (freeBytes requiredBytes safetyMargin : Nat)
   deriving Repr, DecidableEq, BEq
 def hasSufficientGpuMemory (inp : GpuMemoryHeadroomInput) : Bool :=
   decide (inp.requiredBytes + inp.safetyMargin ≤ inp.freeBytes)
@@ -640,12 +601,7 @@ theorem gpu_oom_falls_back_to_cpu_simd (inp : GpuMemoryHeadroomInput)
 
 /-- Stateful Matryoshka (`lean_native_trm_ctx`) incremental prefix accumulator across slice widths. -/
 structure MatryoshkaPrefixAccum where
-  dPrev : Nat
-  dCur : Nat
-  sqPrev : Nat
-  sqDelta : Nat
-  dotPrev : Int
-  dotDelta : Int
+  (dPrev dCur sqPrev sqDelta : Nat) (dotPrev dotDelta : Int)
   deriving Repr, DecidableEq, BEq
 @[inline] def evalMatryoshkaPrefixFull (ctx : MatryoshkaPrefixAccum) : Nat × Int :=
   (ctx.sqPrev + ctx.sqDelta, ctx.dotPrev + ctx.dotDelta)
@@ -850,6 +806,42 @@ def pingPongSArraySwapSROAMetaSpec : MetaGateSpec PingPongSArraySwapSROAInput
 theorem aliased_buffers_reject_pingpong_swap (inp : PingPongSArraySwapSROAInput)
     (h_alias : inp.disjointBuffers = false) : canSwapPingPongSArray inp = false :=
   pingPongSArraySwapSROAMetaSpec.rejects_unsafe inp (by simp [h_alias])
+
+/-- Return-diamond arithmetic right-shift (`sar64`) peephole gate (`ln_c_opt` Pass 3b Peephole D). -/
+structure Sar64ReturnDiamondInput where
+  (signBitShift shiftWidth : Nat) (bothBranchesReturn : Bool)
+  deriving Repr, DecidableEq, BEq
+def canCollapseSar64ReturnDiamond (inp : Sar64ReturnDiamondInput) : Bool :=
+  decide (inp.signBitShift = 63) && decide (inp.shiftWidth < 64) && inp.bothBranchesReturn
+theorem sar64_return_diamond_peephole_gate_sound (inp : Sar64ReturnDiamondInput) :
+    canCollapseSar64ReturnDiamond inp = true ↔
+      (inp.signBitShift = 63 ∧ inp.shiftWidth < 64 ∧ inp.bothBranchesReturn = true) := by
+  simp [canCollapseSar64ReturnDiamond, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def sar64ReturnDiamondMetaSpec : MetaGateSpec Sar64ReturnDiamondInput
+    (fun inp => inp.signBitShift = 63 ∧ inp.shiftWidth < 64 ∧ inp.bothBranchesReturn = true) :=
+  ⟨canCollapseSar64ReturnDiamond, fun inp => (sar64_return_diamond_peephole_gate_sound inp).mp,
+   fun inp => (sar64_return_diamond_peephole_gate_sound inp).mpr, ⟨63, 16, true⟩, ⟨63, 64, true⟩, rfl, rfl⟩
+theorem wide_shift_rejects_sar64_diamond (inp : Sar64ReturnDiamondInput)
+    (h_wide : 64 ≤ inp.shiftWidth) : canCollapseSar64ReturnDiamond inp = false :=
+  sar64ReturnDiamondMetaSpec.rejects_unsafe inp (by omega)
+
+/-- Multi-level nested `_scalar` companion & stack-materialized `SArray` SROA gate (`ln_c_opt` Pass 3). -/
+structure MultiSArrayStackSROAInput where
+  (sarrayCount : Nat) (constSizeKnown noHeapEscape : Bool)
+  deriving Repr, DecidableEq, BEq
+def canMaterializeStackSArraySROA (inp : MultiSArrayStackSROAInput) : Bool :=
+  decide (0 < inp.sarrayCount) && inp.constSizeKnown && inp.noHeapEscape
+theorem multi_sarray_stack_sroa_gate_sound (inp : MultiSArrayStackSROAInput) :
+    canMaterializeStackSArraySROA inp = true ↔
+      (0 < inp.sarrayCount ∧ inp.constSizeKnown = true ∧ inp.noHeapEscape = true) := by
+  simp [canMaterializeStackSArraySROA, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def multiSArrayStackSROAMetaSpec : MetaGateSpec MultiSArrayStackSROAInput
+    (fun inp => 0 < inp.sarrayCount ∧ inp.constSizeKnown = true ∧ inp.noHeapEscape = true) :=
+  ⟨canMaterializeStackSArraySROA, fun inp => (multi_sarray_stack_sroa_gate_sound inp).mp,
+   fun inp => (multi_sarray_stack_sroa_gate_sound inp).mpr, ⟨3, true, true⟩, ⟨3, true, false⟩, rfl, rfl⟩
+theorem escaping_sarray_rejects_stack_sroa (inp : MultiSArrayStackSROAInput)
+    (h_esc : inp.noHeapEscape = false) : canMaterializeStackSArraySROA inp = false :=
+  multiSArrayStackSROAMetaSpec.rejects_unsafe inp (by simp [h_esc])
 
 end LeanNative.Spec
 
