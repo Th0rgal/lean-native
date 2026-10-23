@@ -1,11 +1,17 @@
 #include "lean_native_runtime.h"
 #include <stdlib.h>
 #include <string.h>
-#if defined(__AVX2__)
+#if defined(LEAN_NATIVE_HAS_AVX2) && defined(__has_include)
+#if __has_include(<immintrin.h>)
 #include <immintrin.h>
+#define LEAN_NATIVE_HAS_AVX2 1
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#endif
+#if (defined(__ARM_NEON) || defined(__ARM_NEON__)) && defined(__has_include)
+#if __has_include(<arm_neon.h>)
 #include <arm_neon.h>
+#define LEAN_NATIVE_HAS_NEON 1
+#endif
 #endif
 #if defined(_OPENMP) && defined(__has_include)
 #if __has_include(<omp.h>)
@@ -645,7 +651,7 @@ static inline int32_t lean_native_div_rms_trunc(int32_t num, uint32_t inv_rms_q1
     return num < 0 ? -q : q;
 }
 
-#if defined(__AVX2__)
+#if defined(LEAN_NATIVE_HAS_AVX2)
 static inline int32_t lean_native_avx2_hsum_epi32(__m256i v) {
     __m128i lo = _mm256_castsi256_si128(v);
     __m128i hi = _mm256_extracti128_si256(v, 1);
@@ -655,7 +661,7 @@ static inline int32_t lean_native_avx2_hsum_epi32(__m256i v) {
     return _mm_cvtsi128_si32(sum128);
 }
 #endif
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#if defined(LEAN_NATIVE_HAS_NEON)
 static inline int32_t lean_native_neon_dot16_s8(const int32_t* a32, const int8_t* b8) {
 #if defined(__ARM_FEATURE_DOTPROD)
     int8_t a8[16];
@@ -742,7 +748,7 @@ void lean_native_trm_matryoshka_cpu_int8(
             const int8_t* w1_c = &w1_col[j * d_model];
             int32_t acc = 0;
             size_t i = 0;
-#if defined(__AVX2__)
+#if defined(LEAN_NATIVE_HAS_AVX2)
             __m256i v_ones = _mm256_set1_epi16(1);
             __m256i v_acc = _mm256_setzero_si256();
             for (; i + 32 <= d_model; i += 32) {
@@ -764,7 +770,7 @@ void lean_native_trm_matryoshka_cpu_int8(
                 i += 16;
             }
             acc = lean_native_avx2_hsum_epi32(v_acc);
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(LEAN_NATIVE_HAS_NEON)
             for (; i + 16 <= d_model; i += 16) {
                 acc += lean_native_neon_dot16_s8(h_norm + i, w1_c + i);
             }
@@ -787,7 +793,7 @@ void lean_native_trm_matryoshka_cpu_int8(
             const int8_t* w2_r = &w2_row[i * d_hidden];
             int32_t delta = 0;
             size_t j = 0;
-#if defined(__AVX2__)
+#if defined(LEAN_NATIVE_HAS_AVX2)
             __m256i v_ones = _mm256_set1_epi16(1);
             __m256i v_delta = _mm256_setzero_si256();
             for (; j + 32 <= d_hidden; j += 32) {
@@ -797,7 +803,7 @@ void lean_native_trm_matryoshka_cpu_int8(
                 v_delta = _mm256_add_epi32(v_delta, _mm256_madd_epi16(prod16, v_ones));
             }
             delta = lean_native_avx2_hsum_epi32(v_delta);
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(LEAN_NATIVE_HAS_NEON)
             for (; j + 16 <= d_hidden; j += 16) {
                 delta += lean_native_neon_dot16_u8s8(act_u8 + j, w2_r + j);
             }
@@ -906,7 +912,7 @@ void lean_native_trm_ctx_step_incremental_int8(
             const int8_t* w1_c = &w1_col[j * d_model];
             int32_t acc = 0;
             size_t i = 0;
-#if defined(__AVX2__)
+#if defined(LEAN_NATIVE_HAS_AVX2)
             __m256i v_ones = _mm256_set1_epi16(1);
             __m256i v_acc = _mm256_setzero_si256();
             for (; i + 32 <= d_model; i += 32) {
@@ -928,7 +934,7 @@ void lean_native_trm_ctx_step_incremental_int8(
                 i += 16;
             }
             acc = lean_native_avx2_hsum_epi32(v_acc);
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(LEAN_NATIVE_HAS_NEON)
             for (; i + 16 <= d_model; i += 16) {
                 acc += lean_native_neon_dot16_s8(ctx->h_norm + i, w1_c + i);
             }
@@ -952,7 +958,7 @@ void lean_native_trm_ctx_step_incremental_int8(
             const int8_t* w2_r = &w2_row[i * d_hidden];
             int32_t delta = 0;
             size_t j = 0;
-#if defined(__AVX2__)
+#if defined(LEAN_NATIVE_HAS_AVX2)
             __m256i v_ones = _mm256_set1_epi16(1);
             __m256i v_delta = _mm256_setzero_si256();
             for (; j + 32 <= d_hidden; j += 32) {
@@ -962,7 +968,7 @@ void lean_native_trm_ctx_step_incremental_int8(
                 v_delta = _mm256_add_epi32(v_delta, _mm256_madd_epi16(prod16, v_ones));
             }
             delta = lean_native_avx2_hsum_epi32(v_delta);
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#elif defined(LEAN_NATIVE_HAS_NEON)
             for (; j + 16 <= d_hidden; j += 16) {
                 delta += lean_native_neon_dot16_u8s8(ctx->act_u8 + j, w2_r + j);
             }

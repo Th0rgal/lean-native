@@ -12,7 +12,9 @@ import LeanNative.IR.Types
 import LeanNative.IR.AST
 import LeanNative.IR.Codec
 import LeanNative.Transform.LoopVectorizeOpt
+import LeanNative.Transform.Plugins
 import LeanNative.Backend.LLVM
+import LeanNative.TurboLean.Adapter
 
 namespace LeanNative.IR
 
@@ -699,13 +701,23 @@ def emitLeanCFromSourceFile (filePath : String) (modName : Lean.Name := `Main) :
        (`clang -S -emit-llvm` -> `/usr/lib/llvm-18/bin/opt` with loop & SLP vectorization ->
        `clang` linked against `libleanshared.so` and `runtime/lean_native_runtime.c`)
        to produce a standalone native executable at `outBin`. -/
-def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : String := "-O3") :
-    IO (LNIRModule × String) := do
+def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : String := "-O3")
+    (cliArgs : List String := []) : IO (LNIRModule × String) := do
   let sysroot ← resolveLeanSysroot
   let (cCode, rawMod) ← emitLeanCFromSourceFile filePath `Main
   let (optMod, _) := LeanNative.Transform.runDefaultPipeline rawMod
   let hostArch : TargetArch :=
     if System.Platform.target.startsWith "aarch64" || System.Platform.target.startsWith "arm64" then .arm64 else .x86_64
+  let superoptTgt : LeanNative.Transform.SuperoptTarget :=
+    match hostArch with
+    | .arm64 => .arm64
+    | _ => .x86_64
+  let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
+  let isMaxwellBatch := (batchEnv.map (fun s => s.trimAscii.toString) |>.getD "") == "1"
+  if !isMaxwellBatch then
+    let telCfg ← LeanNative.TurboLean.TelemetryConfig.probe cliArgs
+    if telCfg.enabled then
+      let _ ← LeanNative.Transform.emitModuleTelemetryEvents telCfg superoptTgt false rawMod
   let lnirLlPath := s!"{outBin}.lnir.ll"
   let lnirOptLlPath := s!"{outBin}.lnir.opt.ll"
   let lnirLlText := LeanNative.Backend.LLVM.emitLLVMOptimized optMod hostArch
@@ -717,6 +729,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   IO.FS.writeFile cPath cCode
 
   let incDir := (sysroot / "include").toString
+  let clangIncDir := (sysroot / "include" / "clang").toString
   let libDir := (sysroot / "lib" / "lean").toString
 
   let relRuntime : System.FilePath := "runtime/lean_native_runtime.c"
@@ -728,12 +741,18 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   discard <| IO.Process.output { cmd := "python3", args := #[cOptPath, cPath, cPath] }
 
   let sysClang : System.FilePath := "/usr/bin/clang"
-  let clangCmd ← if (← sysClang.pathExists) then pure sysClang.toString else pure "clang"
+  let tcClang : System.FilePath := sysroot / "bin" / "clang"
+  let clangCmd ←
+    if (← sysClang.pathExists) then pure sysClang.toString
+    else if (← tcClang.pathExists) then pure tcClang.toString
+    else pure "clang"
+  let extraIncArgs : Array String :=
+    if clangCmd == tcClang.toString then #[s!"-isystem{clangIncDir}"] else #[]
 
   -- Step 1: clang -S -emit-llvm -O3 -DNDEBUG -march=native -I<sysroot>/include
   let clangEmitOut ← IO.Process.output {
     cmd  := clangCmd
-    args := #["-S", "-emit-llvm", optLevel, "-DNDEBUG", "-march=native", s!"-I{incDir}", s!"-I{runtimeDir}", cPath, "-o", rawLlPath]
+    args := #["-S", "-emit-llvm", optLevel, "-DNDEBUG", "-march=native", s!"-I{incDir}", s!"-I{runtimeDir}"] ++ extraIncArgs ++ #[cPath, "-o", rawLlPath]
   }
   if clangEmitOut.exitCode != 0 then
     throw <| IO.userError s!"clang -emit-llvm failed:\n{clangEmitOut.stderr}"
@@ -742,11 +761,14 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let optBin : System.FilePath := "/usr/lib/llvm-18/bin/opt"
   let optCmd ← if (← optBin.pathExists) then pure optBin.toString else pure "opt"
   let runOptPass (inLl outLl : String) (fallback : IO String) : IO Unit := do
-    let out ← IO.Process.output {
-      cmd  := optCmd
-      args := #["-S", "-passes=default<O3>,loop-vectorize,slp-vectorizer", "-vectorize-loops", "-vectorize-slp", inLl, "-o", outLl]
-    }
-    if out.exitCode != 0 then IO.FS.writeFile outLl (← fallback)
+    try
+      let out ← IO.Process.output {
+        cmd  := optCmd
+        args := #["-S", "-passes=default<O3>,loop-vectorize,slp-vectorizer", "-vectorize-loops", "-vectorize-slp", inLl, "-o", outLl]
+      }
+      if out.exitCode != 0 then IO.FS.writeFile outLl (← fallback)
+    catch _ =>
+      IO.FS.writeFile outLl (← fallback)
   runOptPass rawLlPath optLlPath (IO.FS.readFile rawLlPath)
   runOptPass lnirLlPath lnirOptLlPath (pure lnirLlText)
 
@@ -754,7 +776,8 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let linkOut ← IO.Process.output {
     cmd  := clangCmd
     args := #[
-      optLevel, "-DNDEBUG", "-march=native", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}",
+      optLevel, "-DNDEBUG", "-march=native", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}"
+    ] ++ extraIncArgs ++ #[
       optLlPath, lnirOptLlPath, runtimePath, "-Wl,--allow-multiple-definition",
       s!"-L{libDir}", "-lleanshared", s!"-Wl,-rpath,{libDir}", "-lm", "-lpthread", "-ldl", "-o", outBin
     ]

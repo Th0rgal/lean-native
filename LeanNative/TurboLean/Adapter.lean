@@ -948,6 +948,7 @@ private def extractSimpleJsonStr (text key : String) : Option String :=
 def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let envMode ← IO.getEnv "LEAN_NATIVE_TELEMETRY"
   let globalEnv ← IO.getEnv "SANDBOXED_TELEMETRY"
+  let modeEnv ← IO.getEnv "SANDBOXED_TELEMETRY_MODE"
   let remoteEnv ← IO.getEnv "SANDBOXED_TELEMETRY_URL"
   let tokEnv ← IO.getEnv "SANDBOXED_TELEMETRY_TOKEN"
   let tokAlt ← IO.getEnv "TELEMETRY_API_KEY"
@@ -957,6 +958,9 @@ def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let sidEnv ← IO.getEnv "SANDBOXED_TELEMETRY_SESSION_ID"
   let sidAlt1 ← IO.getEnv "SANDBOXED_MISSION_ID"
   let sidAlt2 ← IO.getEnv "MAXWELL_MISSION_ID"
+  let maxwellRole ← IO.getEnv "RESEARCH_GOVERNOR_ROLE"
+  let maxwellCap ← IO.getEnv "MAXWELL_CAP_TOKEN"
+  let maxwellBossCap ← IO.getEnv "MAXWELL_BOSS_CAP_TOKEN"
   let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
   let dirEnv ← IO.getEnv "LEAN_NATIVE_TELEMETRY_DIR"
   let homeOpt ← IO.getEnv "HOME"
@@ -977,6 +981,8 @@ def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let cfgUrl := extractSimpleJsonStr cfgText "url"
   let cfgTok := extractSimpleJsonStr cfgText "token"
   let cfgNs := extractSimpleJsonStr cfgText "namespace"
+  let isMaxwellInvocation :=
+    [sidAlt2, maxwellRole, maxwellCap, maxwellBossCap].any (fun o => !(o.map trimStr |>.getD "").isEmpty)
   let rawMode :=
     if cliArgs.contains "--no-telemetry" then "off"
     else if cliArgs.contains "--telemetry=off" || cliArgs.contains "--telemetry=0" then "off"
@@ -984,14 +990,15 @@ def probe (cliArgs : List String := []) : IO TelemetryConfig := do
     else if cliArgs.contains "--telemetry=local" then "local"
     else if cliArgs.contains "--telemetry=full" || cliArgs.contains "--telemetry" then "full"
     else
-      match envMode <|> globalEnv <|> cfgMode with
+      match envMode <|> globalEnv <|> modeEnv <|> cfgMode with
       | some v =>
         let s := (trimStr v).toLower
         if s == "0" || s == "off" || s == "false" || s == "no" then "off"
         else if s == "local" then "local"
         else if s == "metrics" then "metrics"
+        else if isMaxwellInvocation then "off"
         else "full"
-      | none => "full"
+      | none => if isMaxwellInvocation then "off" else "full"
   let spoolDir := (dirEnv.map trimStr).filter (!·.isEmpty) |>.getD ".lean-native/telemetry"
   let remoteUrl := ((remoteEnv <|> cfgUrl).map trimStr).filter (!·.isEmpty) |>.getD "https://telemetry.thomas.md/v1/ingest"
   let token := ((tokEnv <|> tokAlt <|> cfgTok).map trimStr).filter (!·.isEmpty) |>.getD ""

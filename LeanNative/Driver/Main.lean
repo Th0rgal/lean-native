@@ -26,7 +26,7 @@ def runBuildExe (args : List String) : IO UInt32 := do
     return 1
   let outBin := findFlagValue args "-o" "a.out"
   let optLevel := findFlagValue args "--opt" "-O3"
-  let (optMod, lnirLlPath) ← buildNativeExecutable inFile outBin optLevel
+  let (optMod, lnirLlPath) ← buildNativeExecutable inFile outBin optLevel args
   IO.println s!"[lean-native] Built native executable {outBin} from {inFile} (lowered & optimized {optMod.decls.length} LCNF declarations; LNIR LLVM IR at {lnirLlPath})"
   return 0
 
