@@ -480,9 +480,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.canEmitRestrictSimd ⟨true, false, 64⟩ &&
     !(LeanNative.Spec.canEmitRestrictSimd ⟨true, true, 64⟩) &&
     LeanNative.Spec.canUnboxNestedProdWhile ⟨8, false, true⟩ &&
-    LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩
+    LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩ &&
+    LeanNative.Spec.canRewriteTupleSArrayFill ⟨248, 248, 64, 64, 64, true⟩ &&
+    LeanNative.Spec.canUnboxNatBoolWhile ⟨true, true, false⟩
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 149
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 153
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
@@ -785,12 +787,8 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
   IO.println (String.intercalate "\n" lines)
 
 def runAuditAxioms (args : List String) : IO UInt32 := do
-  let jsonFlag := hasFlag args "--json"
   let report := verifiedAxiomAuditReport
-  if jsonFlag then
-    IO.println report.toJson
-  else
-    IO.println report.formatSummary
+  IO.println (if hasFlag args "--json" then report.toJson else report.formatSummary)
   return if report.passed then 0 else 1
 
 /-- Shared CLI dispatcher for both `lean-native-core` (`elaborateHook? = none`) and `lean-native` (`elaborateHook? = some ...`). -/

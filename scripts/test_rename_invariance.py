@@ -33,6 +33,10 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         snippet = c3[m.start() : m.start() + 1400]
         assert "lean_alloc_sarray(8, ln_n, ln_n)" in snippet, f"Sub-pass 2D failed on {fn}"
 
+    # 1b. Verify Sub-pass 2D 2-tuple in-place SArray fill fired on renamed Dijkstra init
+    m_dijk = re.search(r"LEAN_EXPORT lean_object\* [^\n]*renamedTaskDijkstraPairingHeap_spec__2___redArg\([^)]*\)\{", c3)
+    assert m_dijk and "ln_sarray_ensure_exclusive_u64" in c3[m_dijk.start() : m_dijk.start() + 1400]
+
     # 2. Verify Pass 3 interprocedural scalar companion emission and outer-loop scalarization
     for inner_fn in [
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskSha256Compress_spec__0___redArg_scalar",
@@ -40,6 +44,10 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskJsonSimdScanner_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__1___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__2___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__3___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRegexDfaStep_spec__2___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRegexDfaStep_spec__3___redArg_scalar",
     ]:
         assert f"void {inner_fn}(" in c3, f"Missing scalar helper {inner_fn}"
 

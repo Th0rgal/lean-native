@@ -683,59 +683,34 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
 
   let p0 ← freshTmp "p_in0"
   let v0 ← freshTmp "v_in0"
-  emitLine s!"  {p0} = getelementptr inbounds i64, ptr {in0Data}, i64 {ivVal}"
-  emitLine s!"  {v0} = load i64, ptr {p0}, align 8"
+  emitLine s!"  {p0} = getelementptr inbounds i64, ptr {in0Data}, i64 {ivVal}\n  {v0} = load i64, ptr {p0}, align 8"
   let loadIn1 : EmitM String := do
-    let p1 ← freshTmp "p_in1"
-    let v1 ← freshTmp "v_in1"
-    emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}"
-    emitLine s!"  {v1} = load i64, ptr {p1}, align 8"
+    let p1 ← freshTmp "p_in1"; let v1 ← freshTmp "v_in1"
+    emitLine s!"  {p1} = getelementptr inbounds i64, ptr {in1Data}, i64 {ivVal}\n  {v1} = load i64, ptr {p1}, align 8"
     return v1
   let resVal ← match kernel with
     | .mapScaleAdd scale bias => do
-      let m ← freshTmp "msa_mul"
-      let a ← freshTmp "msa_add"
-      emitLine s!"  {m} = mul i64 {v0}, {scale}"
-      emitLine s!"  {a} = add i64 {m}, {bias}"
-      pure a
+      let m ← freshTmp "msa_mul"; let a ← freshTmp "msa_add"
+      emitLine s!"  {m} = mul i64 {v0}, {scale}\n  {a} = add i64 {m}, {bias}"; pure a
     | .zipAdd => do
-      let v1 ← loadIn1
-      let a ← freshTmp "za_add"
-      emitLine s!"  {a} = add i64 {v0}, {v1}"
-      pure a
+      let v1 ← loadIn1; let a ← freshTmp "za_add"
+      emitLine s!"  {a} = add i64 {v0}, {v1}"; pure a
     | .zipMul | .dotProduct => do
-      let v1 ← loadIn1
-      let m ← freshTmp "zm_mul"
-      emitLine s!"  {m} = mul i64 {v0}, {v1}"
-      pure m
+      let v1 ← loadIn1; let m ← freshTmp "zm_mul"
+      emitLine s!"  {m} = mul i64 {v0}, {v1}"; pure m
     | .saxpy alphaBits => do
-      let v1 ← loadIn1
-      let m ← freshTmp "sax_mul"
-      let a ← freshTmp "sax_add"
-      emitLine s!"  {m} = mul i64 {v0}, {alphaBits}"
-      emitLine s!"  {a} = add i64 {m}, {v1}"
-      pure a
+      let v1 ← loadIn1; let m ← freshTmp "sax_mul"; let a ← freshTmp "sax_add"
+      emitLine s!"  {m} = mul i64 {v0}, {alphaBits}\n  {a} = add i64 {m}, {v1}"; pure a
     | .stencil1D3Pt _ wCenter _ => do
-      let m ← freshTmp "st_mul"
-      emitLine s!"  {m} = mul i64 {v0}, {wCenter}"
-      pure m
+      let m ← freshTmp "st_mul"; emitLine s!"  {m} = mul i64 {v0}, {wCenter}"; pure m
     | .customScalar idxVar _ _ => do
-      storeI64ToVar idxVar ivVal
-      let v1 ← loadIn1
-      let m ← freshTmp "cs_mul"
-      let a ← freshTmp "cs_add"
-      emitLine s!"  {m} = mul i64 {v0}, {v1}"
-      emitLine s!"  {a} = add i64 {m}, {ivVal}"
-      pure a
-
+      storeI64ToVar idxVar ivVal; let v1 ← loadIn1; let m ← freshTmp "cs_mul"; let a ← freshTmp "cs_add"
+      emitLine s!"  {m} = mul i64 {v0}, {v1}\n  {a} = add i64 {m}, {ivVal}"; pure a
   let pOut ← freshTmp "p_out"
-  emitLine s!"  {pOut} = getelementptr inbounds i64, ptr {outData}, i64 {ivVal}"
-  emitLine s!"  store i64 {resVal}, ptr {pOut}, align 8"
-
+  emitLine s!"  {pOut} = getelementptr inbounds i64, ptr {outData}, i64 {ivVal}\n  store i64 {resVal}, ptr {pOut}, align 8"
   let nextIv ← freshTmp "par_iv_next"
   let addOp := if opt then "add nuw nsw i64" else "add i64"
-  emitLine s!"  {nextIv} = {addOp} {ivVal}, 1"
-  emitLine s!"  store i64 {nextIv}, ptr {ivSlot}, align 8"
+  emitLine s!"  {nextIv} = {addOp} {ivVal}, 1\n  store i64 {nextIv}, ptr {ivSlot}, align 8"
   let loopMd := if opt then ", !llvm.loop !0" else ", !llvm.loop !3"
   emitLine s!"  br label %{condLbl}{loopMd}"
   emitLine s!"{exitLbl}:"
@@ -754,54 +729,40 @@ partial def loopBodyHasArrayMem : LNIRCode → Bool
 partial def collectSwitchChain (expectedDiscr : Option VarId) (code : LNIRCode) :
     Option (VarId × List (VarId × UInt64 × LNIRCode) × LNIRCode) :=
   match code with
-  | .letBind cmpVar _ (.scalar (.binOp .eq (.var discrVar) (.constU64 tagVal)))
-      (.ite condVar thenBranch elseBranch) =>
-    if cmpVar == condVar && (expectedDiscr.isNone || expectedDiscr == some discrVar) then
-      match collectSwitchChain (some discrVar) elseBranch with
-      | some (_, moreCases, defBranch) =>
-        some (discrVar, (cmpVar, tagVal, thenBranch) :: moreCases, defBranch)
-      | none =>
-        some (discrVar, [(cmpVar, tagVal, thenBranch)], elseBranch)
-    else
-      none
-  | _ => none
+    | .letBind cmpVar _ (.scalar (.binOp .eq (.var discrVar) (.constU64 tagVal)))
+        (.ite condVar thenBranch elseBranch) =>
+      if cmpVar == condVar && (expectedDiscr.isNone || expectedDiscr == some discrVar) then
+        match collectSwitchChain (some discrVar) elseBranch with
+        | some (_, moreCases, defBranch) => some (discrVar, (cmpVar, tagVal, thenBranch) :: moreCases, defBranch)
+        | none => some (discrVar, [(cmpVar, tagVal, thenBranch)], elseBranch)
+      else none
+    | _ => none
 
 /-- Recursively lower an `LNIRCode` block into LLVM 18 instructions.
     When `loopAccTarget` is `some (accVar, latchLbl)`, `.ret v` inside a `seqFor` step body
     copies `v` into `accVar` and branches to `latchLbl` instead of returning from the function. -/
 partial def emitCode (code : LNIRCode) (retTy : LNIRType)
     (loopAccTarget : Option (VarId × String) := none) : EmitM Unit := do
-  let st ← get
-  let opt := st.optimized
+  let opt := (← get).optimized
   match code with
   | .letBind dst ty val k =>
     match collectSwitchChain none code with
     | some (discrVar, rawCases, defaultBranch) =>
       let dedupCases := rawCases.foldl (fun acc item@(_, tagVal, _) =>
-        if acc.any (fun (_, t, _) => t == tagVal) then acc else acc ++ [item]
-      ) []
+        if acc.any (fun (_, t, _) => t == tagVal) then acc else acc ++ [item]) []
       if dedupCases.length >= 2 then
         let discrVal ← loadVarAsI64 discrVar
         let defLbl ← freshLabel "sw_default"
         let mut labeledCases : List (String × UInt64 × LNIRCode) := []
         for (_, tagVal, brCode) in dedupCases do
-          let caseLbl ← freshLabel s!"sw_case_{tagVal}"
-          labeledCases := labeledCases ++ [(caseLbl, tagVal, brCode)]
+          labeledCases := labeledCases ++ [(← freshLabel s!"sw_case_{tagVal}", tagVal, brCode)]
         emitLine s!"  switch i64 {discrVal}, label %{defLbl} ["
-        for (caseLbl, tagVal, _) in labeledCases do
-          emitLine s!"    i64 {tagVal}, label %{caseLbl}"
+        for (caseLbl, tagVal, _) in labeledCases do emitLine s!"    i64 {tagVal}, label %{caseLbl}"
         emitLine "  ]"
-        for (caseLbl, _, brCode) in labeledCases do
-          emitLine s!"{caseLbl}:"
-          emitCode brCode retTy loopAccTarget
-        emitLine s!"{defLbl}:"
-        emitCode defaultBranch retTy loopAccTarget
-      else
-        emitLetExpr dst ty val
-        emitCode k retTy loopAccTarget
-    | none =>
-      emitLetExpr dst ty val
-      emitCode k retTy loopAccTarget
+        for (caseLbl, _, brCode) in labeledCases do emitLine s!"{caseLbl}:"; emitCode brCode retTy loopAccTarget
+        emitLine s!"{defLbl}:"; emitCode defaultBranch retTy loopAccTarget
+      else emitLetExpr dst ty val; emitCode k retTy loopAccTarget
+    | none => emitLetExpr dst ty val; emitCode k retTy loopAccTarget
   | .rawStore ptrVar idxVar valVar _ k =>
     let rawPtr ← loadVarAsPtr ptrVar
     let idxVal ← loadVarAsI64 idxVar
@@ -873,35 +834,21 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
       emitLine s!"  br label %{latchLbl}"
     | none =>
       let llvmRet := sigLLVMType retTy
-      if llvmRet == "void" then
-        emitLine "  ret void"
-      else if llvmRet == "ptr" then
-        let p ← loadVarAsPtr v
-        emitLine s!"  ret ptr {p}"
-      else if llvmRet == "i256" then
-        let val ← loadVarAsI256 v
-        emitLine s!"  ret i256 {val}"
-      else if llvmRet == "i64" then
-        let val ← loadVarAsI64 v
-        emitLine s!"  ret i64 {val}"
+      if llvmRet == "void" then emitLine "  ret void"
+      else if llvmRet == "ptr" then emitLine s!"  ret ptr {← loadVarAsPtr v}"
+      else if llvmRet == "i256" then emitLine s!"  ret i256 {← loadVarAsI256 v}"
+      else if llvmRet == "i64" then emitLine s!"  ret i64 {← loadVarAsI64 v}"
       else
         let tup ← freshTmp "ret_tup"
-        emitLine s!"  {tup} = load {llvmRet}, ptr %slot_v{v}, align 8"
-        emitLine s!"  ret {llvmRet} {tup}"
+        emitLine s!"  {tup} = load {llvmRet}, ptr %slot_v{v}, align 8\n  ret {llvmRet} {tup}"
   | .unreachable =>
     match loopAccTarget with
     | some (_, latchLbl) =>
       emitLine s!"  br label %{latchLbl}"
     | none =>
       let llvmRet := sigLLVMType retTy
-      if llvmRet == "void" then
-        emitLine "  ret void"
-      else if llvmRet == "ptr" then
-        emitLine "  ret ptr null"
-      else if llvmRet == "i256" then
-        emitLine "  ret i256 0"
-      else
-        emitLine "  ret i64 0"
+      emitLine (if llvmRet == "void" then "  ret void" else if llvmRet == "ptr" then "  ret ptr null"
+                else if llvmRet == "i256" then "  ret i256 0" else "  ret i64 0")
 
 /-- Emit an LLVM 18 function definition for a single `LNIRDecl`. -/
 def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
@@ -916,41 +863,19 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
     s!"{pTy}{attrs} %arg_v{p.id}"
   let paramSigStr := String.intercalate ", " paramSigs
   let fnAttr := if optimized then "#0" else "#1"
-
   let paramVars := d.params.map (fun p => (p.id, p.ty))
   let allVars := dedupVars (paramVars ++ collectCodeVars d.body)
-
   let allocaLines := allVars.foldl (fun acc (vid, ty) =>
     let sTy := slotLLVMType ty
-    let zeroVal :=
-      if sTy == "ptr" then "null"
-      else if sTy == "i64" || sTy == "i256" then "0"
-      else "zeroinitializer"
-    acc ++ [
-      s!"  %slot_v{vid} = alloca {sTy}, align 8",
-      s!"  store {sTy} {zeroVal}, ptr %slot_v{vid}, align 8"
-    ]
+    let zeroVal := if sTy == "ptr" then "null" else if sTy == "i64" || sTy == "i256" then "0" else "zeroinitializer"
+    acc ++ [s!"  %slot_v{vid} = alloca {sTy}, align 8\n  store {sTy} {zeroVal}, ptr %slot_v{vid}, align 8"]
   ) []
-
-  let storeArgLines := d.params.map fun p =>
-    let sTy := slotLLVMType p.ty
-    s!"  store {sTy} %arg_v{p.id}, ptr %slot_v{p.id}, align 8"
-
-  let initState : EmitState := {
-    optimized := optimized
-    varTypes  := allVars
-    nextTmp   := 0
-    lines     := []
-  }
-  let (_, finalState) := (emitCode d.body d.retTy none).run initState
-
+  let storeArgLines := d.params.map fun p => s!"  store {slotLLVMType p.ty} %arg_v{p.id}, ptr %slot_v{p.id}, align 8"
+  let (_, finalState) := (emitCode d.body d.retTy none).run { optimized, varTypes := allVars }
   String.intercalate "\n" ([
     s!"; LNIRDecl: {d.name} (assurance={d.assurance}, isGpuCand={d.isGpuCand})",
-    s!"define dso_local {retTypeStr} @{fnSym}({paramSigStr}) {fnAttr} \{",
-    "entry:"
-  ] ++ allocaLines ++ storeArgLines ++ finalState.lines ++ [
-    "}"
-  ])
+    s!"define dso_local {retTypeStr} @{fnSym}({paramSigStr}) {fnAttr} \{\nentry:"
+  ] ++ allocaLines ++ storeArgLines ++ finalState.lines ++ ["}"])
 
 /-- Emit self-contained `weak_odr` runtime and C ABI benchmark kernels in LLVM 18 opaque-pointer IR. -/
 def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
@@ -1081,25 +1006,14 @@ def emitLLVMABIWrapperDecl (d : LNIRDecl) : String :=
     let callArgsStr := String.intercalate ", " callArgs
     let callAndRetLines :=
       if isABIScalarIntType d.retTy then
-        [
-          s!"  %ret64 = call i64 @{fnSym}({callArgsStr})",
-          "  %shl = shl i64 %ret64, 1",
-          "  %tagged = or i64 %shl, 1",
-          "  %boxptr = inttoptr i64 %tagged to ptr",
-          "  ret ptr %boxptr"
-        ]
+        [ s!"  %ret64 = call i64 @{fnSym}({callArgsStr})",
+          "  %shl = shl i64 %ret64, 1\n  %tagged = or i64 %shl, 1\n  %boxptr = inttoptr i64 %tagged to ptr\n  ret ptr %boxptr" ]
       else
-        [
-          s!"  %ret = call ptr @{fnSym}({callArgsStr})",
-          "  ret ptr %ret"
-        ]
+        [ s!"  %ret = call ptr @{fnSym}({callArgsStr})\n  ret ptr %ret" ]
     String.intercalate "\n" ([
       s!"; Lean 4 C-ABI Wrapper Thunk for {d.name}",
-      s!"define dso_local ptr @lean_native_abi_{fnSym}({abiParamSig}) #0 \{",
-      "entry:"
-    ] ++ unboxLines ++ callAndRetLines ++ [
-      "}"
-    ])
+      s!"define dso_local ptr @lean_native_abi_{fnSym}({abiParamSig}) #0 \{\nentry:"
+    ] ++ unboxLines ++ callAndRetLines ++ ["}"])
 
 /-- Emit LLVM 18 IR (`emitLLVMModule`) in either baseline (`optimized = false`) or
     optimized (`optimized = true`) mode. -/

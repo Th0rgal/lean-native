@@ -808,5 +808,75 @@ theorem non32_mask_rejects_mulhi_u128_peephole (inp : MulHiU128PeepholeInput)
     canRewriteMulHiU128 inp = false :=
   mulHiU128PeepholeMetaSpec.rejects_unsafe inp (by simp [h_ne])
 
+/-- General 2-tuple `SArray` in-place fill gate (`ln_c_opt` Sub-pass 2D):
+    fires iff both tuple components have `SArray` tag `248` (`tag0 = 248 ∧ tag1 = 248`),
+    both arrays have capacity at least `stop` (`stop ≤ cap0 ∧ stop ≤ cap1`),
+    and the fill values are loop-invariant scalar constants (`scalarFill = true`). -/
+structure TupleSArrayFillInput where
+  tag0       : Nat
+  tag1       : Nat
+  cap0       : Nat
+  cap1       : Nat
+  stop       : Nat
+  scalarFill : Bool
+  deriving Repr, DecidableEq, BEq
+
+def canRewriteTupleSArrayFill (inp : TupleSArrayFillInput) : Bool :=
+  decide (inp.tag0 = 248) && decide (inp.tag1 = 248) &&
+    decide (inp.stop ≤ inp.cap0) && decide (inp.stop ≤ inp.cap1) && inp.scalarFill
+
+theorem tuple_sarray_fill_gate_sound (inp : TupleSArrayFillInput) :
+    canRewriteTupleSArrayFill inp = true ↔
+      (inp.tag0 = 248 ∧ inp.tag1 = 248 ∧ inp.stop ≤ inp.cap0 ∧ inp.stop ≤ inp.cap1 ∧ inp.scalarFill = true) := by
+  simp [canRewriteTupleSArrayFill, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+
+def tupleSArrayFillMetaSpec : MetaGateSpec TupleSArrayFillInput
+    (fun inp => inp.tag0 = 248 ∧ inp.tag1 = 248 ∧ inp.stop ≤ inp.cap0 ∧ inp.stop ≤ inp.cap1 ∧ inp.scalarFill = true) where
+  gate := canRewriteTupleSArrayFill
+  sound := fun inp => (tuple_sarray_fill_gate_sound inp).mp
+  complete := fun inp => (tuple_sarray_fill_gate_sound inp).mpr
+  posWitness := ⟨248, 248, 64, 64, 64, true⟩
+  negWitness := ⟨246, 248, 64, 64, 64, true⟩
+  nonVacuous := rfl
+  tight := rfl
+
+theorem non_sarray_tag_rejects_tuple_fill (inp : TupleSArrayFillInput)
+    (h_tag : inp.tag0 ≠ 248) :
+    canRewriteTupleSArrayFill inp = false :=
+  tupleSArrayFillMetaSpec.rejects_unsafe inp (by simp [h_tag])
+
+/-- Small-`Nat` and `Bool` leaf unboxing gate inside `whileM` SROA (`ln_c_opt` Pass 3):
+    fires iff every `Nat` leaf fits in 63-bit tagged scalar representation (`natFitsScalar = true`),
+    all array indexing is within `SArray` bounds (`boundsProven = true`),
+    and no intermediate boxed `Nat` allocation escapes (`natEscapes = false`). -/
+structure NatBoolWhileSroaInput where
+  natFitsScalar : Bool
+  boundsProven  : Bool
+  natEscapes    : Bool
+  deriving Repr, DecidableEq, BEq
+
+def canUnboxNatBoolWhile (inp : NatBoolWhileSroaInput) : Bool :=
+  inp.natFitsScalar && inp.boundsProven && !inp.natEscapes
+
+theorem nat_bool_while_sroa_gate_sound (inp : NatBoolWhileSroaInput) :
+    canUnboxNatBoolWhile inp = true ↔
+      (inp.natFitsScalar = true ∧ inp.boundsProven = true ∧ inp.natEscapes = false) := by
+  simp [canUnboxNatBoolWhile, Bool.and_eq_true, and_assoc]
+
+def natBoolWhileSroaMetaSpec : MetaGateSpec NatBoolWhileSroaInput
+    (fun inp => inp.natFitsScalar = true ∧ inp.boundsProven = true ∧ inp.natEscapes = false) where
+  gate := canUnboxNatBoolWhile
+  sound := fun inp => (nat_bool_while_sroa_gate_sound inp).mp
+  complete := fun inp => (nat_bool_while_sroa_gate_sound inp).mpr
+  posWitness := ⟨true, true, false⟩
+  negWitness := ⟨true, true, true⟩
+  nonVacuous := rfl
+  tight := rfl
+
+theorem escaping_nat_rejects_while_sroa (inp : NatBoolWhileSroaInput)
+    (h_esc : inp.natEscapes = true) :
+    canUnboxNatBoolWhile inp = false :=
+  natBoolWhileSroaMetaSpec.rejects_unsafe inp (by simp [h_esc])
+
 end LeanNative.Spec
 
