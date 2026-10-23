@@ -147,7 +147,8 @@ def binOpCostWithProfile (p : HardwareCostProfile) (op : BinOp) : Nat :=
   | .mulChecked256 => p.mulChecked256Cost
   | .addChecked256 | .subChecked256 => p.addSubChecked256Cost
   | .add | .sub => p.addSubCost
-  | .bitAnd | .bitOr | .bitXor => p.bitwiseCost
+  | .bitAnd | .bitOr | .bitXor | .eor3 => p.bitwiseCost
+  | .clmul64 | .gf2Affine => 1
   | .shl | .shr | .sar => p.shiftCost
   | .eq | .lt | .le => p.cmpCost
 

@@ -1,5 +1,36 @@
 namespace LeanNative.IR
 
+/-- Carryless product, low 64 bits. One definition for Eval, LLVM, Metal and PTX. -/
+def clmul64 (a b : UInt64) : UInt64 :=
+  let rec go (i : Nat) (acc : UInt64) : UInt64 :=
+    if h : i < 64 then
+      let iu := i.toUInt64
+      go (i + 1) (if ((b >>> iu) &&& 1) == 1 then acc ^^^ (a <<< iu) else acc)
+    else acc
+  go 0 0
+
+/-- Parity of the low 8 bits: 1 if odd, 0 if even. -/
+def gf2Dot8 (row x : UInt64) : UInt64 :=
+  let rec go (j : Nat) (s : UInt64) : UInt64 :=
+    if h : j < 8 then
+      let ju := j.toUInt64
+      go (j + 1) (s ^^^ (((row >>> ju) &&& 1) &&& ((x >>> ju) &&& 1)))
+    else s &&& 1
+  go 0 0
+
+/-- GF(2^8) affine map of the low byte, constant term 0. Matrix rows packed in `m`. -/
+def gf2Affine (x m : UInt64) : UInt64 :=
+  let xb := x &&& 0xff
+  let rec go (i : Nat) (acc : UInt64) : UInt64 :=
+    if h : i < 8 then
+      let iu := i.toUInt64
+      go (i + 1) (acc ||| (gf2Dot8 ((m >>> (iu * 8)) &&& 0xff) xb <<< iu))
+    else acc
+  go 0 0
+
+/-- Three-input xor. The third input is the low half of `b`, the second its high half. -/
+def eor3 (a b : UInt64) : UInt64 := a ^^^ (b >>> 32) ^^^ (b &&& 0xffffffff)
+
 /-- Variable identifier in LNIR SSA/ANF form. -/
 abbrev VarId := Nat
 

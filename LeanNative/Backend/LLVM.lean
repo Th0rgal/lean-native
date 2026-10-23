@@ -26,7 +26,10 @@ def tupleFieldLLVMType (f : LNIRType) : String := if f.is256Bit then "i256" else
 def slotLLVMType : LNIRType → String
   | .objPtr | .taggedPtr | .sarray _ | .rawPtr _ | .storageMap => "ptr"
   | .u256 | .i256 => "i256"
-  | .tuple fs => "{ " ++ String.intercalate ", " (fs.map tupleFieldLLVMType) ++ " }"
+  | .tuple fs =>
+    if fs.all (· == .i64) && (fs.length == 2 || fs.length == 4 || fs.length == 8) then
+      s!"<{fs.length} x i64>"
+    else "{ " ++ String.intercalate ", " (fs.map tupleFieldLLVMType) ++ " }"
   | _ => "i64"
 
 def sigLLVMType : LNIRType → String | .unit => "void" | ty => slotLLVMType ty
@@ -279,6 +282,12 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
   | .var id =>
     if is256 then loadVarAsI256 id else loadVarAsI64 id
   | .binOp op lhs rhs =>
+    if is256 && (op == .clmul64 || op == .gf2Affine || op == .eor3) then
+      let v64 ← emitScalarExprWithWidth "i64" "63" e
+      let res ← freshTmp "alu256_gf"
+      emitLine s!"  {res} = zext i64 {v64} to i256"
+      return res
+    else
     let lVal ← emitSub lhs
     let rVal ← emitSub rhs
     let res ← freshTmp ("alu" ++ sfx)
@@ -328,6 +337,53 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
     | .addChecked256 => (← emitChecked "uadd") lVal rVal res
     | .subChecked256 => (← emitChecked "usub") lVal rVal res
     | .mulChecked256 => (← emitChecked "umul") lVal rVal res
+    | .clmul64 =>
+      let av ← freshTmp "clmul_a"
+      let bv ← freshTmp "clmul_b"
+      let pv ← freshTmp "clmul_p"
+      emitLine s!"  {av} = insertelement <2 x i64> poison, i64 {lVal}, i64 0"
+      emitLine s!"  {bv} = insertelement <2 x i64> poison, i64 {rVal}, i64 0"
+      emitLine s!"  {pv} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> {av}, <2 x i64> {bv}, i8 0)"
+      emitLine s!"  {res} = extractelement <2 x i64> {pv}, i64 0"
+      return res
+    | .gf2Affine =>
+      let xv ← freshTmp "gf2_x"
+      let mv ← freshTmp "gf2_m"
+      let xb ← freshTmp "gf2_xb"
+      let mb ← freshTmp "gf2_mb"
+      let rv ← freshTmp "gf2_r"
+      let rb ← freshTmp "gf2_rb"
+      emitLine s!"  {xv} = insertelement <2 x i64> poison, i64 {lVal}, i64 0"
+      emitLine s!"  {mv} = insertelement <2 x i64> poison, i64 {rVal}, i64 0"
+      emitLine s!"  {xb} = bitcast <2 x i64> {xv} to <16 x i8>"
+      emitLine s!"  {mb} = bitcast <2 x i64> {mv} to <16 x i8>"
+      emitLine s!"  {rv} = call <16 x i8> @llvm.x86.vgf2p8affineqb.128(<16 x i8> {xb}, <16 x i8> {mb}, i8 0)"
+      emitLine s!"  {rb} = bitcast <16 x i8> {rv} to <2 x i64>"
+      emitLine s!"  {res} = extractelement <2 x i64> {rb}, i64 0"
+      return res
+    | .eor3 =>
+      let lo ← freshTmp "eor3_lo"
+      let hi ← freshTmp "eor3_hi"
+      let av ← freshTmp "eor3_a"
+      let bv ← freshTmp "eor3_b"
+      let cv ← freshTmp "eor3_c"
+      let ab ← freshTmp "eor3_ab"
+      let bb ← freshTmp "eor3_bb"
+      let cb ← freshTmp "eor3_cb"
+      let rv ← freshTmp "eor3_r"
+      let rb ← freshTmp "eor3_rb"
+      emitLine s!"  {lo} = and i64 {rVal}, 4294967295"
+      emitLine s!"  {hi} = lshr i64 {rVal}, 32"
+      emitLine s!"  {av} = insertelement <2 x i64> poison, i64 {lVal}, i64 0"
+      emitLine s!"  {bv} = insertelement <2 x i64> poison, i64 {hi}, i64 0"
+      emitLine s!"  {cv} = insertelement <2 x i64> poison, i64 {lo}, i64 0"
+      emitLine s!"  {ab} = bitcast <2 x i64> {av} to <16 x i8>"
+      emitLine s!"  {bb} = bitcast <2 x i64> {bv} to <16 x i8>"
+      emitLine s!"  {cb} = bitcast <2 x i64> {cv} to <16 x i8>"
+      emitLine s!"  {rv} = call <16 x i8> @llvm.aarch64.neon.eor3.v16i8(<16 x i8> {ab}, <16 x i8> {bb}, <16 x i8> {cb})"
+      emitLine s!"  {rb} = bitcast <16 x i8> {rv} to <2 x i64>"
+      emitLine s!"  {res} = extractelement <2 x i64> {rb}, i64 0"
+      return res
   | .unaryOp op arg =>
     if !is256 && op == .clz256 then
       let v256 ← emit256 e
@@ -696,7 +752,14 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
     | .zipAdd => do
       let v1 ← loadIn1; let a ← freshTmp "za_add"
       emitLine s!"  {a} = add i64 {v0}, {v1}"; pure a
-    | .zipMul | .dotProduct => do
+    | .zipMul => do
+      let v1 ← loadIn1
+      let a ← freshTmp "zm_a"; let b ← freshTmp "zm_b"; let p ← freshTmp "zm_p"; let m ← freshTmp "zm_mul"
+      emitLine s!"  {a} = insertelement <2 x i64> poison, i64 {v0}, i64 0"
+      emitLine s!"  {b} = insertelement <2 x i64> poison, i64 {v1}, i64 0"
+      emitLine s!"  {p} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> {a}, <2 x i64> {b}, i8 0)"
+      emitLine s!"  {m} = extractelement <2 x i64> {p}, i64 0"; pure m
+    | .dotProduct => do
       let v1 ← loadIn1; let m ← freshTmp "zm_mul"
       emitLine s!"  {m} = mul i64 {v0}, {v1}"; pure m
     | .saxpy alphaBits => do
@@ -905,6 +968,7 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
       "declare i1 @llvm.expect.i1(i1, i1) #2",
       "declare { i256, i1 } @llvm.uadd.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.usub.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.umul.with.overflow.i256(i256, i256) #2",
       "declare i256 @llvm.ctlz.i256(i256, i1 immarg) #2\ndeclare void @llvm.trap()",
+      "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8 immarg)\ndeclare <16 x i8> @llvm.x86.vgf2p8affineqb.128(<16 x i8>, <16 x i8>, i8 immarg)\ndeclare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)\ndeclare <16 x i8> @llvm.aarch64.neon.eor3.v16i8(<16 x i8>, <16 x i8>, <16 x i8>)",
       "declare void @lean_native_evm_sload(ptr, ptr, ptr)\ndeclare void @lean_native_evm_sstore(ptr, ptr, ptr)\ndeclare i64 @lean_native_trm_matryoshka_parity_u64(i64)",
       "declare noalias ptr @malloc(i64 noundef)\ndeclare void @free(ptr noundef)\ndeclare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)"
     ],
@@ -945,7 +1009,7 @@ def emitMetadataFooter (target : TargetArch) : String :=
     | .arm64 | .androidArm64 => "\"target-cpu\"=\"neoverse-v2\""
     | .iosArm64 | .iosSimArm64 => "\"target-cpu\"=\"apple-m1\""
     | .wasm32 => "\"target-features\"=\"+simd128\""
-    | _      => "\"target-cpu\"=\"x86-64-v3\""
+    | _      => "\"target-cpu\"=\"x86-64-v3\" \"target-features\"=\"+pclmul,+gfni,+avx2\""
   let vecModeMeta := match target with
     | .arm64 | .iosArm64 | .iosSimArm64 | .androidArm64 => "!8 = !{!\"llvm.loop.vectorize.scalable.enable\", i1 false}"
     | _      => "!8 = !{!\"llvm.loop.vectorize.width\", i32 4}"

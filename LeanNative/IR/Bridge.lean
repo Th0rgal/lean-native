@@ -210,6 +210,7 @@ def tryLowerIntrinsicCall (fnName : Lean.Name) (argVars : List VarId) (retTy : L
   let suffixOps : List (String × BinOp) := [
     ("add", .add), ("sub", .sub), ("mul", .mul), ("div", .div), ("mod", .mod), ("rem", .mod),
     ("land", .bitAnd), ("lor", .bitOr), ("xor", .bitXor), ("shiftLeft", .shl), ("shiftRight", .shr),
+    ("clmul64", .clmul64), ("gf2Affine", .gf2Affine), ("eor3", .eor3),
     ("decEq", .eq), ("beq", .eq), ("decLt", .lt), ("blt", .lt), ("decLe", .le), ("ble", .le)
   ]
   match argVars with

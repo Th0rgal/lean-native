@@ -63,7 +63,7 @@ def rank : SymExpr → Nat
 
 /-- Check whether `op` is commutative in `SymExpr`. -/
 def isCommutative : BinOp → Bool
-  | .add | .mul | .bitAnd | .bitOr | .bitXor | .eq => true
+  | .add | .mul | .bitAnd | .bitOr | .bitXor | .eq | .clmul64 | .eor3 => true
   | _ => false
 
 end SymExpr
