@@ -207,6 +207,39 @@ inductive ComputeTarget where
   | tpuXlaStableHLO -- Google Cloud TPU v5e/v6e XLA StableHLO / Pallas (128x128 MXU + 128x8 VPU)
   deriving Repr, DecidableEq, Inhabited, BEq
 
+/-- Canonical 5-target search backend enum unifying CPU SIMD, CUDA GB10, Apple Metal,
+    remote Cloud TPU, and FPGA LSC2 across `lean-native` and `turbo-lean`. -/
+inductive SearchBackend where
+  | CpuSimd
+  | CudaGb10
+  | Metal
+  | TpuRemote
+  | FpgaLsc2
+  deriving Repr, DecidableEq, Inhabited, BEq
+
+namespace SearchBackend
+def toString : SearchBackend → String
+  | .CpuSimd   => "cpu_simd"
+  | .CudaGb10  => "cuda_gb10"
+  | .Metal     => "metal"
+  | .TpuRemote => "tpu_remote"
+  | .FpgaLsc2  => "fpga_lsc2"
+instance : ToString SearchBackend := ⟨toString⟩
+
+def ofComputeTarget : ComputeTarget → SearchBackend
+  | .cpuSimd         => .CpuSimd
+  | .gpuCudaPtx      => .CudaGb10
+  | .gpuMetal        => .Metal
+  | .tpuXlaStableHLO => .TpuRemote
+
+def toComputeTarget : SearchBackend → ComputeTarget
+  | .CpuSimd   => .cpuSimd
+  | .CudaGb10  => .gpuCudaPtx
+  | .Metal     => .gpuMetal
+  | .TpuRemote => .tpuXlaStableHLO
+  | .FpgaLsc2  => .cpuSimd
+end SearchBackend
+
 namespace ComputeTarget
 def toString : ComputeTarget → String
   | .cpuSimd         => "cpu_simd"
@@ -240,6 +273,24 @@ def selectOptimalComputeTarget
   else
     .cpuSimd
 
+/-- Select the canonical 5-target `SearchBackend` given workload shape and available accelerators. -/
+def selectOptimalSearchBackend
+    (tripCount : Nat)
+    (isMatrixContraction : Bool)
+    (is256BitWorkload : Bool)
+    (isControlHeavy : Bool)
+    (hasTpu : Bool)
+    (hasCudaGpu : Bool)
+    (hasMetalGpu : Bool := false)
+    (hasFpgaLsc2 : Bool := false) : SearchBackend :=
+  if isControlHeavy || tripCount < 4096 then
+    .CpuSimd
+  else if hasFpgaLsc2 && is256BitWorkload then
+    .FpgaLsc2
+  else
+    SearchBackend.ofComputeTarget
+      (selectOptimalComputeTarget tripCount isMatrixContraction is256BitWorkload isControlHeavy hasTpu hasCudaGpu hasMetalGpu)
+
 /-- Classify an `LNIRDecl` and select its optimal hardware target based on `extractParForRegions`,
     256-bit parameter/return types, and GPU compatibility analysis. -/
 def classifyDeclComputeTarget
@@ -266,7 +317,9 @@ end LeanNative.Backend.Hybrid
 namespace LeanNative.Backend
   export Hybrid (
     ComputeTarget
+    SearchBackend
     selectOptimalComputeTarget
+    selectOptimalSearchBackend
     classifyDeclComputeTarget
   )
 end LeanNative.Backend

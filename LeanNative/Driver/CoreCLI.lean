@@ -484,9 +484,13 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.canStripEarlyReturnCtor ⟨true, true, false⟩ && LeanNative.Spec.canRewriteNested2DRangeForIn ⟨248, 1, true, true⟩ &&
     LeanNative.Spec.canElideInBodyRangeAlloc ⟨0, 1, false, true⟩ && LeanNative.Spec.canSwapPingPongSArray ⟨248, 248, true, true⟩ &&
     LeanNative.Spec.canCollapseSar64ReturnDiamond ⟨63, 16, true⟩ && LeanNative.Spec.canMaterializeStackSArraySROA ⟨3, true, true⟩ &&
-    LeanNative.Spec.canPromoteRangeCtorToStack ⟨0, 3, false, true⟩ && LeanNative.Spec.canScalarizeRepeatMTripleSArray ⟨248, 248, 248, true⟩
+    LeanNative.Spec.canPromoteRangeCtorToStack ⟨0, 3, false, true⟩ && LeanNative.Spec.canScalarizeRepeatMTripleSArray ⟨248, 248, 248, true⟩ &&
+    LeanNative.Spec.canEmitZeroDepMathlibCert ⟨false, false, false, true⟩ &&
+    !(LeanNative.Spec.canEmitZeroDepMathlibCert ⟨false, true, false, true⟩) &&
+    LeanNative.Backend.selectOptimalSearchBackend 8192 false true false false true false true == .FpgaLsc2 &&
+    (emitZeroDepMathlibProof { declName := "tauceti_cert", stmtSrc := "x = y", cofactorTerms := [("h1", 1), ("h2", -1)], dagRwSteps := ["Nat.add_comm"], distilledLemmas := ["Nat.add_zero"], farkasWeights := [1, 2] }).startsWith "by\n"
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 173
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 176
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"

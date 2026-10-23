@@ -121,6 +121,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.tropical_scan_head, ``LeanNative.Spec.sturm_tarski_bounds_gate_sound
   , ``LeanNative.Spec.root_crossing_rejects_sturm_tarski_bounds
   , ``LeanNative.Spec.reg_cut_feasible_sound, ``LeanNative.Spec.reg_cut_cost_monotone
+  , ``LeanNative.Spec.fpga_lsc2_256bit_routing_sound
+  , ``LeanNative.Spec.mathlib_cert_lowering_gate_sound, ``LeanNative.Spec.native_decide_rejects_mathlib_cert_lowering
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

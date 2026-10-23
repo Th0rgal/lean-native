@@ -38,7 +38,14 @@ Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lea
    Every refactoring, bug fix, or feature addition must compress or factor existing code and specifications. New capabilities must generalize Layer I meta-theorems or shared backend passes rather than accreting ad-hoc lines of code.
 
 6. **Doc & Context Ratchet (`--sync-docs`)**:
-   Any commit that adds or modifies theorems in `LeanNative/Proofs/AxiomAudit.lean` (`180/180` audited theorems) or tight specs in `LeanNative/Spec.lean` (`91/91` tight specs) must keep `README.md`, `AGENTS.md`, and `scripts/ci_verify.sh` synchronized; `./scripts/ci_verify.sh --sync-docs` verifies that doc theorem/spec counters match the in-kernel audit.
+   Any commit that adds or modifies theorems in `LeanNative/Proofs/AxiomAudit.lean` (`<!-- inventory:leannative_audited_theorems -->183<!-- /inventory:leannative_audited_theorems -->/<!-- inventory:leannative_audited_theorems -->183<!-- /inventory:leannative_audited_theorems -->` audited theorems) or tight specs in `LeanNative/Spec.lean` (`<!-- inventory:leannative_spec_tight -->94<!-- /inventory:leannative_spec_tight -->/<!-- inventory:leannative_spec_tight -->94<!-- /inventory:leannative_spec_tight -->` tight specs) must keep `README.md`, `AGENTS.md`, and `scripts/ci_verify.sh` synchronized; `./scripts/ci_verify.sh --sync-docs` verifies that doc theorem/spec counters match the in-kernel audit.
+
+7. **End-to-End Amdahl & Ablation Ratchet (`ΔE2E >= 1%` or Delete)**:
+   - **No Micro-Benchmark-Only Optimizations**: No hardware backend, cascade tier, heuristic pass, or rewrite rule lands without a measured wall-clock speedup on the full end-to-end pipeline. Every optimization must state its stage fraction $f$ and stage speedup $s$ (`[f=..., s=... -> E2E=...]`).
+   - **Transport-Aware Offload Gate**:
+     - Synchronous offload is forbidden unless stage share $f \ge 10\%$ AND $\text{p95}(T_{\text{transport}} + T_{\text{serialize}} + T_{\text{device}} + T_{\text{recert}}) < 0.5 \cdot \text{p95}(T_{\text{CPU}})$.
+     - Asynchronous ("Fire-and-Forget") offload must demonstrate a statistically significant $\ge 1\%$ reduction in end-to-end campaign time-to-certified-result (including host queue/interrupt overhead).
+   - **Mandatory Ablation Flag & Pruning**: Every non-trivial optimization must be toggleable via env/flag. Any optimization, cascade tier, or superopt rule with $0$ hits on the canonical corpus or whose ablation degrades E2E geomean by $< 1\%$ (95% CI) must be deleted to enforce $\Delta\text{LOC} \le 0$.
 
 ---
 

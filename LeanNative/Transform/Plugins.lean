@@ -569,7 +569,8 @@ private def extractJsonArrayStringsSimple (line key : String) : List String :=
       1. `LNIR_WIRE_V1` certified FastCheck counterexample synthesis (`lean-native-core:fastcheck-v0.5`),
       2. Binder-aware arithmetic counterexample detection (`builtin:simd-omega-fastcheck`),
       3. `available_constants` `simp -> simp only [...]` distillation (`builtin:simd-simp-distiller`),
-      4. Explicit `simp [a, b]` -> `simp only [a, b]` discrimination-tree pruning (`builtin:simd-discr-tree-pruner`). -/
+      4. Explicit `simp [a, b]` -> `simp only [a, b]` discrimination-tree pruning (`builtin:simd-discr-tree-pruner`),
+      5. Zero-Dependency Mathlib Certificate Lowering (`builtin:mathlib-zero-dep-cert-lowerer`). -/
 def handleTurboPluginLine (line : String) : String :=
   let declName := (extractJsonFieldSimple line "decl_name").getD "decl"
   let stmtSrc := (extractJsonFieldSimple line "stmt_src").getD ""
@@ -593,6 +594,16 @@ def handleTurboPluginLine (line : String) : String :=
   else if (bodySrc.contains "omega" || bodySrc.contains "bv_decide") &&
           (stmtSrc.contains "a + b < a" || stmtSrc.contains "x + 1 < x") then
     s!"\{\"kind\":\"counterexample_found\",\"witness_summary\":\"a = 0, b = 0 violates strict inequality\",\"suggested_hypothesis\":\"h_pos : b > 0\",\"accelerator_name\":\"builtin:simd-omega-fastcheck\"}"
+  else if bodySrc.contains "linear_combination" && !availConsts.isEmpty then
+    let cert : LeanNative.Proofs.MathlibZeroDepCert := {
+      declName := declName
+      stmtSrc := stmtSrc
+      cofactorTerms := availConsts.map (fun h => (h, 1))
+      farkasWeights := List.replicate availConsts.length 1
+    }
+    let proof := LeanNative.Proofs.emitZeroDepMathlibProof cert
+    let constJson := String.intercalate "," (availConsts.map (fun c => s!"\"{escapeJsonPlugin c}\""))
+    s!"\{\"kind\":\"candidate_tactic\",\"tactic_src\":\"{escapeJsonPlugin proof}\",\"distilled_constants\":[{constJson}],\"confidence\":0.94,\"zero_dependency\":true,\"accelerator_name\":\"builtin:mathlib-zero-dep-cert-lowerer\"}"
   else if bodySrc.contains "simp" && !bodySrc.contains "simp only" && !availConsts.isEmpty then
     let filtered := availConsts.filter (fun c =>
       c != "Eq" && c != "True" && c != "False" && c != "Nat" && c != "Bool" &&

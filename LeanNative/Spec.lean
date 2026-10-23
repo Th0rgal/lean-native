@@ -947,5 +947,30 @@ theorem reg_cut_feasible_sound (c : RegCut) : regCutFeasible c = true ↔ c.live
   simp [regCutFeasible]
 theorem reg_cut_cost_monotone (c1 c2 : RegCut) (h : c1.spill ≤ c2.spill) : regCutCost c1 ≤ regCutCost c2 := h
 
+/-- Canonical 5-target `SearchBackend` routing soundness for FPGA LSC2 256-bit workloads. -/
+theorem fpga_lsc2_256bit_routing_sound (tripCount : Nat)
+    (isMatrixContraction hasTpu hasCudaGpu hasMetalGpu : Bool) (h_large : 4096 ≤ tripCount) :
+    selectOptimalSearchBackend tripCount isMatrixContraction true false hasTpu hasCudaGpu hasMetalGpu true = .FpgaLsc2 := by
+  simp [selectOptimalSearchBackend, Nat.not_lt.mpr h_large]
+
+/-- Zero-Dependency Mathlib Certificate Lowering gate (`linear_combination` + DAG `rw`/`simp only` + Farkas witnesses,
+    guaranteeing `0 sorryAx`, `0 native_decide`, and zero imports of `lean-native`/`turbo-lean`). -/
+structure MathlibCertLoweringInput where
+  (hasExternalImports usesNativeDecide usesSorryAx cofactorsVerified : Bool)
+  deriving Repr, DecidableEq, BEq
+def canEmitZeroDepMathlibCert (inp : MathlibCertLoweringInput) : Bool :=
+  !inp.hasExternalImports && !inp.usesNativeDecide && !inp.usesSorryAx && inp.cofactorsVerified
+theorem mathlib_cert_lowering_gate_sound (inp : MathlibCertLoweringInput) :
+    canEmitZeroDepMathlibCert inp = true ↔
+      (inp.hasExternalImports = false ∧ inp.usesNativeDecide = false ∧ inp.usesSorryAx = false ∧ inp.cofactorsVerified = true) := by
+  simp [canEmitZeroDepMathlibCert, Bool.and_eq_true, and_assoc]
+def mathlibCertLoweringMetaSpec : MetaGateSpec MathlibCertLoweringInput
+    (fun inp => inp.hasExternalImports = false ∧ inp.usesNativeDecide = false ∧ inp.usesSorryAx = false ∧ inp.cofactorsVerified = true) :=
+  ⟨canEmitZeroDepMathlibCert, fun inp => (mathlib_cert_lowering_gate_sound inp).mp,
+   fun inp => (mathlib_cert_lowering_gate_sound inp).mpr, ⟨false, false, false, true⟩, ⟨false, true, false, true⟩, rfl, rfl⟩
+theorem native_decide_rejects_mathlib_cert_lowering (inp : MathlibCertLoweringInput)
+    (h_nd : inp.usesNativeDecide = true) : canEmitZeroDepMathlibCert inp = false :=
+  mathlibCertLoweringMetaSpec.rejects_unsafe inp (by simp [h_nd])
+
 end LeanNative.Spec
 

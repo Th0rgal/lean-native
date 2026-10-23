@@ -445,29 +445,6 @@ int lean_native_hybrid_trm_matryoshka_int8(
 #define LEAN_NATIVE_TIER_S4_TPU_V6E    4u
 
 /**
- * Returns 1 if an optional ULX3S ECP5 FPGA endpoint is explicitly enabled
- * (`LEAN_NATIVE_ENABLE_ULX3S=1`) and non-blockingly reachable, or 0 otherwise.
- * Never blocks and is never required.
- */
-int lean_native_fpga_ulx3s_available(void);
-
-/**
- * Non-blocking opportunistic ULX3S FPGA witness probe (`LSC-2`).
- * Returns 1 if a candidate `sample_idx` was proposed by the FPGA (which MUST still
- * be re-verified via `lean_native_verify_indexed_witness_recert`), or 0 immediately
- * when disabled, unavailable, or busy.
- */
-int lean_native_fpga_ulx3s_try_fastcheck(
-    uint64_t base_seed,
-    uint64_t goal_idx,
-    size_t n_samples,
-    const int32_t* rpn_opcodes,
-    uint64_t arg0,
-    uint64_t arg1,
-    uint64_t* out_sample_idx
-);
-
-/**
  * Evaluates the 16-opcode 256-bit (`U256`) RPN bytecode (`rpn_opcodes[16]`) deterministically
  * over `n_samples` SplitMix64 states seeded by `(base_seed, goal_idx)`.
  * If a counterexample is found, writes the minimum `sample_idx` to `*out_min_sample_idx`
