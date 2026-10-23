@@ -119,29 +119,21 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.repeatm_triple_sarray_sroa_gate_sound, ``LeanNative.Spec.uninlined_helper_rejects_triple_sarray_sroa
   , ``LeanNative.Spec.v2Nat_odd_zero, ``LeanNative.Spec.coxeter_braid_len
   , ``LeanNative.Spec.tropical_scan_head, ``LeanNative.Spec.sturm_tarski_bounds_gate_sound
-  , ``LeanNative.Spec.root_crossing_rejects_sturm_tarski_bounds
-  , ``LeanNative.Spec.reg_cut_feasible_sound, ``LeanNative.Spec.reg_cut_cost_monotone
-  , ``LeanNative.Spec.fpga_lsc2_256bit_routing_sound
+  , ``LeanNative.Spec.root_crossing_rejects_sturm_tarski_bounds, ``LeanNative.Spec.reg_cut_feasible_sound
+  , ``LeanNative.Spec.reg_cut_cost_monotone, ``LeanNative.Spec.fpga_lsc2_256bit_routing_sound
   , ``LeanNative.Spec.mathlib_cert_lowering_gate_sound, ``LeanNative.Spec.native_decide_rejects_mathlib_cert_lowering
   , ``LeanNative.Spec.cabi_slice_io_gate_sound, ``LeanNative.Spec.overflow_out_len_rejects_cabi_slice_io
+  , ``LeanNative.Spec.wave15_to_18_structural_gate_sound, ``LeanNative.Spec.unguarded_entry_rejects_wave15_to_18_opt
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/
 structure TheoremAxiomAudit where
-  theoremName : String
-  existsInEnv : Bool
-  axiomsUsed : List String
-  forbiddenFound : List String
-  nonStandardFound : List String
-  passed : Bool
+  (theoremName : String) (existsInEnv : Bool) (axiomsUsed forbiddenFound nonStandardFound : List String) (passed : Bool)
   deriving Repr, DecidableEq, Inhabited, BEq, ToExpr
 
 /-- Aggregate report of the in-kernel transitive axiom audit. -/
 structure AxiomAuditReport where
-  passed : Bool
-  theoremsAudited : Nat
-  results : List TheoremAxiomAudit
-  forbiddenAxiomsFound : List String
+  (passed : Bool) (theoremsAudited : Nat) (results : List TheoremAxiomAudit) (forbiddenAxiomsFound : List String)
   deriving Repr, DecidableEq, Inhabited, BEq, ToExpr
 
 /-- Inspect a single theorem in `CoreM` using `Lean.collectAxioms`. -/

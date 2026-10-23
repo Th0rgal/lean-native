@@ -139,7 +139,7 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 
 ---
 
-## 8. v0.6 Architecture Additions ("TauCeti Engine", Waves 9–14): Zero Benchmark-Named Rules (`Pass 2C = 0`), SNF/CSR Affine Lowering, Hensel 2-Adic Superopt, Sturm-Tarski & Tropical/Min-Cut Formal Specs (180 Kernel Proofs, 91 Tight Specs)
+## 8. v0.6 / v0.7 Architecture Additions ("TauCeti Engine", Waves 9–18): Zero Benchmark-Named Rules (`Pass 2C = 0`), SNF/CSR Affine Lowering, Hensel 2-Adic Superopt, Sturm-Tarski & Structural Loop/Peephole Specs (187 Kernel Proofs, 98 Tight Specs)
 
 ### 8.1 Wave 9 (`W9-PASS2C-ZERO`): Total Elimination of Benchmark-Named Rules (`18 -> 9 -> 5 -> 2 -> 0`)
 - **Wave 9A (General Multi-Pass LSD Radix Histogram/Prefix-Scan/Scatter Fusion)**: Generalizes Pass 1 (`apply_pass1_scalar_array`) to recognize any `Array_forIn_x27Unsafe_loop` performing 8-bit bucket counting, 256-entry prefix-sum offset accumulation, and scatter permutation without referencing function names (`radix_sort_u64`: **`3.42x`** vs `rustc -O3`).
@@ -155,6 +155,7 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 - **Wave 11 (`W11-HENSEL-2ADIC`)**: Adds Newton-Hensel 2-adic inverse synthesis (`henselOddInverseU64`, `hensel_2adic_mul_inv_cancel`), 2-adic valuation mask truncation (`((x &&& m1) + y) &&& m2 -> (x + y) &&& m2`), and `v2Nat_odd_zero` in `Spec.lean`.
 - **Wave 12 (`W12-STURM-TARSKI`)**: Formalizes `sturmTarskiBoundsGate`, `sturm_tarski_bounds_gate_sound`, and `root_crossing_rejects_sturm_tarski_bounds` in `Spec.lean`.
 - **Wave 13 (`W13-TROPICAL-HECKE`)**: Formalizes 0-Hecke/Coxeter braid commutation (`coxeterBraidStep`, `coxeter_braid_len`) and tropical `(min, +)` scan preservation (`tropicalMinPlusScan`, `tropical_scan_head`).
-- **Wave 14 (`W14-MINCUT-LNIR`)**: Formalizes max-flow min-cut register-pressure feasibility (`regCutFeasibleGate`, `reg_cut_feasible_sound`, `reg_cut_cost_monotone`), bringing the formal audit to **180/180 in-kernel theorems** (`0 sorryAx`) and **91/91 non-vacuous tight specs** (`turbo-lean audit-spec`).
+- **Wave 14 (`W14-MINCUT-LNIR`)**: Formalizes max-flow min-cut register-pressure feasibility (`regCutFeasibleGate`, `reg_cut_feasible_sound`, `reg_cut_cost_monotone`).
+- **Waves 15–18 (`W15-COLLATZ-SELECT`, `W16-SPECTRAL-SCALAR`, `W17-NBODY-UNROLL`, `W18-SCALEBIAS-TAIL`)**: Adds join-point branchless `uint64_t` select peephole (`Peephole G`), 1D `_scalar` inner-loop hoisting in `Sub-pass 2A`, hoisted single-entry bounds guard for full loop unrolling in `Sub-pass 2B`, and provably dead tail-loop elision (`wave15_to_18_structural_gate_sound`, `unguarded_entry_rejects_wave15_to_18_opt`), bringing the formal audit to **187/187 in-kernel theorems** (`0 sorryAx`) and **98/98 non-vacuous tight specs** (`turbo-lean audit-spec`), with **19/20 min (18/20 median) wins/ties** and **1.22x geomean speedup** vs `rustc -O3` (`Pass 2C = 0`).
 
 

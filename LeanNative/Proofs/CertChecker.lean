@@ -102,7 +102,9 @@ def verifiedTheoremRegistry : List String :=
     "evalPassChainBudget_cons", "sptLookup_insert_same", "pass_chain_two_passes_eval",
     "spt_rom_fetch_deterministic", "mulDivDown_le_mulDivUp", "mulDivDown_zero_denom",
     "fpga_lsc2_256bit_routing_sound", "mathlib_cert_lowering_gate_sound",
-    "native_decide_rejects_mathlib_cert_lowering"
+    "native_decide_rejects_mathlib_cert_lowering", "cabi_slice_io_gate_sound",
+    "overflow_out_len_rejects_cabi_slice_io", "wave15_to_18_structural_gate_sound",
+    "unguarded_entry_rejects_wave15_to_18_opt"
   ]
   let ir := ["bitAnd_self", "bitOr_self", "bitXor_zero", "zero_bitXor", "bitOr_zero", "zero_bitOr"]
   let fc := ["certifyCounterexample_no_false_positive", "substScalarExpr_nil",

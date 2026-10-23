@@ -118,6 +118,19 @@ def verify_rename_invariance(raw_c_path: str) -> None:
     m_csr3 = re.search(r"LEAN_EXPORT [^\n]*renamedTaskSparseMatmulCsr_spec__3___redArg\([^)]*\)\{", c3)
     assert m_csr3 and "ln_k + 1 < ln_nnz; ln_k += 2" in c3[m_csr3.start() : m_csr3.start() + 2600], "Wave 10B CSR 2-way ILP failed on renamed C"
 
+    # 4b. Verify Waves 15-18 general structural passes (Collatz select/inline, SpectralNorm _scalar, Nbody hoisted guard, SArrayScaleBias tail-loop elision)
+    m_cz = c3.find("static inline __attribute__((always_inline)) uint64_t l_collatzOne(uint64_t ")
+    assert m_cz != -1 and " ? " in c3[m_cz : m_cz + 900], "Wave 15 branchless select / static inline failed on l_collatzOne"
+    for sn_sc in [
+        "l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00renamedTaskSpectralNorm_spec__2___redArg_scalar",
+        "l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00renamedTaskSpectralNorm_spec__0___redArg_scalar",
+    ]:
+        assert f"uint64_t {sn_sc}(" in c3, f"Wave 16 scalar companion {sn_sc} missing on renamed C"
+    m_nb0 = c3.find("void l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00renamedTaskNbody_spec__0___redArg_scalar(")
+    assert m_nb0 != -1 and "#pragma clang loop unroll(full)" in c3[m_nb0 : m_nb0 + 1800], "Wave 17 hoisted entry guard failed on Nbody_spec__0_scalar"
+    m_sb0 = re.search(r"LEAN_EXPORT [^\n]*renamedTaskSArrayScaleBias_spec__0___redArg\([^)]*\)\{", c3)
+    assert m_sb0 and "for (; ln_i < ln_stop; ++ln_i)" not in c3[m_sb0.start() : m_sb0.start() + 1800], "Wave 18 dead tail loop elision failed on SArrayScaleBias_spec__0"
+
     # 5. Verify Pass 2C is completely empty (0 benchmark-named rules)
     assert ln_c_opt.apply_pass2c_hot_loops(c3) == c3, "Pass 2C must be a no-op (0 benchmark-named rules)"
     print("RENAME_INVARIANCE_SUITE=PASSED")

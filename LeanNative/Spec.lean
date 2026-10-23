@@ -216,14 +216,9 @@ theorem fastcheck_non_vacuous_tightness_law (v : FastCheckSpecVerdict) :
   simp [isNonVacuousCertifiedVerdict, Bool.and_eq_true, decide_eq_true_eq]
 
 def fastcheckMetaSpec : MetaGateSpec FastCheckSpecVerdict
-    (fun v => v.satisfiedPreconditions > 0 ∧ v.allCertifiedByEval = true) where
-  gate := isNonVacuousCertifiedVerdict
-  sound := fun v => (fastcheck_non_vacuous_tightness_law v).mp
-  complete := fun v => (fastcheck_non_vacuous_tightness_law v).mpr
-  posWitness := ⟨1, 0, true⟩
-  negWitness := ⟨0, 0, true⟩
-  nonVacuous := rfl
-  tight := rfl
+    (fun v => v.satisfiedPreconditions > 0 ∧ v.allCertifiedByEval = true) :=
+  ⟨isNonVacuousCertifiedVerdict, fun v => (fastcheck_non_vacuous_tightness_law v).mp,
+   fun v => (fastcheck_non_vacuous_tightness_law v).mpr, ⟨1, 0, true⟩, ⟨0, 0, true⟩, rfl, rfl⟩
 
 /-! ## 3. Lean 4 C-ABI Scalar Boxing / Unboxing Invariance (`@lean_native_abi_*`) -/
 
@@ -236,12 +231,8 @@ theorem c_abi_unbox_box_one : leanUnboxScalar (leanBoxScalar 1) = 1 := rfl
 /-! ## 4. PR & Autoresearch Specification-Pinning Gate (`MetaGateSpec`) -/
 
 structure PRVerificationInput where
-  expectedSpecHash : Nat
-  actualSpecHash : Nat
-  expectedTestSuiteHash : Nat
-  actualTestSuiteHash : Nat
-  forbiddenAxiomsCount : Nat
-  tvAllPassed : Bool
+  (expectedSpecHash actualSpecHash expectedTestSuiteHash actualTestSuiteHash forbiddenAxiomsCount : Nat)
+  (tvAllPassed : Bool)
   deriving Repr, DecidableEq, BEq
 
 def checkPRVerificationGate (inp : PRVerificationInput) : Bool :=
@@ -249,16 +240,14 @@ def checkPRVerificationGate (inp : PRVerificationInput) : Bool :=
   decide (inp.forbiddenAxiomsCount = 0) && inp.tvAllPassed
 
 theorem pr_spec_pinning_blocks_spec_tampering (inp : PRVerificationInput)
-    (h_tamper : inp.expectedSpecHash ≠ inp.actualSpecHash) :
-    checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_tamper]
-
+    (h_tamper : inp.expectedSpecHash ≠ inp.actualSpecHash) : checkPRVerificationGate inp = false := by
+  simp [checkPRVerificationGate, h_tamper]
 theorem pr_spec_pinning_blocks_test_tampering (inp : PRVerificationInput)
-    (h_tamper : inp.expectedTestSuiteHash ≠ inp.actualTestSuiteHash) :
-    checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_tamper]
-
+    (h_tamper : inp.expectedTestSuiteHash ≠ inp.actualTestSuiteHash) : checkPRVerificationGate inp = false := by
+  simp [checkPRVerificationGate, h_tamper]
 theorem pr_spec_pinning_blocks_forbidden_axioms (inp : PRVerificationInput)
-    (h_ax : inp.forbiddenAxiomsCount ≠ 0) :
-    checkPRVerificationGate inp = false := by simp [checkPRVerificationGate, h_ax]
+    (h_ax : inp.forbiddenAxiomsCount ≠ 0) : checkPRVerificationGate inp = false := by
+  simp [checkPRVerificationGate, h_ax]
 
 theorem pr_spec_pinning_gate_sound (inp : PRVerificationInput) :
     checkPRVerificationGate inp = true ↔
@@ -268,14 +257,9 @@ theorem pr_spec_pinning_gate_sound (inp : PRVerificationInput) :
 
 def prVerificationMetaSpec : MetaGateSpec PRVerificationInput
     (fun inp => inp.expectedSpecHash = inp.actualSpecHash ∧ inp.expectedTestSuiteHash = inp.actualTestSuiteHash ∧
-                inp.forbiddenAxiomsCount = 0 ∧ inp.tvAllPassed = true) where
-  gate := checkPRVerificationGate
-  sound := fun inp => (pr_spec_pinning_gate_sound inp).mp
-  complete := fun inp => (pr_spec_pinning_gate_sound inp).mpr
-  posWitness := ⟨1, 1, 1, 1, 0, true⟩
-  negWitness := ⟨1, 2, 1, 1, 0, true⟩
-  nonVacuous := rfl
-  tight := rfl
+                inp.forbiddenAxiomsCount = 0 ∧ inp.tvAllPassed = true) :=
+  ⟨checkPRVerificationGate, fun inp => (pr_spec_pinning_gate_sound inp).mp,
+   fun inp => (pr_spec_pinning_gate_sound inp).mpr, ⟨1, 1, 1, 1, 0, true⟩, ⟨1, 2, 1, 1, 0, true⟩, rfl, rfl⟩
 
 /-! ## 5. Semantic Mutant Discrimination & 4-Limb 256-Bit Lowering Homomorphism -/
 
@@ -283,14 +267,8 @@ def add64CarrySpec (x y : UInt64) : UInt64 :=
   ((x >>> 32) + (y >>> 32) + (((x &&& 0xffffffff) + (y &&& 0xffffffff)) >>> 32)) >>> 32
 
 def mul64HiSpec (x y : UInt64) : UInt64 :=
-  let x_lo := x &&& 0xffffffff
-  let x_hi := x >>> 32
-  let y_lo := y &&& 0xffffffff
-  let y_hi := y >>> 32
-  let p0 := x_lo * y_lo
-  let p1 := x_lo * y_hi
-  let p2 := x_hi * y_lo
-  let p3 := x_hi * y_hi
+  let x_lo := x &&& 0xffffffff; let x_hi := x >>> 32; let y_lo := y &&& 0xffffffff; let y_hi := y >>> 32
+  let p0 := x_lo * y_lo; let p1 := x_lo * y_hi; let p2 := x_hi * y_lo; let p3 := x_hi * y_hi
   p3 + (p1 >>> 32) + (p2 >>> 32) + (((p0 >>> 32) + (p1 &&& 0xffffffff) + (p2 &&& 0xffffffff)) >>> 32)
 
 def evalLimbMul256Lo (a b : UInt256) : UInt256 :=
@@ -902,12 +880,7 @@ theorem coxeter_braid_len (w : List Nat) : (coxeterBraidOnce w).length = w.lengt
   | cons a t ih =>
     cases t with
     | nil => rfl
-    | cons b u =>
-      cases u with
-      | nil => rfl
-      | cons c rest =>
-        simp only [coxeterBraidOnce]
-        split <;> simp [ih]
+    | cons b u => cases u with | nil => rfl | cons c rest => simp only [coxeterBraidOnce]; split <;> simp [ih]
 
 /-- Tropical `(min, +)` prefix scan: `scan[i] = min_{j≤i} x[j]`. -/
 def tropicalMinPlusScan : List Nat → List Nat
@@ -997,6 +970,24 @@ def verifyCAbiSliceIoC (rowCount rowBytes maxBufferBytes outLen outCap : UInt64)
 #guard verifyCAbiSliceIoC 16 48 4096 8 16 == 1
 #guard verifyCAbiSliceIoC 16 48 512 8 16 == 0
 #guard verifyCAbiSliceIoC 16 48 4096 32 16 == 0
+
+/-- Wave 15–18 structural loop-peephole, 1D `_scalar` hoisting, entry-guard unrolling, & dead-tail elision gate (`ln_c_opt`). -/
+structure Wave15To18StructuralGateInput where
+  (jpBranchesPure innerStopHoisted entryBoundsGuarded tailLimitLeCap : Bool)
+  deriving Repr, DecidableEq, BEq
+def canApplyWave15To18StructuralOpt (inp : Wave15To18StructuralGateInput) : Bool :=
+  inp.jpBranchesPure && inp.innerStopHoisted && inp.entryBoundsGuarded && inp.tailLimitLeCap
+theorem wave15_to_18_structural_gate_sound (inp : Wave15To18StructuralGateInput) :
+    canApplyWave15To18StructuralOpt inp = true ↔
+      (inp.jpBranchesPure = true ∧ inp.innerStopHoisted = true ∧ inp.entryBoundsGuarded = true ∧ inp.tailLimitLeCap = true) := by
+  simp [canApplyWave15To18StructuralOpt, Bool.and_eq_true, and_assoc]
+def wave15To18StructuralMetaSpec : MetaGateSpec Wave15To18StructuralGateInput
+    (fun inp => inp.jpBranchesPure = true ∧ inp.innerStopHoisted = true ∧ inp.entryBoundsGuarded = true ∧ inp.tailLimitLeCap = true) :=
+  ⟨canApplyWave15To18StructuralOpt, fun inp => (wave15_to_18_structural_gate_sound inp).mp,
+   fun inp => (wave15_to_18_structural_gate_sound inp).mpr, ⟨true, true, true, true⟩, ⟨true, true, false, true⟩, rfl, rfl⟩
+theorem unguarded_entry_rejects_wave15_to_18_opt (inp : Wave15To18StructuralGateInput)
+    (h_un : inp.entryBoundsGuarded = false) : canApplyWave15To18StructuralOpt inp = false :=
+  wave15To18StructuralMetaSpec.rejects_unsafe inp (by simp [h_un])
 
 end LeanNative.Spec
 
