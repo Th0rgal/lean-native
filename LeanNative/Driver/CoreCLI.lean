@@ -354,7 +354,7 @@ def runCompileLLVM (tag : String) (elaborateHook? : Option (String → IO LNIRMo
   let isBaseline := hasFlag args "--baseline"
   let outPath := findFlagValue args "-o" ""
   let telCfg ← TelemetryConfig.probe args
-  let baseMod ← loadInputModule elaborateHook? args
+  let baseMod ← if hasFlag args "--slot-regression" then pure slotTypeRegressionModule else loadInputModule elaborateHook? args
   let _ ← emitModuleTelemetryEvents telCfg .x86_64 false baseMod
   let (modToEmit, _) := if isBaseline then (baseMod, []) else runDefaultPipeline baseMod
   let irText := if isBaseline then emitLLVMBaseline modToEmit arch else emitLLVMOptimized modToEmit arch
@@ -690,10 +690,11 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
   IO.println s!"11. Exact 512-Bit mulDiv Overflow  : {status mulDivOk} ((2^60 * 2^60) / 2^60 == 2^60)"
   IO.println s!"12. CAS Telemetry Spooler (v1)     : {status telOk} ({telCount} accepted+rejected events, de Bruijn CAS blobs)"
   IO.println s!"13. In-Kernel Transitive Axiom Gate: {status axiomOk} ({axiomReport.theoremsAudited} theorems via Lean.collectAxioms, 0 {sAx})"
+  IO.println s!"14. LLVM Declared Slot Types      : {status slotTypeRegressionOk} (3-field i256 tuple, ptr call)"
   let allOk := roundTripWireOk && roundTripJsonOk && certReport.verified &&
     tvReport.allPassed && superoptOk && pluginsOk && law5Ok &&
     fcPropOk && fcNaiveVacuousOk && relSamplingOk && gpuHeadroomOk &&
-    metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk && axiomOk &&
+    metalValid && fcMetalValid && blake3Ok && tpuCodegenOk && mulDivOk && telOk && axiomOk && slotTypeRegressionOk &&
     llvmX86.length > 500 && ptxTxt.length > 500 && fcLlvm.length > 200 && fcPtx.length > 200
   if allOk then
     IO.println s!"=== ALL {tag.toUpper} v0.5.0 SELF-TESTS PASSED ==="
@@ -952,7 +953,7 @@ def printCoreUsage (tag : String) (hasFrontend : Bool) : IO Unit := do
     "",
     "Commands:"
   ] ++ fe ["  build-exe          Compile a .lean source file directly to a native executable (<file.lean> -o <bin>)"] ++ [
-    "  compile-llvm       Emit baseline or optimized LLVM 18 IR (--input <file>, --arch x86_64|arm64, --baseline, -o <path>)",
+    "  compile-llvm       Emit baseline or optimized LLVM 18 IR (--input <file>, --arch x86_64|arm64, --baseline, --slot-regression, -o <path>)",
     "  compile-static-lib Emit C-ABI static library (.a) + C header (.h) for zero-copy FFI (--input <file>, -o <lib.a>, --header <lib.h>)",
     "  compile-mlir       Emit GPU MLIR module (--input <file>, -o <path>)",
     "  compile-ptx        Emit NVIDIA PTX 8.0 assembly (--input <file>, --sm sm_90, --fastcheck, -o <path>)",

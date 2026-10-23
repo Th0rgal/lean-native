@@ -74,6 +74,16 @@ if command -v opt >/dev/null 2>&1; then
   opt -O3 -S /tmp/ln_ci_canon.ll -o /tmp/ln_ci_canon.opt.ll
   echo "  -> LLVM 18 opt -O3 verification: PASSED"
 fi
+$CORE_BIN compile-llvm --slot-regression --baseline -o /tmp/ln_ci_slot_types.ll
+grep -q "%slot_v4 = alloca { i64, i256, i64 }" /tmp/ln_ci_slot_types.ll
+grep -q "%slot_v6 = alloca ptr" /tmp/ln_ci_slot_types.ll
+if grep -q "{ i64, i64 }" /tmp/ln_ci_slot_types.ll; then exit 1; fi
+$CORE_BIN compile-llvm --slot-regression -o /tmp/ln_ci_slot_types.opt.ll
+for ll in /tmp/ln_ci_slot_types.ll /tmp/ln_ci_slot_types.opt.ll; do
+  if command -v opt >/dev/null 2>&1; then opt -O3 -S "$ll" -o /dev/null; fi
+  if command -v llc >/dev/null 2>&1; then llc -O2 "$ll" -o /dev/null; fi
+done
+echo "  -> LLVM declared slot-type regression (3-field i256 tuple, ptr call): PASSED"
 
 $CORE_BIN compile-metal -o /tmp/ln_ci_canon.metal
 $CORE_BIN compile-fastcheck --emit-metal -o /tmp/ln_ci_fastcheck.metal

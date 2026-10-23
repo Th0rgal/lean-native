@@ -50,7 +50,7 @@ def runTurboStatus : IO UInt32 := do
 def runFullSelfTest : IO UInt32 := do
   let coreRc ← runCoreSelfTest "lean-native"
   let turboOk ← runAdapterSelfTest "/tmp/lean_native_selftest_receipt.json"
-  IO.println s!"14. Turbo Lean Receipt & Fast-Check: {if turboOk then "PASSED" else "FAILED"}"
+  IO.println s!"15. Turbo Lean Receipt & Fast-Check: {if turboOk then "PASSED" else "FAILED"}"
   return if coreRc == 0 && turboOk then 0 else 1
 
 unsafe def runMain (args : List String) : IO UInt32 := do

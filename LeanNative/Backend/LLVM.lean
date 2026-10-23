@@ -21,10 +21,12 @@ def cpuTriple : TargetArch → String
   | .iosSimArm64 => "arm64-apple-ios-simulator" | .androidArm64 => "aarch64-linux-android"
   | .wasm32 => "wasm32-unknown-unknown" | _ => "x86_64-unknown-linux-gnu"
 
+def tupleFieldLLVMType (f : LNIRType) : String := if f.is256Bit then "i256" else "i64"
+
 def slotLLVMType : LNIRType → String
   | .objPtr | .taggedPtr | .sarray _ | .rawPtr _ | .storageMap => "ptr"
   | .u256 | .i256 => "i256"
-  | .tuple fs => "{ " ++ String.intercalate ", " (fs.map fun f => if f.is256Bit then "i256" else "i64") ++ " }"
+  | .tuple fs => "{ " ++ String.intercalate ", " (fs.map tupleFieldLLVMType) ++ " }"
   | _ => "i64"
 
 def sigLLVMType : LNIRType → String | .unit => "void" | ty => slotLLVMType ty
@@ -43,7 +45,7 @@ def collectExprVars : LNIRExpr → List (VarId × LNIRType)
   | .storageLoad m s => [(m, .storageMap), (s, .u256)]
   | .storageStore m s v => [(m, .storageMap), (s, .u256), (v, .u256)]
   | .mkTuple fs => fs.map (·, .i64)
-  | .projTuple tv _ => [(tv, .tuple [.i64, .i64])]
+  | .projTuple tv _ => [(tv, .i64)]
   | .allocCtor _ ofs sfs => ofs.map (·, .objPtr) ++ sfs.map (·, .i64)
   | .ctorGetObj v _ | .ctorGetScalar v _ _ | .isExclusive v | .sarrayLen v | .unboxScalar v _ => [(v, .objPtr)]
   | .sarrayDataPtr av et | .sarrayEnsureExclusive av et => [(av, .sarray et)]
@@ -74,12 +76,31 @@ partial def collectCodeVars (code : LNIRCode) : List (VarId × LNIRType) :=
   | .ret v => [(v, .i64)]
   | .unreachable => []
 
+/-- Binding sites only (`letBind`, loop index/accumulator, `parFor` output and kernel index):
+    their declared types are authoritative over the fallbacks guessed from references. -/
+partial def collectCodeDecls : LNIRCode → List (VarId × LNIRType)
+  | .letBind dst ty _ k => (dst, ty) :: collectCodeDecls k
+  | .rawStore _ _ _ _ k | .incRef _ _ k | .decRef _ _ k => collectCodeDecls k
+  | .ite _ t e => collectCodeDecls t ++ collectCodeDecls e
+  | .seqFor idxVar _ _ accVar _ accTy stepBody k =>
+    (idxVar, .i64) :: (accVar, accTy) :: (collectCodeDecls stepBody ++ collectCodeDecls k)
+  | .parFor outVar _ _ elemTy kernel k =>
+    let kDecls := match kernel with
+      | .customScalar iv _ _ => [(iv, .i64)]
+      | _ => []
+    (outVar, .sarray elemTy) :: kDecls ++ collectCodeDecls k
+  | .ret _ | .unreachable => []
+
 /-- Deduplicate variable declarations, keeping the first recorded type for each `VarId`. -/
 def dedupVars (vars : List (VarId × LNIRType)) : List (VarId × LNIRType) :=
   vars.foldl (fun acc (vid, ty) =>
     if acc.any (fun (id, _) => id == vid) then acc
     else acc ++ [(vid, ty)]
   ) []
+
+/-- Slot types for a declaration: parameters, then binding sites, then reference fallbacks. -/
+def declSlotVars (d : LNIRDecl) : List (VarId × LNIRType) :=
+  dedupVars (d.params.map (fun p => (p.id, p.ty)) ++ collectCodeDecls d.body ++ collectCodeVars d.body)
 
 /-- Mutable state for emitting LLVM instructions within a single declaration. -/
 structure EmitState where
@@ -435,13 +456,14 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
         | none => pure "0"
       let boxed ← freshTmp "box_tup"
       emitLine s!"  {boxed} = call ptr @lean_native_box_u64(i64 {f0})"
-    if llvmTy.startsWith "{" then
+    if let .tuple fieldTys := dstSlotTy then
       let mut curAgg := "undef"
       for idx in [0 : fields.length] do
         if let some fVar := fields[idx]? then
-          let fVal ← loadVarAsI64 fVar
+          let fTy := tupleFieldLLVMType (fieldTys[idx]?.getD .i64)
+          let fVal ← if fTy == "i256" then loadVarAsI256 fVar else loadVarAsI64 fVar
           let nextAgg ← freshTmp "tup_ins"
-          emitLine s!"  {nextAgg} = insertvalue {llvmTy} {curAgg}, i64 {fVal}, {idx}"
+          emitLine s!"  {nextAgg} = insertvalue {llvmTy} {curAgg}, {fTy} {fVal}, {idx}"
           curAgg := nextAgg
       emitLine s!"  store {llvmTy} {curAgg}, ptr %slot_v{dst}, align 8"
     else
@@ -451,12 +473,13 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
   | .projTuple tupleVar idx =>
     let tupSlotTy ← getVarSlotType tupleVar
     let llvmTupTy := slotLLVMType tupSlotTy
-    if llvmTupTy.startsWith "{" then
+    if let .tuple fieldTys := tupSlotTy then
       let tupVal ← freshTmp "tup_ld"
       let extr ← freshTmp "tup_proj"
       emitLine s!"  {tupVal} = load {llvmTupTy}, ptr %slot_v{tupleVar}, align 8"
       emitLine s!"  {extr} = extractvalue {llvmTupTy} {tupVal}, {idx}"
-      storeI64ToVar dst extr
+      if tupleFieldLLVMType (fieldTys[idx]?.getD .i64) == "i256" then storeI256ToVar dst extr
+      else storeI64ToVar dst extr
     else
       let v ← loadVarAsI64 tupleVar
       storeI64ToVar dst v
@@ -841,8 +864,7 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
     s!"{pTy}{attrs} %arg_v{p.id}"
   let paramSigStr := String.intercalate ", " paramSigs
   let fnAttr := if optimized then "#0" else "#1"
-  let paramVars := d.params.map (fun p => (p.id, p.ty))
-  let allVars := dedupVars (paramVars ++ collectCodeVars d.body)
+  let allVars := declSlotVars d
   let allocaLines := allVars.foldl (fun acc (vid, ty) =>
     let sTy := slotLLVMType ty
     let zeroVal := if sTy == "ptr" then "null" else if sTy == "i64" || sTy == "i256" then "0" else "zeroinitializer"
@@ -1016,6 +1038,34 @@ def emitLLVMBaseline (m : LNIRModule) (target : TargetArch := .x86_64) : String 
 
 def emitLLVMOptimized (m : LNIRModule) (target : TargetArch := .x86_64) : String :=
   emitLLVMModule true m target
+
+/-- Slot-type regression: a 3-field tuple parameter with an `i256` field, a projection that
+    precedes the tuple's own binding, and a `ptr`-returning `.call` with an `i64` argument. -/
+def slotTypeRegressionModule : LNIRModule where
+  moduleName := "slot_type_regression"
+  decls := [{
+    name := "slot_type_regression"
+    params := [{ id := 0, name := "t", ty := .tuple [.i64, .u256, .i64] }, { id := 1, name := "n", ty := .i64 }]
+    retTy := .i64
+    body :=
+      .letBind 2 .u256 (.projTuple 0 1)
+        (.letBind 3 .i64 (.projTuple 4 2)
+          (.letBind 4 (.tuple [.i64, .u256, .i64]) (.mkTuple [1, 2, 1])
+            (.letBind 5 .objPtr (.call "lean_native_box_u64" [1] .objPtr)
+              (.letBind 6 .objPtr (.call "lean_native_ensure_exclusive" [5] .objPtr)
+                (.ret 3)))))
+  }]
+
+def slotTypeRegressionOk : Bool :=
+  let d := slotTypeRegressionModule.decls.head!
+  let vars := declSlotVars d
+  let tup3 := "{ i64, i256, i64 }"
+  let ir := emitLLVMOptimized slotTypeRegressionModule
+  let has (s : String) := (ir.splitOn s).length > 1
+  vars.lookup 0 == some (.tuple [.i64, .u256, .i64]) && vars.lookup 4 == some (.tuple [.i64, .u256, .i64]) &&
+    vars.lookup 2 == some .u256 && vars.lookup 5 == some .objPtr && vars.lookup 6 == some .objPtr &&
+    has s!"%slot_v4 = alloca {tup3}" && has "%slot_v5 = alloca ptr" && has "%slot_v6 = alloca ptr" && has "%slot_v2 = alloca i256" &&
+    has s!"extractvalue {tup3}" && has s!"insertvalue {tup3}" && !has "{ i64, i64 }"
 
 end LeanNative.Backend.LLVM
 
