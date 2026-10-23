@@ -139,49 +139,30 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Proofs.evalScalarExpr_shr_shl_mask_collapse_u64
   , ``LeanNative.Proofs.evalScalarExpr_fma_fusion_u64
   , ``LeanNative.Proofs.uint64_rotl_comm_or
-  , ``LeanNative.Spec.small_trip_prefers_cpu_simd
-  , ``LeanNative.Spec.matrix_contraction_prefers_tpu_mxu
-  , ``LeanNative.Spec.federated_node_effective_cost_monotone_in_queue
-  , ``LeanNative.Spec.composeAffineBudget_eval
-  , ``LeanNative.Spec.affine_step_budget_monotone
-  , ``LeanNative.Spec.bootstrap_shift_step_budget_sound
-  , ``LeanNative.Spec.empirical_high_water_refutes_loose_bound
-  , ``LeanNative.Spec.evalLoopStepBudget_monotone
-  , ``LeanNative.Spec.riscv_div_by_zero_spec
-  , ``LeanNative.Spec.zisk_csr_atomic_step_budget
-  , ``LeanNative.Spec.evalPassChainBudget_cons
-  , ``LeanNative.Spec.sptLookup_insert_same
-  , ``LeanNative.Spec.pass_chain_two_passes_eval
-  , ``LeanNative.Spec.spt_rom_fetch_deterministic
-  , ``LeanNative.Spec.mulDivDown_le_mulDivUp
-  , ``LeanNative.Spec.mulDivDown_zero_denom
-  , ``LeanNative.Spec.dotNat_nil_left
-  , ``LeanNative.Spec.dotNat_nil_right
-  , ``LeanNative.Spec.dotNat_cons
-  , ``LeanNative.Spec.dotNat_le_of_pointwise_le
-  , ``LeanNative.Spec.farkas_weighted_rows_le
-  , ``LeanNative.Spec.checkFarkasNat_sound
-  , ``LeanNative.Spec.MetaGateSpec.rejects_unsafe
-  , ``LeanNative.Spec.sampleMonotoneOffsets4_valid
-  , ``LeanNative.Spec.sampleLoadFactorHalf_valid
-  , ``LeanNative.Spec.subSliceView_valid
-  , ``LeanNative.Spec.gpu_memory_headroom_gate_sound
-  , ``LeanNative.Spec.gpu_oom_falls_back_to_cpu_simd
+  , ``LeanNative.Spec.small_trip_prefers_cpu_simd, ``LeanNative.Spec.matrix_contraction_prefers_tpu_mxu
+  , ``LeanNative.Spec.federated_node_effective_cost_monotone_in_queue, ``LeanNative.Spec.composeAffineBudget_eval
+  , ``LeanNative.Spec.affine_step_budget_monotone, ``LeanNative.Spec.bootstrap_shift_step_budget_sound
+  , ``LeanNative.Spec.empirical_high_water_refutes_loose_bound, ``LeanNative.Spec.evalLoopStepBudget_monotone
+  , ``LeanNative.Spec.riscv_div_by_zero_spec, ``LeanNative.Spec.zisk_csr_atomic_step_budget
+  , ``LeanNative.Spec.evalPassChainBudget_cons, ``LeanNative.Spec.sptLookup_insert_same
+  , ``LeanNative.Spec.pass_chain_two_passes_eval, ``LeanNative.Spec.spt_rom_fetch_deterministic
+  , ``LeanNative.Spec.mulDivDown_le_mulDivUp, ``LeanNative.Spec.mulDivDown_zero_denom
+  , ``LeanNative.Spec.dotNat_nil_left, ``LeanNative.Spec.dotNat_nil_right
+  , ``LeanNative.Spec.dotNat_cons, ``LeanNative.Spec.dotNat_le_of_pointwise_le
+  , ``LeanNative.Spec.farkas_weighted_rows_le, ``LeanNative.Spec.checkFarkasNat_sound
+  , ``LeanNative.Spec.MetaGateSpec.rejects_unsafe, ``LeanNative.Spec.sampleMonotoneOffsets4_valid
+  , ``LeanNative.Spec.sampleLoadFactorHalf_valid, ``LeanNative.Spec.subSliceView_valid
+  , ``LeanNative.Spec.gpu_memory_headroom_gate_sound, ``LeanNative.Spec.gpu_oom_falls_back_to_cpu_simd
   , ``LeanNative.Spec.matryoshka_incremental_prefix_eq_full_eval
-  , ``LeanNative.Spec.sarray_restrict_simd_gate_sound
-  , ``LeanNative.Spec.sarray_escaping_closure_rejects_restrict_simd
-  , ``LeanNative.Spec.nested_prod_while_sroa_gate_sound
-  , ``LeanNative.Spec.escaping_pair_rejects_nested_prod_sroa
-  , ``LeanNative.Spec.mulhi_u128_peephole_gate_sound
-  , ``LeanNative.Spec.non32_mask_rejects_mulhi_u128_peephole
-  , ``LeanNative.Spec.tuple_sarray_fill_gate_sound
-  , ``LeanNative.Spec.non_sarray_tag_rejects_tuple_fill
-  , ``LeanNative.Spec.nat_bool_while_sroa_gate_sound
-  , ``LeanNative.Spec.escaping_nat_rejects_while_sroa
-  , ``LeanNative.Spec.mixed_sarray_while_sroa_gate_sound
-  , ``LeanNative.Spec.escaping_alias_rejects_mixed_while_sroa
-  , ``LeanNative.Spec.nested_range_tuple_mut_gate_sound
-  , ``LeanNative.Spec.non_unit_step_rejects_nested_range_mut
+  , ``LeanNative.Spec.sarray_restrict_simd_gate_sound, ``LeanNative.Spec.sarray_escaping_closure_rejects_restrict_simd
+  , ``LeanNative.Spec.nested_prod_while_sroa_gate_sound, ``LeanNative.Spec.escaping_pair_rejects_nested_prod_sroa
+  , ``LeanNative.Spec.mulhi_u128_peephole_gate_sound, ``LeanNative.Spec.non32_mask_rejects_mulhi_u128_peephole
+  , ``LeanNative.Spec.tuple_sarray_fill_gate_sound, ``LeanNative.Spec.non_sarray_tag_rejects_tuple_fill
+  , ``LeanNative.Spec.nat_bool_while_sroa_gate_sound, ``LeanNative.Spec.escaping_nat_rejects_while_sroa
+  , ``LeanNative.Spec.mixed_sarray_while_sroa_gate_sound, ``LeanNative.Spec.escaping_alias_rejects_mixed_while_sroa
+  , ``LeanNative.Spec.nested_range_tuple_mut_gate_sound, ``LeanNative.Spec.non_unit_step_rejects_nested_range_mut
+  , ``LeanNative.Spec.early_return_ctor_strip_gate_sound, ``LeanNative.Spec.escaping_ctor_rejects_early_return_strip
+  , ``LeanNative.Spec.nested_2d_range_forin_gate_sound, ``LeanNative.Spec.non_scalar_inner_idx_rejects_2d_range_forin
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

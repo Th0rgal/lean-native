@@ -432,6 +432,24 @@ def apply_pass2_range_forin(c_text):
                     supported = False; break
                 if idx in params and idx != i_var:
                     nat_Params.add(idx)
+                nat_temps[gm.group(1)] = f"ln_nt_{gm.group(1)}"
+            elif "= lean_nat_mul(" in cl:
+                nm = re.match(r"([a-zA-Z0-9_]+) = lean_nat_mul\(([^,]+), ([^)]+)\);", cl)
+                if not nm:
+                    supported = False; break
+                a1, a2 = nm.group(2).strip(), nm.group(3).strip()
+                if a1 not in params and a1 != i_var and a1 not in nat_temps:
+                    supported = False; break
+                if a2 not in params and a2 != i_var and a2 not in nat_temps:
+                    supported = False; break
+                for a in (a1, a2):
+                    if a in params and a != i_var:
+                        nat_Params.add(a)
+                nat_temps[nm.group(1)] = f"ln_nt_{nm.group(1)}"
+            elif "= l_" in cl and "Range_forIn_x27_loop" in cl:
+                cm = re.match(r"([a-zA-Z0-9_]+) = (l_[a-zA-Z0-9_]*Range_forIn_x27_loop[a-zA-Z0-9_]*)\(([^)]+)\);", cl)
+                if not cm:
+                    supported = False; break
             elif any(fn_call in cl for fn_call in ("lean_alloc_", "lean_array_", "ln_array_", "lean_nat_", "l_")):
                 if "___boxed__const__" not in cl:
                     supported = False; break
@@ -511,6 +529,27 @@ def apply_pass2_range_forin(c_text):
                 else:
                     fp.append(f"{dst_u} = ({idx_expr} < ln_sz_{arr}) ? ln_ptr_{arr}[{idx_expr}] : 0ULL;")
                 continue
+            cm = re.match(r"([a-zA-Z0-9_]+) = (l_[a-zA-Z0-9_]*Range_forIn_x27_loop[a-zA-Z0-9_]*)\(([^)]+)\);", cl)
+            if cm:
+                dst_u, callee = cm.group(1), cm.group(2)
+                re_args = []
+                for a in (x.strip() for x in cm.group(3).split(",")):
+                    if a == i_var:
+                        re_args.append("lean_box(ln_i)")
+                    elif a in nat_temps:
+                        re_args.append(f"lean_box(ln_nt_{a})")
+                    else:
+                        re_args.append(a)
+                fp.append(f"{dst_u} = {callee}({', '.join(re_args)});")
+                continue
+            nm2 = re.match(r"([a-zA-Z0-9_]+) = lean_nat_mul\(([^,]+), ([^)]+)\);", cl)
+            if nm2:
+                def nat_expr(a, i_var=i_var, nat_temps=nat_temps):
+                    if a == i_var: return "ln_i"
+                    if a in nat_temps: return f"ln_nt_{a}"
+                    return f"ln_nat_{a}"
+                fp.append(f"size_t ln_nt_{nm2.group(1)} = {nat_expr(nm2.group(2).strip())} * {nat_expr(nm2.group(3).strip())};")
+                continue
             sm = re.match(re.escape(next_b) + r" = ln_sarray_set_u64\(" + re.escape(b_var) + r", ([^,]+), ([^)]+)\);", cl)
             if sm:
                 idx, val_u = sm.group(1).strip(), sm.group(2).strip()
@@ -564,6 +603,27 @@ def apply_pass2_range_forin(c_text):
                 dst_u, arr, idx = gm.group(1), gm.group(3).strip(), gm.group(4).strip()
                 idx_expr = "ln_i" if idx == i_var else (f"ln_nt_{idx}" if idx in nat_temps else f"ln_nat_{idx}")
                 fp.append(f"{dst_u} = ({idx_expr} < ln_sz_{arr}) ? ln_ptr_{arr}[{idx_expr}] : 0ULL;")
+                continue
+            cm = re.match(r"([a-zA-Z0-9_]+) = (l_[a-zA-Z0-9_]*Range_forIn_x27_loop[a-zA-Z0-9_]*)\(([^)]+)\);", cl)
+            if cm:
+                dst_u, callee = cm.group(1), cm.group(2)
+                re_args = []
+                for a in (x.strip() for x in cm.group(3).split(",")):
+                    if a == i_var:
+                        re_args.append("lean_box(ln_i)")
+                    elif a in nat_temps:
+                        re_args.append(f"lean_box(ln_nt_{a})")
+                    else:
+                        re_args.append(a)
+                fp.append(f"{dst_u} = {callee}({', '.join(re_args)});")
+                continue
+            nm2 = re.match(r"([a-zA-Z0-9_]+) = lean_nat_mul\(([^,]+), ([^)]+)\);", cl)
+            if nm2:
+                def nat_expr(a, i_var=i_var, nat_temps=nat_temps):
+                    if a == i_var: return "ln_i"
+                    if a in nat_temps: return f"ln_nt_{a}"
+                    return f"ln_nat_{a}"
+                fp.append(f"size_t ln_nt_{nm2.group(1)} = {nat_expr(nm2.group(2).strip())} * {nat_expr(nm2.group(3).strip())};")
                 continue
             sm = re.match(re.escape(next_b) + r" = ln_sarray_set_u64\(" + re.escape(b_var) + r", ([^,]+), ([^)]+)\);", cl)
             if sm:
@@ -1867,6 +1927,8 @@ def apply_pass3_while_sroa(c_text):
                 flags=re.DOTALL
             )
             sh_body = re.sub(r"\breturn [a-zA-Z0-9_]+;", ret_assigns, sh_body)
+            dead_ctor = r"(?:[ \t]*lean_object\* [^\n]+\n)?(?:[ \t]*[a-zA-Z0-9_]+ = lean_alloc_ctor\(0, 2, 0\);\n|[ \t]*lean_ctor_set\([^\n]+\);\n)+"
+            sh_body = re.sub(dead_ctor + r"([ \t]*\*p_0 = [^\n]+return;)", r"\1", sh_body)
             sh_body = sh_body.replace("goto _start;", "continue;")
             for o_m in list(re.finditer(r"([a-zA-Z0-9_]+) = lean_obj_once\(&([a-zA-Z0-9_]+), &[a-zA-Z0-9_]+_once, _init_[a-zA-Z0-9_]+\);", sh_body)):
                 o_var, o_sym = o_m.group(1), o_m.group(2)
@@ -1879,7 +1941,7 @@ def apply_pass3_while_sroa(c_text):
                 if f"ln_sarray_u64_ptr({ep_name})" in sh_body:
                     sh_hdr.append(f"const uint64_t* ptr_{ep_name} = ln_sarray_u64_ptr({ep_name});")
                     sh_body = sh_body.replace(f"ln_sarray_u64_ptr({ep_name})", f"ptr_{ep_name}")
-            unroll_prag = "\n#pragma clang loop unroll(full)" if all(leaf_is_u64[lv] for lv in leaves) else ""
+            unroll_prag = "\n#pragma clang loop unroll(full)" if (all(leaf_is_u64[lv] for lv in leaves) and "_scalar(" not in sh_body) else ""
             scalar_helper = (
                 f"static inline __attribute__((always_inline)) void {fn_name}_scalar({sig_args}){{\n"
                 + "\n".join(sh_hdr)
@@ -1888,12 +1950,25 @@ def apply_pass3_while_sroa(c_text):
                 + "\n}\n}\n}\n"
             )
 
+        body_joined = "\n".join(cleaned_lines)
+        for o_m in list(re.finditer(r"([a-zA-Z0-9_]+) = lean_obj_once\(&([a-zA-Z0-9_]+), &[a-zA-Z0-9_]+_once, _init_[a-zA-Z0-9_]+\);", body_joined)):
+            o_var, o_sym = o_m.group(1), o_m.group(2)
+            hdr.append(f"lean_object* {o_var}_hoist = lean_obj_once(&{o_sym}, &{o_sym}_once, _init_{o_sym});")
+            hdr.append(f"const uint64_t* ptr_{o_var} = ln_sarray_u64_ptr({o_var}_hoist);")
+            body_joined = body_joined.replace(o_m.group(0), f"{o_var} = {o_var}_hoist;")
+            body_joined = body_joined.replace(f"ln_sarray_u64_ptr({o_var})", f"ptr_{o_var}")
+        for ep in param_decls[:-1]:
+            ep_name = ep.split()[-1]
+            if f"ln_sarray_u64_ptr({ep_name})" in body_joined:
+                hdr.append(f"const uint64_t* ptr_{ep_name} = ln_sarray_u64_ptr({ep_name});")
+                body_joined = body_joined.replace(f"ln_sarray_u64_ptr({ep_name})", f"ptr_{ep_name}")
+
         f_final = (
             scalar_helper
             + f"LEAN_EXPORT lean_object* {fn_name}({params_str}){{\n"
             + "\n".join(hdr)
             + "\n_start:\n{\n"
-            + "\n".join(cleaned_lines)
+            + body_joined
             + "\n}\n}\n}"
         )
         out_parts.append(f_final)
@@ -1981,6 +2056,40 @@ def apply_pass3b_structural_peepholes(c_text):
             + (f"{m.group(23)} = 72340172838076673ULL;\n" if m.group(23) else "")
             + (f"{m.group(25)} = 56ULL;\n" if m.group(25) else "")
             + f"{m.group(26)} = (uint64_t)__builtin_popcountll({m.group(2)});"
+        ),
+        c_text
+    )
+    # Peephole D: sign-bit branch diamond -> arithmetic shift right
+    c_text = re.sub(
+        r"(?:([a-zA-Z0-9_]+) = 9223372036854775808ULL;\n)?"
+        r"([a-zA-Z0-9_]+) = lean_uint64_land\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = 0ULL;\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_dec_eq\(\2, \5\);\n"
+        r"if \(\6 == 0\)\n"
+        r"\{\n"
+        r"(?:[ \t]*uint64_t [^\n]+\n)?"
+        r"([a-zA-Z0-9_]+) = ([0-9]+)ULL;\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_shift_right\(\3, \7\);\n"
+        r"([a-zA-Z0-9_]+) = 18446[0-9]+ULL;\n"
+        r"([a-zA-Z0-9_]+) = lean_uint64_lor\(\9, \10\);\n"
+        r"((?:[a-zA-Z0-9_]+ = [a-zA-Z0-9_]+;\n)*)"
+        r"([a-zA-Z0-9_]+) = \11;\n"
+        r"goto ([a-zA-Z0-9_]+);\n"
+        r"\}\n"
+        r"else\n"
+        r"\{\n"
+        r"(?:[ \t]*uint64_t [^\n]+\n)?"
+        r"[a-zA-Z0-9_]+ = \8ULL;\n"
+        r"[a-zA-Z0-9_]+ = lean_uint64_shift_right\(\3, [a-zA-Z0-9_]+\);\n"
+        r"\12"
+        r"\13 = [a-zA-Z0-9_]+;\n"
+        r"goto \14;\n"
+        r"\}",
+        lambda m: (
+            (f"{m.group(1)} = 9223372036854775808ULL;\n" if m.group(1) else "")
+            + m.group(12)
+            + f"{m.group(13)} = (uint64_t)(((int64_t)({m.group(3)})) >> {m.group(8)}ULL);\n"
+            + f"goto {m.group(14)};"
         ),
         c_text
     )
@@ -2158,81 +2267,6 @@ def apply_pass2c_hot_loops(c_text):
             + "for (size_t j = 0; j < dim; ++j) row_c[j] += aik * row_b[j];\n"
             + "}\n}\n"
             + "return p_5;\n}\n}\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 8. benchSpectralNorm_spec__5___redArg: full spectral norm sweeps in-place
-    # v4.35.0 repeatM state: (u, (v, (tmp, sw_box))); caller reads u at field 0 and v at field 1.0
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchSpectralNorm_spec__5___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_sweeps = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"lean_object* p_n = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[2].strip().split()[-1]};\n"
-            + "lean_object* u = lean_ctor_get(p_a, 0); lean_object* t1 = lean_ctor_get(p_a, 1);\n"
-            + "lean_object* v = lean_ctor_get(t1, 0); lean_object* t2 = lean_ctor_get(t1, 1);\n"
-            + "lean_object* tmp = lean_ctor_get(t2, 0); lean_object* sw_box = lean_ctor_get(t2, 1);\n"
-            + "if (lean_is_scalar(p_n) && lean_obj_tag(tmp) == 248 && lean_obj_tag(u) == 248 && lean_obj_tag(v) == 248) {\n"
-            + "size_t n = lean_unbox(p_n);\n"
-            + "if (ln_sarray_u64_size(tmp) >= n && ln_sarray_u64_size(u) >= n && ln_sarray_u64_size(v) >= n) {\n"
-            + "uint64_t sw = lean_unbox_uint64(sw_box);\n"
-            + "lean_inc(tmp); lean_inc(u); lean_inc(v); lean_dec(p_a); lean_dec(p_n);\n"
-            + "tmp = ln_sarray_ensure_exclusive_u64(tmp); u = ln_sarray_ensure_exclusive_u64(u); v = ln_sarray_ensure_exclusive_u64(v);\n"
-            + "uint64_t *pt = ln_sarray_u64_ptr(tmp), *pu = ln_sarray_u64_ptr(u), *pv = ln_sarray_u64_ptr(v);\n"
-            + "for (; sw < p_sweeps; ++sw) {\n"
-            + "for (size_t i = 0; i < n; ++i) {\n"
-            + "uint64_t sum = 0ULL;\n"
-            + "for (size_t j = 0; j < n; ++j) { uint64_t ij = (uint64_t)(i + j); uint64_t d = ((ij * (ij + 1ULL) / 2ULL + (uint64_t)i + 1ULL) & 255ULL) + 1ULL; sum += pu[j] * d; }\n"
-            + "pt[i] = sum >> 8ULL;\n}\n"
-            + "for (size_t i = 0; i < n; ++i) {\n"
-            + "uint64_t sum = 0ULL;\n"
-            + "for (size_t j = 0; j < n; ++j) { uint64_t ij = (uint64_t)(i + j); uint64_t d = ((ij * (ij + 1ULL) / 2ULL + (uint64_t)j + 1ULL) & 255ULL) + 1ULL; sum += pt[j] * d; }\n"
-            + "pv[i] = sum >> 8ULL;\n}\n"
-            + "for (size_t i = 0; i < n; ++i) pu[i] = pv[i] & 4294967295ULL;\n"
-            + "}\n"
-            + "lean_object* r2 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r2, 0, tmp); lean_ctor_set(r2, 1, lean_box_uint64(sw));\n"
-            + "lean_object* r1 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r1, 0, v); lean_ctor_set(r1, 1, r2);\n"
-            + "lean_object* r0 = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r0, 0, u); lean_ctor_set(r0, 1, r1);\n"
-            + "return r0;\n}\n}\n}\n"
-        ),
-        c_text, count=1
-    )
-
-    # 10. benchMandelbrotSimd_spec__2___redArg: 2D fixed-point pixel loop with cardioid/bulb interior check
-    c_text = re.sub(
-        r"(LEAN_EXPORT lean_object\* l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00benchMandelbrotSimd_spec__2___redArg\()([^)]+)(\)\{\n)",
-        lambda m: (
-            m.group(1) + m.group(2) + "){\n{\n"
-            + f"uint64_t p_h = {m.group(2).split(',')[0].strip().split()[-1]};\n"
-            + f"uint64_t p_w = {m.group(2).split(',')[1].strip().split()[-1]};\n"
-            + f"uint64_t p_max = {m.group(2).split(',')[2].strip().split()[-1]};\n"
-            + f"lean_object* p_a = {m.group(2).split(',')[3].strip().split()[-1]};\n"
-            + "if (!lean_is_scalar(p_a)) {\n"
-            + "uint64_t total = lean_unbox_uint64(lean_ctor_get(p_a, 0)), py = lean_unbox_uint64(lean_ctor_get(p_a, 1));\n"
-            + "lean_dec(p_a);\n"
-            + "for (; py < p_h; ++py) {\n"
-            + "int64_t cy = (int64_t)((py * 131072ULL) / p_h - 65536ULL);\n"
-            + "int64_t cy2 = cy * cy;\n"
-            + "for (uint64_t px = 0; px < p_w; ++px) {\n"
-            + "int64_t cx = (int64_t)((px * 196608ULL) / p_w - 131072ULL);\n"
-            + "int64_t xm = cx - 16384;\n"
-            + "int64_t q = xm * xm + cy2;\n"
-            + "if (((__int128)4 * (__int128)q * (__int128)(q + (xm << 16)) < ((__int128)cy2 << 30) - ((__int128)1 << 44)) || ((cx + 65536) * (cx + 65536) + cy2 < (4000LL << 16))) { total += p_max; continue; }\n"
-            + "int64_t zr = 0, zi = 0; uint64_t it = 0ULL;\n"
-            + "while (it < p_max) {\n"
-            + "int64_t zr2 = (int64_t)((uint64_t)zr * (uint64_t)zr) >> 16;\n"
-            + "int64_t zi2 = (int64_t)((uint64_t)zi * (uint64_t)zi) >> 16;\n"
-            + "if ((int64_t)((uint64_t)zr2 + (uint64_t)zi2) > 262144) break;\n"
-            + "int64_t zri = (int64_t)(((uint64_t)zr << 1ULL) * (uint64_t)zi) >> 16;\n"
-            + "zr = (int64_t)((uint64_t)zr2 - (uint64_t)zi2 + (uint64_t)cx);\n"
-            + "zi = (int64_t)((uint64_t)zri + (uint64_t)cy); ++it;\n"
-            + "}\n"
-            + "total += it;\n"
-            + "}\n}\n"
-            + "lean_object* r = lean_alloc_ctor(0, 2, 0); lean_ctor_set(r, 0, lean_box_uint64(total)); lean_ctor_set(r, 1, lean_box_uint64(py));\n"
-            + "return r;\n}\n}\n"
         ),
         c_text, count=1
     )

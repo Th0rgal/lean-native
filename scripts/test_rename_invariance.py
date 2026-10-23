@@ -46,6 +46,16 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         assert m_csr, f"Missing {fn_csr}"
         assert "lean_copy_expand_array" in c3[m_csr.start() : m_csr.start() + 1400], f"Sub-pass 2E failed on {fn_csr}"
 
+    # 1d. Verify Pass 2 2D outer->inner Range.forIn' and indirect gather fast-paths on renamed SpectralNorm & CSR
+    for fn_2d in [
+        "renamedTaskSpectralNorm_spec__1___redArg",
+        "renamedTaskSpectralNorm_spec__3___redArg",
+        "renamedTaskSparseMatmulCsr_spec__2___redArg",
+    ]:
+        m_2d = re.search(rf"LEAN_EXPORT (?:lean_object\*|uint64_t) [^\n]*{fn_2d}\([^)]*\)\{{", c3)
+        assert m_2d, f"Missing {fn_2d}"
+        assert "for (; ln_i < ln_limit; ++ln_i)" in c3[m_2d.start() : m_2d.start() + 1800], f"Pass 2 2D failed on {fn_2d}"
+
     # 2. Verify Pass 3 interprocedural scalar companion emission and outer-loop scalarization
     for inner_fn in [
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskSha256Compress_spec__0___redArg_scalar",
@@ -53,6 +63,7 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskJsonSimdScanner_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__1___redArg_scalar",
+        "l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__2___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__0___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__1___redArg_scalar",
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRobinHoodHtab_spec__2___redArg_scalar",
@@ -61,6 +72,12 @@ def verify_rename_invariance(raw_c_path: str) -> None:
         "l___private_Init_While_0__repeatM_erased___at___00renamedTaskRegexDfaStep_spec__3___redArg_scalar",
     ]:
         assert f"void {inner_fn}(" in c3, f"Missing scalar helper {inner_fn}"
+
+    # 2b. Verify early-return Prod constructor stripping in renamed Mandelbrot scalar companions
+    m_mb0 = c3.find("void l___private_Init_While_0__repeatM_erased___at___00renamedTaskMandelbrotSimd_spec__0___redArg_scalar(")
+    m_mb0_end = c3.find("\nLEAN_EXPORT ", m_mb0)
+    assert "lean_alloc_ctor" not in c3[m_mb0:m_mb0_end], "Early-return ctor not stripped in Mandelbrot _scalar"
+    assert "((int64_t)(" in c3[m_mb0:m_mb0_end], "Peephole D arithmetic shift did not fire in Mandelbrot _scalar"
 
     # 3. Verify Pass 3b structural peepholes (mulHi __uint128_t and __builtin_popcountll)
     assert "__uint128_t" in c3, "Pass 3b mulHi __uint128_t peephole did not fire on renamed C"

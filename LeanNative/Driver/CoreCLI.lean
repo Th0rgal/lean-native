@@ -477,16 +477,13 @@ def runCoreSelfTest (tag : String) : IO UInt32 := do
     LeanNative.Spec.hasSufficientGpuMemory ⟨4096, 1024, 2048⟩ &&
     !(LeanNative.Spec.hasSufficientGpuMemory ⟨2048, 1024, 2048⟩) &&
     LeanNative.Spec.isValidByteSlice (LeanNative.Spec.subSliceView ⟨64, 8, 32⟩ 4 16) &&
-    LeanNative.Spec.canEmitRestrictSimd ⟨true, false, 64⟩ &&
-    !(LeanNative.Spec.canEmitRestrictSimd ⟨true, true, 64⟩) &&
-    LeanNative.Spec.canUnboxNestedProdWhile ⟨8, false, true⟩ &&
-    LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩ &&
-    LeanNative.Spec.canRewriteTupleSArrayFill ⟨248, 248, 64, 64, 64, true⟩ &&
-    LeanNative.Spec.canUnboxNatBoolWhile ⟨true, true, false⟩ &&
-    LeanNative.Spec.canRewriteMixedSArrayWhile ⟨true, true, false⟩ &&
-    LeanNative.Spec.canRewriteNestedRangeTupleMut ⟨246, 248, 248, 1⟩
+    LeanNative.Spec.canEmitRestrictSimd ⟨true, false, 64⟩ && !(LeanNative.Spec.canEmitRestrictSimd ⟨true, true, 64⟩) &&
+    LeanNative.Spec.canUnboxNestedProdWhile ⟨8, false, true⟩ && LeanNative.Spec.canRewriteMulHiU128 ⟨32, 32, true⟩ &&
+    LeanNative.Spec.canRewriteTupleSArrayFill ⟨248, 248, 64, 64, 64, true⟩ && LeanNative.Spec.canUnboxNatBoolWhile ⟨true, true, false⟩ &&
+    LeanNative.Spec.canRewriteMixedSArrayWhile ⟨true, true, false⟩ && LeanNative.Spec.canRewriteNestedRangeTupleMut ⟨246, 248, 248, 1⟩ &&
+    LeanNative.Spec.canStripEarlyReturnCtor ⟨true, true, false⟩ && LeanNative.Spec.canRewriteNested2DRangeForIn ⟨248, 1, true, true⟩
   let axiomReport := verifiedAxiomAuditReport
-  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 157
+  let axiomOk := axiomReport.passed && axiomReport.forbiddenAxiomsFound.isEmpty && axiomReport.theoremsAudited >= 161
   let sAx := "sor" ++ "ryAx"
   let status (b : Bool) := if b then "PASSED" else "FAILED"
   IO.println s!"1. Canonical 8-Kernel Module       : {optMod.decls.length} declarations (incl. 256-bit EVM/Verity)"
