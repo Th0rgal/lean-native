@@ -283,14 +283,14 @@ def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) : String :=
     s!"    pub fn {s.cSymbol}({paramsRs}){retPart};"
   String.intercalate "\n" ([
     "//! Auto-generated Rust FFI bindings by lean-native C-ABI Binding Generator",
-    "#![allow(dead_code, non_camel_case_types, clashing_external_declarations)]",
+    "#![allow(dead_code, non_camel_case_types, non_snake_case, clashing_extern_declarations)]",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
     "pub struct LeanNativeFlatSlice { pub data: *const core::ffi::c_void, pub len: usize, pub stride_bytes: usize }",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
     "pub struct LeanNativeMutSlice { pub data: *mut core::ffi::c_void, pub len: usize, pub cap: usize }",
     "pub type LeanNativeSliceOutScanFn = extern \"C\" fn(ptr: *const u8, len: usize, out_spans: *mut u64, cap: usize, state_io: *mut u64) -> u32;",
     "#[inline] pub const fn lean_native_pack_span(start: u32, len: u32, kind: u8) -> u64 { ((start as u64) << 32) | (((len & 0xFF_FFFF) as u64) << 8) | (kind as u64) }",
-    "extern \"C\" {"
+    "unsafe extern \"C\" {"
   ] ++ declExterns ++ ["}", ""])
 
 def emitGuardFixturesJson (sourcePath : String) (sigs : List CAbiBindingSig) (guards : List (String × String)) : String :=
@@ -401,7 +401,7 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
       let keepAsmLine (ln : String) : Bool :=
         let t := ln.trimAscii.toString
         !(t.startsWith ".cfi_" || t.startsWith ".file" || t.startsWith ".addrsig" ||
-          t.startsWith ".prefalign" || t.startsWith ".ident")
+          t.startsWith ".prefalign" || t.startsWith ".ident" || t.startsWith ".att_syntax")
       let cleanAsm := String.intercalate "\n" ((rawAsm.splitOn "\n").filter keepAsmLine)
       IO.FS.writeFile asmPath cleanAsm
   let clangOk ← runCmdOk "clang" (cpuFlags ++ #["-c", tmpLl, "-o", tmpObj])
