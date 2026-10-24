@@ -3165,6 +3165,10 @@ def apply_pass3_while_sroa(c_text):
             state_arg = call_args[-1]
             arg_leaves = []
             arg_pairs_local = set()
+            static_sarray_consts = {
+                v for v in c_const_var_map.values()
+                if str(v).startswith("l_")
+            }
             def extract_c_arg(t_node, cur_v):
                 if isinstance(t_node, tuple):
                     if cur_v in c_pair_defs:
@@ -3178,6 +3182,8 @@ def apply_pass3_while_sroa(c_text):
                     return False
                 else:
                     if callee_leaf_kinds[t_node] == "sarray":
+                        if cur_v in static_sarray_consts:
+                            return False
                         arg_leaves.append(cur_v)
                         return True
                     if cur_v in c_box_map or cur_v in scalar_consts or cur_v in c_leaf_vars:
@@ -3185,6 +3191,11 @@ def apply_pass3_while_sroa(c_text):
                         return True
                     return False
             if not extract_c_arg(callee_tree, state_arg):
+                continue
+            if any(
+                kind == "sarray" and str(c_const_var_map.get(av, av)).startswith("l_")
+                for av, kind in zip(arg_leaves, callee_leaf_kinds)
+            ):
                 continue
             ret_local_internal = set()
             ret_local_leaves = {}
