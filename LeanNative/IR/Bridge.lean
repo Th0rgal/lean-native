@@ -732,6 +732,14 @@ def resolveLeanSysroot : IO System.FilePath := do
   try
     Lean.findSysroot
   catch _ =>
+    let candidates := [
+      "/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0",
+      "/var/lib/orb-node/work/caches/elan/toolchains/leanprover--lean4---v4.35.0"
+    ]
+    for c in candidates do
+      let p := System.FilePath.mk c
+      if ← p.pathExists then
+        return p
     return System.FilePath.mk "/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"
 
 /-- Run `Lean.Elab.runFrontend` on `filePath` and execute `act` inside `CoreM`. -/
