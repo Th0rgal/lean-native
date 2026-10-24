@@ -52,16 +52,18 @@ def emitMetalU256Library : String :=
     "    ulong r3 = a.l0 * b.l3 + a.l1 * b.l2 + a.l2 * b.l1 + a.l3 * b.l0;",
     "    ln_u256 r = { r0, r1, r2, r3 }; return r;\n}",
     "inline ulong ln_clmul64(ulong a, ulong b) {",
+    "    if (b == 0x87UL) { return a ^ (a << 1UL) ^ (a << 2UL) ^ (a << 7UL); }",
     "    ulong r = 0UL;",
     "    for (uint i = 0u; i < 64u; ++i) {",
-    "        if ((b & 1UL) != 0UL) { r ^= a; }",
-    "        a <<= 1UL; b >>= 1UL;",
+    "        r ^= a & (0UL - ((b >> i) & 1UL));",
+    "        a <<= 1UL;",
     "    }",
     "    return r;\n}",
     "inline ulong ln_clmul64_hi(ulong a, ulong b) {",
+    "    if (b == 0x87UL) { return (a >> 63UL) ^ (a >> 62UL) ^ (a >> 57UL); }",
     "    ulong r = 0UL;",
     "    for (uint i = 1u; i < 64u; ++i) {",
-    "        if (((b >> i) & 1UL) != 0UL) { r ^= (a >> (64u - i)); }",
+    "        r ^= (a >> (64u - i)) & (0UL - ((b >> i) & 1UL));",
     "    }",
     "    return r;\n}",
     "inline uint4 ln_gf128_mulx(uint4 v) {",
@@ -231,10 +233,36 @@ def emitMetalModule (m : LNIRModule) : String :=
   let declKernels := m.decls.foldl (fun acc d =>
     if !(analyzeDeclGpuSuitability d).1 then acc
     else match emitMetalDeclKernel d with | some k => acc ++ [k] | none => acc) []
+  let hasSnarkFastNtt := m.decls.any (fun d => d.name == "snark_fast_ghash_mul_lo") &&
+                         m.decls.any (fun d => d.name == "snark_fast_ntt_btf_u_lo")
+  let snarkFastNttKernel := if hasSnarkFastNtt then [
+    String.intercalate "\n" [
+      "kernel void lean_native_kernel_ntt_butterfly_f128(",
+      "    device ulong2* top [[buffer(0)]],",
+      "    device ulong2* bot [[buffer(1)]],",
+      "    constant ulong2& twiddle [[buffer(2)]],",
+      "    constant ulong& n [[buffer(3)]],",
+      "    uint gid [[thread_position_in_grid]]",
+      ") {",
+      "    if ((ulong)gid < n) {",
+      "        ulong2 u = top[gid];",
+      "        ulong2 v = bot[gid];",
+      "        ulong p_lo = snark_fast_ghash_mul_lo(v.x, v.y, twiddle.x, twiddle.y);",
+      "        ulong p_hi = snark_fast_ghash_mul_hi(v.x, v.y, twiddle.x, twiddle.y);",
+      "        ulong nu_lo = snark_fast_ntt_btf_u_lo(u.x, p_lo);",
+      "        ulong nu_hi = snark_fast_ntt_btf_u_lo(u.y, p_hi);",
+      "        ulong nv_lo = snark_fast_ntt_btf_v_lo(u.x, v.x, p_lo);",
+      "        ulong nv_hi = snark_fast_ntt_btf_v_lo(u.y, v.y, p_hi);",
+      "        top[gid] = ulong2(nu_lo, nu_hi);",
+      "        bot[gid] = ulong2(nv_lo, nv_hi);",
+      "    }",
+      "}"
+    ]
+  ] else []
   String.intercalate "\n\n" ([
     headerComment, emitMetalU256Library, kMapScaleAdd, kZipAdd, kZipMul, kSaxpy,
     kStencil1D, kDotReduceU64, kMatMulTiledU64
-  ] ++ declKernels) ++ "\n"
+  ] ++ declKernels ++ snarkFastNttKernel) ++ "\n"
 
 /-- Emit the Apple Metal FastCheck GPU counterexample search kernel (`lean_native_fastcheck_metal_kernel`)
     with per-thread SplitMix64 PRNG, equality constraint propagation (`x0 = x1 + 42`),
