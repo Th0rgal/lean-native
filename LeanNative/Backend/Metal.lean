@@ -300,6 +300,11 @@ def emitMetalModule (m : LNIRModule) : String :=
   let hasSnarkFastBlake3 := m.decls.any (fun d => d.name == "snark_fast_blake3_add_sum") &&
                             m.decls.any (fun d => d.name == "snark_fast_blake3_xor_rotr32") &&
                             m.decls.any (fun d => d.name == "snark_fast_blake3_finalize_word_pair")
+  let hasChunkFlags := m.decls.any (fun d => d.name == "snark_fast_blake3_chunk_flags")
+  let flagsLine := if hasChunkFlags then
+    "            uint flags = (uint)snark_fast_blake3_chunk_flags((ulong)blk, (ulong)blocks_per_leaf);"
+  else
+    "            uint flags = ((blk == 0u) ? 1u : 0u) | ((blk + 1u == blocks_per_leaf) ? 2u : 0u);"
   let snarkFastBlake3Kernels := if hasSnarkFastBlake3 then [
     String.intercalate "\n" [
       "inline void ln_blake3_g(thread uint& a, thread uint& b, thread uint& c, thread uint& d, uint mx, uint my) {",
@@ -370,7 +375,7 @@ def emitMetalModule (m : LNIRModule) : String :=
       "            uint m[16];",
       "            ulong blk_off = base_word + (ulong)blk * 16UL;",
       "            for (uint i = 0u; i < 16u; ++i) { m[i] = data[blk_off + (ulong)i]; }",
-      "            uint flags = ((blk == 0u) ? 1u : 0u) | ((blk + 1u == blocks_per_leaf) ? 2u : 0u);",
+      flagsLine,
       "            ln_blake3_compress(cv, m, 64u, flags);",
       "        }",
       "        ulong out_off = (ulong)gid * 8UL;",
