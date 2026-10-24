@@ -32,8 +32,8 @@
     },
     "cpu": "x86_64"
   },
-  "commit_id": "edb6643a97bace6f2ab7ac674808f77a7eb42552",
-  "scripts_ln_c_opt_status": "M scripts/ln_c_opt.py",
+  "commit_id": "0b60029709b92d75ab41a57622dc151c9b194ced",
+  "scripts_ln_c_opt_status": "",
   "commands": {
     "lean_build": [
       "/var/lib/sandboxed-node/.transfers/3b52f4d5-d644-4313-97ee-5edbe60ddbed/destination/workspace/lean-native/.lake/build/bin/lean-native",
@@ -51,7 +51,7 @@
       "/tmp/gf128_ntt_v1_c"
     ]
   },
-  "generated_at_utc": "2026-10-24T06:49:41.034963+00:00",
+  "generated_at_utc": "2026-10-24T06:50:58.927768+00:00",
   "source_sha256": {
     "gf128_ntt_v1.lean": "e2796aa4f1c6b9b356d197f45232f8ae5f0811a3853dc43e1a4b29b3f64565ba",
     "gf128_ntt_v1.c": "57b2748e521ed7a0bd9d220e4307f0ac0496ba532c58d4a73e4578f45c7a76fc",
@@ -63,45 +63,45 @@
         "checksum": 13665706732021628708,
         "metric": "field_muls_per_sec",
         "samples_ns": [
-          59729,
-          96904,
-          59274,
-          59740,
-          60174,
-          60711,
-          59923,
-          59468,
-          59604
+          60553,
+          61197,
+          62755,
+          61500,
+          61236,
+          61113,
+          60786,
+          60900,
+          61036
         ],
-        "median_ns": 59740,
-        "iqr_ns": 570,
-        "min_ns": 59274,
-        "max_ns": 96904,
-        "stdev_ns": 12365.850356032042,
+        "median_ns": 61113,
+        "iqr_ns": 336,
+        "min_ns": 60553,
+        "max_ns": 62755,
+        "stdev_ns": 633.9692421561159,
         "ops_per_trial": 4096,
-        "median_ops_per_sec": 68563776.36424506
+        "median_ops_per_sec": 67023382.913619034
       },
       "ntt_modular": {
         "checksum": 26402257024,
         "metric": "butterflies_per_sec",
         "samples_ns": [
-          334669,
-          335579,
-          370327,
-          381999,
-          335711,
-          335008,
-          373241,
-          334739,
-          334946
+          338994,
+          338507,
+          345206,
+          344519,
+          345914,
+          338672,
+          343282,
+          338648,
+          343489
         ],
-        "median_ns": 335579,
-        "iqr_ns": 35381,
-        "min_ns": 334669,
-        "max_ns": 381999,
-        "stdev_ns": 20271.983935827408,
+        "median_ns": 343282,
+        "iqr_ns": 5847,
+        "min_ns": 338507,
+        "max_ns": 345914,
+        "stdev_ns": 3148.1483490740675,
         "ops_per_trial": 65536,
-        "median_ops_per_sec": 195292315.6693357
+        "median_ops_per_sec": 190910097.23783943
       }
     },
     "c_o3": {
@@ -109,45 +109,45 @@
         "checksum": 13665706732021628708,
         "metric": "field_muls_per_sec",
         "samples_ns": [
-          661873,
-          686154,
-          684586,
-          648957,
-          648956,
-          685243,
-          696456,
-          656370,
-          648942
+          669333,
+          668980,
+          669266,
+          678793,
+          668286,
+          665204,
+          665190,
+          671303,
+          673345
         ],
-        "median_ns": 661873,
-        "iqr_ns": 36286,
-        "min_ns": 648942,
-        "max_ns": 696456,
-        "stdev_ns": 19266.667425749696,
+        "median_ns": 669266,
+        "iqr_ns": 3017,
+        "min_ns": 665190,
+        "max_ns": 678793,
+        "stdev_ns": 4202.577185489875,
         "ops_per_trial": 4096,
-        "median_ops_per_sec": 6188498.39772887
+        "median_ops_per_sec": 6120137.583561693
       },
       "ntt_modular": {
         "checksum": 26402257024,
         "metric": "butterflies_per_sec",
         "samples_ns": [
-          261055,
-          260842,
-          261098,
-          261111,
-          284497,
-          261523,
-          260859,
-          296954,
-          299225
+          267277,
+          265393,
+          267727,
+          267187,
+          265799,
+          268963,
+          270074,
+          267284,
+          267791
         ],
-        "median_ns": 261111,
-        "iqr_ns": 23442,
-        "min_ns": 260842,
-        "max_ns": 299225,
-        "stdev_ns": 16716.785796351855,
+        "median_ns": 267284,
+        "iqr_ns": 604,
+        "min_ns": 265393,
+        "max_ns": 270074,
+        "stdev_ns": 1433.0586267762312,
         "ops_per_trial": 65536,
-        "median_ops_per_sec": 250989042.97406083
+        "median_ops_per_sec": 245192379.64113078
       }
     }
   }
