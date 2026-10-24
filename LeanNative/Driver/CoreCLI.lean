@@ -48,7 +48,7 @@ def toOptimizationCert (c : PassStepCert) : OptimizationCert where
 
 def parseTargetArch : String → TargetArch
   | "arm64" | "aarch64" => .arm64
-  | "ios" | "ios-arm64" | "arm64-apple-ios" => .iosArm64
+  | "ios" | "ios-arm64" | "arm64-apple-ios" | "macos-arm64" | "m3" => .iosArm64
   | "ios-sim" | "ios-sim-arm64" | "arm64-apple-ios-simulator" => .iosSimArm64
   | "android" | "android-arm64" | "aarch64-linux-android" => .androidArm64
   | "wasm" | "wasm32" | "wasm32-unknown-unknown" => .wasm32
@@ -515,8 +515,10 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
     catch _ => return false
   let cpuFlags : Array String :=
     match arch with
-    | .x86_64 => #["-O3", "-fPIC", "-mpclmul", "-mavx2"]
-    | _       => #["-O3", "-fPIC"]
+    | .x86_64   => #["--target=x86_64-unknown-linux-gnu", "-O3", "-fPIC", "-mpclmul", "-mavx2", "-Wno-override-module"]
+    | .arm64    => #["--target=aarch64-unknown-linux-gnu", "-O3", "-fPIC", "-mcpu=apple-m3", "-Wno-override-module"]
+    | .iosArm64 => #["--target=arm64-apple-macosx14.0.0", "-O3", "-fPIC", "-mcpu=apple-m3", "-Wno-override-module"]
+    | _         => #[s!"--target={arch.triple}", "-O3", "-fPIC", "-Wno-override-module"]
   if !asmPath.isEmpty then
     if ← runCmdOk "clang" (cpuFlags ++ #["-S", tmpLl, "-o", asmPath]) then
       let rawAsm ← try IO.FS.readFile asmPath catch _ => pure ""

@@ -288,6 +288,22 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
         let wide ← freshTmp "bound256"
         emitLine s!"  {wide} = zext i64 {v} to i256"
         return wide
+  | .binOp .bitXor (.binOp .bitXor a b) c =>
+    let st ← get
+    if !is256 && st.optimized && (st.target == .arm64 || st.target == .iosArm64 || st.target == .iosSimArm64 || st.target == .androidArm64) then
+      let aVal ← emitSub a
+      let bVal ← emitSub b
+      let cVal ← emitSub c
+      let va ← freshTmp "eor3_va"; let vb ← freshTmp "eor3_vb"; let vc ← freshTmp "eor3_vc"
+      let vp ← freshTmp "eor3_vp"; let res ← freshTmp "eor3_res"
+      emitLine s!"  {va} = insertelement <2 x i64> zeroinitializer, i64 {aVal}, i64 0\n  {vb} = insertelement <2 x i64> zeroinitializer, i64 {bVal}, i64 0\n  {vc} = insertelement <2 x i64> zeroinitializer, i64 {cVal}, i64 0\n  {vp} = call <2 x i64> @llvm.aarch64.crypto.eor3u.v2i64(<2 x i64> {va}, <2 x i64> {vb}, <2 x i64> {vc})\n  {res} = extractelement <2 x i64> {vp}, i64 0"
+      return res
+    else
+      let lVal ← emitSub (.binOp .bitXor a b)
+      let rVal ← emitSub c
+      let res ← freshTmp ("alu" ++ sfx)
+      emitLine s!"  {res} = xor {tyStr} {lVal}, {rVal}"
+      return res
   | .binOp op lhs rhs =>
     if is256 && (op == .clmul64 || op == .clmul64Hi || op == .gf2Affine || op == .eor3) then
       let v64 ← emitScalarExprWithWidth "i64" "63" e
@@ -377,9 +393,16 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
         emitLine s!"  {bit} = and i64 {parity}, 1\n  {placed} = shl i64 {bit}, {i}\n  {next} = or i64 {acc}, {placed}"; acc := next
       return acc
     | .eor3 =>
-      let hi ← freshTmp "eor3_hi"; let lo ← freshTmp "eor3_lo"; let hiXor ← freshTmp "eor3_hi_xor"
-      emitLine s!"  {hi} = lshr i64 {rVal}, 32\n  {lo} = and i64 {rVal}, 4294967295\n  {hiXor} = xor i64 {lVal}, {hi}\n  {res} = xor i64 {hiXor}, {lo}"
-      return res
+      let st ← get
+      let hi ← freshTmp "eor3_hi"; let lo ← freshTmp "eor3_lo"
+      if st.optimized && (st.target == .arm64 || st.target == .iosArm64 || st.target == .iosSimArm64 || st.target == .androidArm64) then
+        let va ← freshTmp "eor3_va"; let vb ← freshTmp "eor3_vb"; let vc ← freshTmp "eor3_vc"; let vp ← freshTmp "eor3_vp"
+        emitLine s!"  {hi} = lshr i64 {rVal}, 32\n  {lo} = and i64 {rVal}, 4294967295\n  {va} = insertelement <2 x i64> zeroinitializer, i64 {lVal}, i64 0\n  {vb} = insertelement <2 x i64> zeroinitializer, i64 {hi}, i64 0\n  {vc} = insertelement <2 x i64> zeroinitializer, i64 {lo}, i64 0\n  {vp} = call <2 x i64> @llvm.aarch64.crypto.eor3u.v2i64(<2 x i64> {va}, <2 x i64> {vb}, <2 x i64> {vc})\n  {res} = extractelement <2 x i64> {vp}, i64 0"
+        return res
+      else
+        let hiXor ← freshTmp "eor3_hi_xor"
+        emitLine s!"  {hi} = lshr i64 {rVal}, 32\n  {lo} = and i64 {rVal}, 4294967295\n  {hiXor} = xor i64 {lVal}, {hi}\n  {res} = xor i64 {hiXor}, {lo}"
+        return res
   | .unaryOp op arg =>
     if !is256 && op == .clz256 then
       let v256 ← emit256 e
@@ -830,7 +853,29 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
         for (caseLbl, _, brCode) in labeledCases do emitLine s!"{caseLbl}:"; emitCode brCode retTy loopAccTarget
         emitLine s!"{defLbl}:"; emitCode defaultBranch retTy loopAccTarget
       else emitLetExpr dst ty val; emitCode k retTy loopAccTarget
-    | none => emitLetExpr dst ty val; emitCode k retTy loopAccTarget
+    | none =>
+      let st ← get
+      let isArm := st.optimized && (st.target == .arm64 || st.target == .iosArm64 || st.target == .iosSimArm64 || st.target == .androidArm64)
+      match isArm, ty, val, k with
+      | true, .i64, .scalar (.binOp .bitXor (.var a) (.var b)),
+          .letBind dst2 .i64 (.scalar (.binOp .bitXor (.var c) (.var d))) k2 =>
+        if c == dst || d == dst then
+          let thirdVar := if c == dst then d else c
+          let aVal ← loadVarAsI64 a
+          let bVal ← loadVarAsI64 b
+          let x1 ← freshTmp "xor_pair"
+          emitLine s!"  {x1} = xor i64 {aVal}, {bVal}"
+          storeI64ToVar dst x1
+          let cVal ← loadVarAsI64 thirdVar
+          let va ← freshTmp "eor3_va"; let vb ← freshTmp "eor3_vb"; let vc ← freshTmp "eor3_vc"
+          let vp ← freshTmp "eor3_vp"; let res ← freshTmp "eor3_res"
+          emitLine s!"  {va} = insertelement <2 x i64> zeroinitializer, i64 {aVal}, i64 0\n  {vb} = insertelement <2 x i64> zeroinitializer, i64 {bVal}, i64 0\n  {vc} = insertelement <2 x i64> zeroinitializer, i64 {cVal}, i64 0\n  {vp} = call <2 x i64> @llvm.aarch64.crypto.eor3u.v2i64(<2 x i64> {va}, <2 x i64> {vb}, <2 x i64> {vc})\n  {res} = extractelement <2 x i64> {vp}, i64 0"
+          storeI64ToVar dst2 res
+          emitCode k2 retTy loopAccTarget
+        else
+          emitLetExpr dst ty val; emitCode k retTy loopAccTarget
+      | _, _, _, _ =>
+        emitLetExpr dst ty val; emitCode k retTy loopAccTarget
   | .rawStore ptrVar idxVar valVar _ k =>
     let rawPtr ← loadVarAsPtr ptrVar
     let idxVal ← loadVarAsI64 idxVar
@@ -953,7 +998,7 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) (target : TargetArch := .x86_64
   let loopMd := if optimized then ", !llvm.loop !0" else ", !llvm.loop !3"
   let clmulDecl :=
     if target == .arm64 || target == .iosArm64 || target == .iosSimArm64 || target == .androidArm64 then
-      "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64) #2"
+      "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64) #2\ndeclare <2 x i64> @llvm.aarch64.crypto.eor3u.v2i64(<2 x i64>, <2 x i64>, <2 x i64>) #2"
     else "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8 immarg) #2"
   let mkRcFn (fnName lbl op : String) : String :=
     String.intercalate "\n" [
@@ -1016,8 +1061,8 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) (target : TargetArch := .x86_64
     scalar-unroll `shufflevector` overhead. -/
 def emitMetadataFooter (target : TargetArch) : String :=
   let cpuAttr := match target with
-    | .arm64 | .androidArm64 => "\"target-cpu\"=\"neoverse-v2\" \"target-features\"=\"+neon,+aes\""
-    | .iosArm64 | .iosSimArm64 => "\"target-cpu\"=\"apple-m1\" \"target-features\"=\"+neon,+aes\""
+    | .arm64 | .androidArm64 => "\"target-cpu\"=\"apple-m3\" \"target-features\"=\"+neon,+aes,+sha3\""
+    | .iosArm64 | .iosSimArm64 => "\"target-cpu\"=\"apple-m3\" \"target-features\"=\"+neon,+aes,+sha3\""
     | .wasm32 => "\"target-features\"=\"+simd128\""
     | _      => "\"target-cpu\"=\"x86-64-v3\" \"target-features\"=\"+pclmul,+avx2\""
   let vecModeMeta := match target with

@@ -58,6 +58,27 @@ def emitMetalU256Library : String :=
     "        a <<= 1UL; b >>= 1UL;",
     "    }",
     "    return r;\n}",
+    "inline ulong ln_clmul64_hi(ulong a, ulong b) {",
+    "    ulong r = 0UL;",
+    "    for (uint i = 1u; i < 64u; ++i) {",
+    "        if (((b >> i) & 1UL) != 0UL) { r ^= (a >> (64u - i)); }",
+    "    }",
+    "    return r;\n}",
+    "inline uint4 ln_gf128_mulx(uint4 v) {",
+    "    uint c0 = v.x >> 31u; uint c1 = v.y >> 31u; uint c2 = v.z >> 31u; uint c3 = v.w >> 31u;",
+    "    return uint4((v.x << 1u) ^ (c3 * 0x87u), (v.y << 1u) | c0, (v.z << 1u) | c1, (v.w << 1u) | c2);\n}",
+    "inline uint4 ln_gf128_shl8(uint4 a) {",
+    "    uint hi = a.w >> 24u;",
+    "    uint4 s = uint4(a.x << 8u, (a.y << 8u) | (a.x >> 24u), (a.z << 8u) | (a.y >> 24u), (a.w << 8u) | (a.z >> 24u));",
+    "    uint r_lo = (hi << 7u) ^ (hi << 2u) ^ (hi << 1u) ^ hi;",
+    "    uint r_hi = (hi >> 25u) ^ (hi >> 30u) ^ (hi >> 31u);",
+    "    return uint4(s.x ^ r_lo, s.y ^ r_hi, s.z, s.w);\n}",
+    "inline uint4 ln_gf128_shl16(uint4 a) {",
+    "    uint hi = a.w >> 16u;",
+    "    uint4 s = uint4(a.x << 16u, (a.y << 16u) | (a.x >> 16u), (a.z << 16u) | (a.y >> 16u), (a.w << 16u) | (a.z >> 16u));",
+    "    uint r_lo = (hi << 7u) ^ (hi << 2u) ^ (hi << 1u) ^ hi;",
+    "    uint r_hi = (hi >> 25u) ^ (hi >> 30u) ^ (hi >> 31u);",
+    "    return uint4(s.x ^ r_lo, s.y ^ r_hi, s.z, s.w);\n}",
     "inline ln_u256 ln_u256_clz(ln_u256 a) {",
     "    ulong z = 256UL;",
     "    if (a.l3 != 0UL) { z = (ulong)clz(a.l3); }",
@@ -90,6 +111,61 @@ def emitMetalMatMulTiledKernel (fnName : String) : String :=
     "    if (row < dim && col < dim) {\n        C[row * dim + col] = acc;\n    }\n}"
   ]
 
+partial def emitMetalScalarExpr (e : ScalarExpr) : String :=
+  match e with
+  | .constU64 v => s!"{v}UL"
+  | .constBool b => if b then "1UL" else "0UL"
+  | .var id => s!"v{id}"
+  | .binOp op l r =>
+    let ls := emitMetalScalarExpr l
+    let rs := emitMetalScalarExpr r
+    match op with
+    | .add => s!"({ls} + {rs})"
+    | .sub => s!"({ls} - {rs})"
+    | .mul => s!"({ls} * {rs})"
+    | .div => s!"(({rs} == 0UL) ? 0UL : ({ls} / {rs}))"
+    | .mod => s!"(({rs} == 0UL) ? 0UL : ({ls} % {rs}))"
+    | .bitAnd => s!"({ls} & {rs})"
+    | .bitOr => s!"({ls} | {rs})"
+    | .bitXor => s!"({ls} ^ {rs})"
+    | .shl => s!"({ls} << ({rs} & 63UL))"
+    | .shr => s!"({ls} >> ({rs} & 63UL))"
+    | .sar => s!"((ulong)(((long){ls}) >> ({rs} & 63UL)))"
+    | .eq => s!"(({ls} == {rs}) ? 1UL : 0UL)"
+    | .lt => s!"(({ls} < {rs}) ? 1UL : 0UL)"
+    | .le => s!"(({ls} <= {rs}) ? 1UL : 0UL)"
+    | .clmul64 => s!"ln_clmul64({ls}, {rs})"
+    | .clmul64Hi => s!"ln_clmul64_hi({ls}, {rs})"
+    | .eor3 => s!"({ls} ^ ({rs} >> 32UL) ^ ({rs} & 0xffffffffUL))"
+    | _ => s!"({ls} ^ {rs})"
+  | .unaryOp op a =>
+    let as_ := emitMetalScalarExpr a
+    match op with
+    | .not => s!"(~{as_})"
+    | .neg => s!"(0UL - {as_})"
+    | .clz256 => s!"((ulong)clz({as_}))"
+  | .select c t e =>
+    s!"((({emitMetalScalarExpr c}) != 0UL) ? ({emitMetalScalarExpr t}) : ({emitMetalScalarExpr e}))"
+  | .fma a b c =>
+    s!"(({emitMetalScalarExpr a}) * ({emitMetalScalarExpr b}) + ({emitMetalScalarExpr c}))"
+
+partial def emitMetalCodeBody (c : LNIRCode) (indent : String := "    ") : Option String :=
+  match c with
+  | .letBind dst _ (.scalar e) k => do
+    let rest ← emitMetalCodeBody k indent
+    some s!"{indent}ulong v{dst} = {emitMetalScalarExpr e};\n{rest}"
+  | .letBind dst _ (.call fnName args _ _) k => do
+    let rest ← emitMetalCodeBody k indent
+    let argStr := String.intercalate ", " (args.map fun a => s!"v{a}")
+    some s!"{indent}ulong v{dst} = {fnName}({argStr});\n{rest}"
+  | .incRef _ _ k | .decRef _ _ k => emitMetalCodeBody k indent
+  | .ite cv t e => do
+    let tb ← emitMetalCodeBody t (indent ++ "    ")
+    let eb ← emitMetalCodeBody e (indent ++ "    ")
+    some s!"{indent}if (v{cv} != 0UL) \{\n{tb}\n{indent}} else \{\n{eb}\n{indent}}"
+  | .ret v => some s!"{indent}return v{v};"
+  | _ => none
+
 def emitMetalDeclKernel (d : LNIRDecl) : Option String :=
   let fnName := s!"lean_native_metal_decl_{d.name}"
   if d.name == "dot_product_u64" then
@@ -113,7 +189,19 @@ def emitMetalDeclKernel (d : LNIRDecl) : Option String :=
       some (emitMetal1DKernel fnName ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"] "out[gid] = in0[gid] + in1[gid];")
     | [(_, _, _, .i64, .zipMul)] =>
       some (emitMetal1DKernel fnName ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"] "out[gid] = in0[gid] * in1[gid];")
-    | _ => none
+    | _ =>
+      if d.retTy == .i64 && d.params.all (fun p => p.ty == .i64) && !(d.name.endsWith "___boxed") then
+        match emitMetalCodeBody d.body "    " with
+        | some bodyStr =>
+          let paramSig := String.intercalate ", " (d.params.map fun p => s!"ulong v{p.id}")
+          let devFn := s!"inline ulong {d.name}({paramSig}) \{\n{bodyStr}\n}"
+          let inBufs := (List.range d.params.length).map fun idx => s!"device const ulong* in{idx}"
+          let allBufs := inBufs ++ ["device ulong* out", "constant ulong& n"]
+          let callArgs := String.intercalate ", " ((List.range d.params.length).map fun idx => s!"in{idx}[gid]")
+          let kernFn := emitMetal1DKernel fnName allBufs s!"out[gid] = {d.name}({callArgs});"
+          some (devFn ++ "\n\n" ++ kernFn)
+        | none => none
+      else none
 
 /-- Emit a complete Apple Metal Shading Language (MSL 3.0) module for an `LNIRModule`. -/
 def emitMetalModule (m : LNIRModule) : String :=
