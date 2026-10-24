@@ -209,42 +209,62 @@ def lowerLitValue (lit : Lean.Compiler.LCNF.LitValue) : LNIRExpr :=
   | .usize v   => .scalar (.constU64 v)
   | .str s     => .scalar (.constU64 s.length.toUInt64)
 
-/-- Normalize constant prefixes inside `e` by replacing `ns` with `` `canonical `` so that
-    a local definition of `clmul64` / `clmul64Hi` / `gf2Affine` / `eor3` can be checked for
-    bit-for-bit kernel AST equality against the canonical `LeanNative.IR` definition. -/
-private def normalizeIntrinsicPrefix (ns : Lean.Name) (e : Lean.Expr) : Lean.Expr :=
-  e.replace fun sub =>
-    match sub with
-    | .const n ls =>
-      if ns.isPrefixOf n then
-        some (.const (n.replacePrefix ns `canonical) ls)
-      else none
-    | _ => none
+/-- Alpha-normalize binder names and replace `fnName` prefix with `` `canonical_intrinsic ``
+    so standalone definitions of `clmul64` / `clmul64Hi` / `gf2Affine` / `eor3` can be checked
+    for exact kernel AST equality against `LeanNative.IR` even when `LeanNative.IR.Types` is not
+    imported by the user file. -/
+partial def eraseBinderNamesAndPrefix (fnName : Lean.Name) : Lean.Expr → Lean.Expr
+  | .const n ls =>
+    if fnName.isPrefixOf n then .const (n.replacePrefix fnName `canonical_intrinsic) ls
+    else .const n ls
+  | .app f a => .app (eraseBinderNamesAndPrefix fnName f) (eraseBinderNamesAndPrefix fnName a)
+  | .lam _ t b bi => .lam `_ (eraseBinderNamesAndPrefix fnName t) (eraseBinderNamesAndPrefix fnName b) bi
+  | .forallE _ t b bi => .forallE `_ (eraseBinderNamesAndPrefix fnName t) (eraseBinderNamesAndPrefix fnName b) bi
+  | .letE _ t v b nd =>
+    .letE `_ (eraseBinderNamesAndPrefix fnName t) (eraseBinderNamesAndPrefix fnName v)
+      (eraseBinderNamesAndPrefix fnName b) nd
+  | .mdata _ e => eraseBinderNamesAndPrefix fnName e
+  | .proj t i e => .proj t i (eraseBinderNamesAndPrefix fnName e)
+  | e => e
+
+def normalizeIntrinsicDecl (fnName : Lean.Name) (e : Lean.Expr) : String :=
+  toString (repr (eraseBinderNamesAndPrefix fnName e))
+
+elab "canon_decl_repr% " base:ident " : " target:ident : term => do
+  let env ← Lean.getEnv
+  let bName := base.getId
+  let tName := target.getId
+  let some (.defnInfo d) := env.find? tName | Lean.throwError "missing {tName}"
+  return Lean.toExpr (normalizeIntrinsicDecl bName d.value)
+
+def canonClmul64Repr : String := canon_decl_repr% LeanNative.IR.clmul64 : LeanNative.IR.clmul64
+def canonClmul64GoRepr : String := canon_decl_repr% LeanNative.IR.clmul64 : LeanNative.IR.clmul64.go._unary
+def canonClmul64HiRepr : String := canon_decl_repr% LeanNative.IR.clmul64Hi : LeanNative.IR.clmul64Hi
+def canonClmul64HiGoRepr : String := canon_decl_repr% LeanNative.IR.clmul64Hi : LeanNative.IR.clmul64Hi.go._unary
+def canonGf2AffineRepr : String := canon_decl_repr% LeanNative.IR.gf2Affine : LeanNative.IR.gf2Affine
+def canonGf2AffineGoRepr : String := canon_decl_repr% LeanNative.IR.gf2Affine : LeanNative.IR.gf2Affine.go._unary
+def canonEor3Repr : String := canon_decl_repr% LeanNative.IR.eor3 : LeanNative.IR.eor3
 
 /-- Verify that `fnName` has the exact `UInt64 → UInt64 → UInt64` signature and the exact
-    kernel AST body (including recursive `.go._unary` helper where present) as the canonical
+    alpha-normalized kernel AST body (including `.go._unary` where present) as the canonical
     `LeanNative.IR` intrinsic declaration. Rejects fake wrappers, aliases, and externs. -/
 def trustedGfSimdIntrinsicOp (env : Lean.Environment) (fnName : Lean.Name) : Option BinOp := do
-  let (op, canonName, hasGo) ←
+  let (op, expBody, expGoOpt) ←
     match fnName with
-    | .str _ "clmul64Hi" => some (BinOp.clmul64Hi, ``LeanNative.IR.clmul64Hi, true)
-    | .str _ "clmul64"   => some (BinOp.clmul64, ``LeanNative.IR.clmul64, true)
-    | .str _ "gf2Affine" => some (BinOp.gf2Affine, ``LeanNative.IR.gf2Affine, true)
-    | .str _ "eor3"      => some (BinOp.eor3, ``LeanNative.IR.eor3, false)
+    | .str _ "clmul64Hi" => some (BinOp.clmul64Hi, canonClmul64HiRepr, some canonClmul64HiGoRepr)
+    | .str _ "clmul64"   => some (BinOp.clmul64, canonClmul64Repr, some canonClmul64GoRepr)
+    | .str _ "gf2Affine" => some (BinOp.gf2Affine, canonGf2AffineRepr, some canonGf2AffineGoRepr)
+    | .str _ "eor3"      => some (BinOp.eor3, canonEor3Repr, none)
     | _ => none
   let .defnInfo decl ← env.find? fnName | none
-  let .defnInfo canonDecl ← env.find? canonName | none
   let u64 := Lean.mkConst ``UInt64
   let sig := Lean.Expr.forallE `a u64 (Lean.Expr.forallE `b u64 u64 .default) .default
-  guard (decl.levelParams.isEmpty && decl.safety == .safe && decl.type == sig)
+  guard (decl.levelParams.isEmpty && decl.safety == .safe && decl.type.eqv sig)
   guard (!Lean.isExtern env fnName)
-  let ns := fnName.getPrefix
-  let canonNs := canonName.getPrefix
-  guard (normalizeIntrinsicPrefix ns decl.value == normalizeIntrinsicPrefix canonNs canonDecl.value)
-  if hasGo then
+  guard (normalizeIntrinsicDecl fnName decl.value == expBody)
+  if let some expGo := expGoOpt then
     let .defnInfo goDecl ← env.find? (fnName ++ `go._unary) | none
-    let .defnInfo canonGoDecl ← env.find? (canonName ++ `go._unary) | none
-    guard (normalizeIntrinsicPrefix ns goDecl.value == normalizeIntrinsicPrefix canonNs canonGoDecl.value)
+    guard (normalizeIntrinsicDecl fnName goDecl.value == expGo)
   return op
 
 def tryLowerGfSimdIntrinsic (env : Lean.Environment) (fnName : Lean.Name) (argVars : List VarId)
