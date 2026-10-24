@@ -203,31 +203,75 @@ def lowerLitValue (lit : Lean.Compiler.LCNF.LitValue) : LNIRExpr :=
   | .usize v   => .scalar (.constU64 v)
   | .str s     => .scalar (.constU64 s.length.toUInt64)
 
-def tryLowerGfSimdIntrinsic (fnName : Lean.Name) (argVars : List VarId) : Option LNIRExpr :=
-  let nameStr := fnName.toString
-  let gfOps : List (String × BinOp) := [("clmul64Hi", .clmul64Hi), ("clmul64", .clmul64), ("gf2Affine", .gf2Affine), ("eor3", .eor3)]
+/-- Normalize constant prefixes inside `e` by replacing `ns` with `` `canonical `` so that
+    a local definition of `clmul64` / `clmul64Hi` / `gf2Affine` / `eor3` can be checked for
+    bit-for-bit kernel AST equality against the canonical `LeanNative.IR` definition. -/
+private def normalizeIntrinsicPrefix (ns : Lean.Name) (e : Lean.Expr) : Lean.Expr :=
+  e.replace fun sub =>
+    match sub with
+    | .const n ls =>
+      if ns.isPrefixOf n then
+        some (.const (n.replacePrefix ns `canonical) ls)
+      else none
+    | _ => none
+
+/-- Verify that `fnName` has the exact `UInt64 → UInt64 → UInt64` signature and the exact
+    kernel AST body (including recursive `.go._unary` helper where present) as the canonical
+    `LeanNative.IR` intrinsic declaration. Rejects fake wrappers, aliases, and externs. -/
+def trustedGfSimdIntrinsicOp (env : Lean.Environment) (fnName : Lean.Name) : Option BinOp := do
+  let (op, canonName, hasGo) ←
+    match fnName with
+    | .str _ "clmul64Hi" => some (BinOp.clmul64Hi, ``LeanNative.IR.clmul64Hi, true)
+    | .str _ "clmul64"   => some (BinOp.clmul64, ``LeanNative.IR.clmul64, true)
+    | .str _ "gf2Affine" => some (BinOp.gf2Affine, ``LeanNative.IR.gf2Affine, true)
+    | .str _ "eor3"      => some (BinOp.eor3, ``LeanNative.IR.eor3, false)
+    | _ => none
+  let .defnInfo decl ← env.find? fnName | none
+  let .defnInfo canonDecl ← env.find? canonName | none
+  let u64 := Lean.mkConst ``UInt64
+  let sig := Lean.Expr.forallE `a u64 (Lean.Expr.forallE `b u64 u64 .default) .default
+  guard (decl.levelParams.isEmpty && decl.safety == .safe && decl.type == sig)
+  guard (!Lean.isExtern env fnName)
+  let ns := fnName.getPrefix
+  let canonNs := canonName.getPrefix
+  guard (normalizeIntrinsicPrefix ns decl.value == normalizeIntrinsicPrefix canonNs canonDecl.value)
+  if hasGo then
+    let .defnInfo goDecl ← env.find? (fnName ++ `go._unary) | none
+    let .defnInfo canonGoDecl ← env.find? (canonName ++ `go._unary) | none
+    guard (normalizeIntrinsicPrefix ns goDecl.value == normalizeIntrinsicPrefix canonNs canonGoDecl.value)
+  return op
+
+def tryLowerGfSimdIntrinsic (env : Lean.Environment) (fnName : Lean.Name) (argVars : List VarId)
+    (retTy : LNIRType := .i64) (argTys : List LNIRType := []) : Option LNIRExpr :=
+  let argsOk := argTys.isEmpty || argTys == [.i64, .i64]
   match argVars with
-  | [lhs, rhs] => (gfOps.find? fun p => nameStr.endsWith p.1).map fun p => .scalar (.binOp p.2 (.var lhs) (.var rhs))
+  | [lhs, rhs] =>
+    if retTy == .i64 && argsOk then
+      (trustedGfSimdIntrinsicOp env fnName).map fun op => .scalar (.binOp op (.var lhs) (.var rhs))
+    else none
   | _ => none
 
 /-- Try to recognize primitive arithmetic/comparison/array operations in LCNF function calls. -/
-def tryLowerIntrinsicCall (fnName : Lean.Name) (argVars : List VarId) (retTy : LNIRType) : Option LNIRExpr :=
+def tryLowerIntrinsicCall (env : Lean.Environment) (fnName : Lean.Name) (argVars : List VarId)
+    (retTy : LNIRType) (argTys : List LNIRType := []) : Option LNIRExpr :=
   let nameStr := fnName.toString
   let bin (op : BinOp) (l r : VarId) : LNIRExpr := .scalar (.binOp op (.var l) (.var r))
   let suffixOps : List (String × BinOp) := [
     ("add", .add), ("sub", .sub), ("mul", .mul), ("div", .div), ("mod", .mod), ("rem", .mod),
     ("land", .bitAnd), ("lor", .bitOr), ("xor", .bitXor), ("shiftLeft", .shl), ("shiftRight", .shr),
-    ("clmul64Hi", .clmul64Hi), ("clmul64", .clmul64), ("gf2Affine", .gf2Affine), ("eor3", .eor3),
     ("decEq", .eq), ("beq", .eq), ("decLt", .lt), ("blt", .lt), ("decLe", .le), ("ble", .le)
   ]
   match argVars with
   | [lhs, rhs] =>
-    match suffixOps.find? (fun p => nameStr.endsWith p.1) with
-    | some p => some (bin p.2 lhs rhs)
+    match tryLowerGfSimdIntrinsic env fnName argVars retTy argTys with
+    | some intr => some intr
     | none =>
-      if nameStr.endsWith "uget" || nameStr.endsWith "get!" || nameStr.endsWith "fget" then
-        some (.sarrayGet lhs rhs retTy)
-      else none
+      match suffixOps.find? (fun p => nameStr.endsWith p.1) with
+      | some p => some (bin p.2 lhs rhs)
+      | none =>
+        if nameStr.endsWith "uget" || nameStr.endsWith "get!" || nameStr.endsWith "fget" then
+          some (.sarrayGet lhs rhs retTy)
+        else none
   | [arr] =>
     if nameStr.endsWith "size" || nameStr.endsWith "usize" then some (.sarrayLen arr) else none
   | [arr, idx, val] =>
@@ -240,10 +284,11 @@ def tryLowerIntrinsicCall (fnName : Lean.Name) (argVars : List VarId) (retTy : L
 def lowerNamedCall (fnName : Lean.Name) (args : Array (Lean.Compiler.LCNF.Arg pu)) (retTy : LNIRType) :
     BridgeM LNIRExpr := do
   let argVars ← args.toList.mapM lowerArg
-  match tryLowerIntrinsicCall fnName argVars retTy with
+  let argTys ← argVars.mapM getVarType
+  let env ← getEnv
+  match tryLowerIntrinsicCall env fnName argVars retTy argTys with
   | some intrinsicExpr => return intrinsicExpr
   | none =>
-    let env ← getEnv
     let st ← get
     let isLocal := st.localDeclNames.contains fnName || fnName == st.selfDeclName
     let isExt := !isLocal && Lean.isExtern env fnName
@@ -487,8 +532,9 @@ def ingestLCNFDeclGeneric {pu} (decl : Lean.Compiler.LCNF.Decl pu)
     let retTy := lowerImpureType decl.type
     match decl.value with
     | .code c =>
+      let env ← getEnv
       let body ←
-        if let some intrExpr := tryLowerGfSimdIntrinsic decl.name (lnirParams.map (·.id)) then do
+        if let some intrExpr := tryLowerGfSimdIntrinsic env decl.name (lnirParams.map (·.id)) retTy (lnirParams.map (·.ty)) then do
           let retVar ← freshBridgeVar retTy
           pure (.letBind retVar retTy intrExpr (.ret retVar))
         else if codeHasSelfTailCall decl.name c then do

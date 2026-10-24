@@ -383,6 +383,7 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
     catch _ => return false
   let clangOk ← runCmdOk "clang" #["-O3", "-fPIC", "-c", tmpLl, "-o", tmpObj]
   let builtArchive ← if clangOk then do
+    try IO.FS.removeFile outPath catch _ => pure ()
     if ← runCmdOk "llvm-ar" #["rcs", outPath, tmpObj] then pure true
     else runCmdOk "ar" #["rcs", outPath, tmpObj]
   else pure false

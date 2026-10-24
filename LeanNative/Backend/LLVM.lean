@@ -106,6 +106,7 @@ def declSlotVars (d : LNIRDecl) : List (VarId × LNIRType) :=
 structure EmitState where
   optimized : Bool
   target    : TargetArch := .x86_64
+  localScalarSigs : List (String × Nat) := []
   varTypes  : List (VarId × LNIRType)
   nextTmp   : Nat := 0
   scalarBindings : List (VarId × String) := []
@@ -664,14 +665,22 @@ def emitLetExpr (dst : VarId) (ty : LNIRType) (expr : LNIRExpr) : EmitM Unit := 
       let uVal ← freshTmp "unbox_call"
       emitLine s!"  {uVal} = call i64 @lean_native_unbox_u64(ptr {p})"
       storeI64ToVar dst uVal
-  | .call _ args _ _ =>
-    match args[0]? with
-    | some a0 => copyVarSlot dst a0
-    | none =>
-      let sTy := slotLLVMType ty
-      if sTy == "ptr" then storePtrToVar dst "null"
-      else if sTy == "i256" then storeI256ToVar dst "0"
-      else storeI64ToVar dst "0"
+  | .call callee args _ isExt =>
+    let st ← get
+    if !isExt && slotLLVMType ty == "i64" && st.localScalarSigs.lookup callee == some args.length then
+      let argVals ← args.mapM loadVarAsI64
+      let argSig := String.intercalate ", " (argVals.map (fun v => s!"i64 {v}"))
+      let callRes ← freshTmp "call"
+      emitLine s!"  {callRes} = call i64 @{sanitizeSymbol callee}({argSig})"
+      storeI64ToVar dst callRes
+    else
+      match args[0]? with
+      | some a0 => copyVarSlot dst a0
+      | none =>
+        let sTy := slotLLVMType ty
+        if sTy == "ptr" then storePtrToVar dst "null"
+        else if sTy == "i256" then storeI256ToVar dst "0"
+        else storeI64ToVar dst "0"
 
 /-- Emit inline or baseline reference count adjustment (`incRef` / `decRef`). -/
 def emitRefCountOp (isInc : Bool) (objVar : VarId) (count : Nat) : EmitM Unit := do
@@ -910,7 +919,8 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
                 else if llvmRet == "i256" then "  ret i256 0" else "  ret i64 0")
 
 /-- Emit an LLVM 18 function definition for a single `LNIRDecl`. -/
-def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) (target : TargetArch := .x86_64) : String :=
+def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) (target : TargetArch := .x86_64)
+    (localScalarSigs : List (String × Nat) := []) : String :=
   let fnSym := sanitizeSymbol d.name
   let retTypeStr := sigLLVMType d.retTy
   let paramSigs := d.params.map fun p =>
@@ -929,7 +939,9 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) (target : TargetArch := .x86_
     acc ++ [s!"  %slot_v{vid} = alloca {sTy}, align 8\n  store {sTy} {zeroVal}, ptr %slot_v{vid}, align 8"]
   ) []
   let storeArgLines := d.params.map fun p => s!"  store {slotLLVMType p.ty} %arg_v{p.id}, ptr %slot_v{p.id}, align 8"
-  let (_, finalState) := (emitCode d.body d.retTy none).run { optimized, target, varTypes := allVars }
+  let (_, finalState) := (emitCode d.body d.retTy none).run {
+    optimized, target, localScalarSigs, varTypes := allVars
+  }
   String.intercalate "\n" ([
     s!"; LNIRDecl: {d.name} (assurance={d.assurance}, isGpuCand={d.isGpuCand})",
     s!"define dso_local {retTypeStr} @{fnSym}({paramSigStr}) {fnAttr} \{\nentry:"
@@ -1066,7 +1078,11 @@ def emitLLVMModule (optimized : Bool) (m : LNIRModule) (target : TargetArch := .
     s!"target datalayout = \"{targetDataLayout target}\"",
     s!"target triple = \"{cpuTriple target}\""
   ]
-  let declStrs := m.decls.map (emitDeclLLVM optimized · target)
+  let localScalarSigs := m.decls.filterMap fun d =>
+    if d.retTy == .i64 && d.params.all (fun p => p.ty == .i64) then
+      some (d.name, d.params.length)
+    else none
+  let declStrs := m.decls.map (emitDeclLLVM optimized · target localScalarSigs)
   let abiWrapperStrs := if optimized then (m.decls.map emitLLVMABIWrapperDecl).filter (!·.isEmpty) else []
   let runtimeStr := emitRuntimeAndCAbiHelpers optimized target
   let footer := emitMetadataFooter target
