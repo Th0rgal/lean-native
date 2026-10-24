@@ -1,6 +1,6 @@
 /-
   benchmarks/rust_vs_lean/bench_lean.lean
-  Deterministic 20-algorithm benchmark corpus in pure Lean 4.
+  Deterministic 25-algorithm benchmark corpus in pure Lean 4.
   Used by both:
     1. Official Lean 4 compiler (`lean -c` + `clang -O3`)
     2. `lean-native` (`lean-native build-exe` with verified LNIR + LLVM 18 native pipeline)
@@ -574,6 +574,173 @@ def benchSparseMatmulCsr (rows nnzPerRow : Nat) (rounds : UInt64) : UInt64 := Id
     r := r + 1
   return checksum
 
+-- 21. fenwick_bit — Fenwick Tree (Binary Indexed Tree) point updates + prefix sum queries
+def benchFenwickBit (n : Nat) (numOps : UInt64) : UInt64 := Id.run do
+  let mut tree : Array UInt64 := Array.replicate (n + 1) 0
+  let mask : UInt64 := (n - 1).toUInt64
+  let nU64 : UInt64 := n.toUInt64
+  let mut i : UInt64 := 0
+  let mut checksum : UInt64 := 0
+  while i < numOps do
+    let h := i * 0x9E3779B97F4A7C15 + 0xBF58476D1CE4E5B9
+    let mut idx : UInt64 := (h &&& mask) + 1
+    let delta : UInt64 := ((h >>> 32) &&& 0xFF) + 1
+    while idx <= nU64 do
+      let idxNat := idx.toNat
+      tree := tree.set! idxNat (tree[idxNat]! + delta)
+      idx := idx + (idx &&& (0 - idx))
+    let mut qidx : UInt64 := ((h >>> 16) &&& mask) + 1
+    let mut sum : UInt64 := 0
+    while qidx > 0 do
+      let qNat := qidx.toNat
+      sum := sum + tree[qNat]!
+      qidx := qidx &&& (qidx - 1)
+    checksum := checksum ^^^ rotl64 sum (i &&& 31)
+    i := i + 1
+  return checksum
+
+-- 22. kmp_search — KMP (Knuth-Morris-Pratt) prefix-function construction + streaming automaton search
+def benchKmpSearch (patLen : Nat) (textLen : UInt64) (rounds : UInt64) : UInt64 := Id.run do
+  let mut pat : Array UInt64 := Array.replicate patLen 0
+  let mut pi : Array UInt64 := Array.replicate patLen 0
+  let mut totalMatches : UInt64 := 0
+  let mut r : UInt64 := 0
+  let patLenU64 := patLen.toUInt64
+  while r < rounds do
+    for i in [0:patLen] do
+      let ch := if i + 1 == patLen then 3 else (i % 3).toUInt64
+      pat := pat.set! i ch
+      pi := pi.set! i 0
+    let mut k : UInt64 := 0
+    let mut q : UInt64 := 1
+    while q < patLenU64 do
+      let qch := pat[q.toNat]!
+      while k > 0 && pat[k.toNat]! != qch do
+        k := pi[(k - 1).toNat]!
+      if pat[k.toNat]! == qch then
+        k := k + 1
+      pi := pi.set! q.toNat k
+      q := q + 1
+    let mut state : UInt64 := 0
+    let mut z : UInt64 := r * 0x9E3779B97F4A7C15 + 0x123456789ABCDEF0
+    let mut t : UInt64 := 0
+    while t < textLen do
+      z := z * 6364136223846793005 + 1442695040888963407
+      let c := if (t &&& 255) >= 240 then
+        let off := (t &&& 255) - 240
+        if off + 1 == patLenU64 then 3 else off % 3
+      else
+        (z >>> 62) &&& 3
+      while state > 0 && pat[state.toNat]! != c do
+        state := pi[(state - 1).toNat]!
+      if pat[state.toNat]! == c then
+        state := state + 1
+      if state == patLenU64 then
+        totalMatches := totalMatches + 1
+        state := pi[(state - 1).toNat]!
+      t := t + 1
+    r := r + 1
+  return totalMatches ^^^ pi[patLen - 1]!
+
+-- 23. union_find_dsu — Disjoint Set Union (Union-Find with Path Compression & Union by Rank)
+def benchUnionFindDsu (n : Nat) (numOps : UInt64) (rounds : UInt64) : UInt64 := Id.run do
+  let mut parent : Array UInt64 := Array.replicate n 0
+  let mut sz : Array UInt64 := Array.replicate n 1
+  let mask : UInt64 := (n - 1).toUInt64
+  let mut checksum : UInt64 := 0
+  let mut r : UInt64 := 0
+  while r < rounds do
+    for i in [0:n] do
+      parent := parent.set! i i.toUInt64
+      sz := sz.set! i 1
+    let mut op : UInt64 := 0
+    while op < numOps do
+      let h := (op + r * 1315423911) * 0x9E3779B97F4A7C15 + 0xD1B54A32D192ED03
+      let u0 := h &&& mask
+      let v0 := (h >>> 32) &&& mask
+      let mut ru := u0
+      while parent[ru.toNat]! != ru do
+        let p := parent[ru.toNat]!
+        let gp := parent[p.toNat]!
+        parent := parent.set! ru.toNat gp
+        ru := gp
+      let mut rv := v0
+      while parent[rv.toNat]! != rv do
+        let p := parent[rv.toNat]!
+        let gp := parent[p.toNat]!
+        parent := parent.set! rv.toNat gp
+        rv := gp
+      if ru != rv then
+        let su := sz[ru.toNat]!
+        let sv := sz[rv.toNat]!
+        if su < sv then
+          parent := parent.set! ru.toNat rv
+          sz := sz.set! rv.toNat (su + sv)
+        else
+          parent := parent.set! rv.toNat ru
+          sz := sz.set! ru.toNat (su + sv)
+      checksum := checksum + (ru ^^^ (rv <<< 16))
+      op := op + 1
+    r := r + 1
+  return checksum
+
+-- 24. chacha20_stream — ChaCha20 Stream Cipher Counter-Mode Block Core (ARX 16-word state in SArray)
+def benchChacha20Stream (blocks : UInt64) : UInt64 := Id.run do
+  let mut st : Array UInt64 := Array.replicate 16 0
+  let mut b : UInt64 := 0
+  let mut checksum : UInt64 := 0
+  while b < blocks do
+    for i in [0:16] do
+      st := st.set! i (b * 0x9E3779B97F4A7C15 + i.toUInt64 * 0x617078653320646E + 1)
+    let mut r : UInt64 := 0
+    while r < 10 do
+      for q in [0:4] do
+        let ia := q
+        let ib := q + 4
+        let ic := q + 8
+        let id := q + 12
+        let mut a := st[ia]!
+        let mut b_v := st[ib]!
+        let mut c := st[ic]!
+        let mut d := st[id]!
+        a := a + b_v; d := rotl64 (d ^^^ a) 16
+        c := c + d;   b_v := rotl64 (b_v ^^^ c) 12
+        a := a + b_v; d := rotl64 (d ^^^ a) 8
+        c := c + d;   b_v := rotl64 (b_v ^^^ c) 7
+        st := st.set! ia a
+        st := st.set! ib b_v
+        st := st.set! ic c
+        st := st.set! id d
+      r := r + 1
+    checksum := checksum ^^^ st[0]! ^^^ st[5]! ^^^ st[10]! ^^^ st[15]!
+    b := b + 1
+  return checksum
+
+-- 25. jacobi_stencil_1d — 1D Jacobi 3-Point Stencil with dual-array ping-pong in `for` loops
+def benchJacobiStencil1d (n : Nat) (steps : UInt64) : UInt64 := Id.run do
+  let mut gridA : Array UInt64 := Array.replicate n 0
+  let mut gridB : Array UInt64 := Array.replicate n 1
+  for i in [0:n] do
+    gridA := gridA.set! i ((i.toUInt64 * 0x9E3779B97F4A7C15) &&& 0xFFFF)
+    gridB := gridB.set! i (0 : UInt64)
+  let mut s : UInt64 := 0
+  while s < steps do
+    for i in [1:n-1] do
+      let l := gridA[i - 1]!
+      let c := gridA[i]!
+      let r := gridA[i + 1]!
+      gridB := gridB.set! i ((l + c + c + r) >>> 2)
+    for i in [1:n-1] do
+      let l := gridB[i - 1]!
+      let c := gridB[i]!
+      let r := gridB[i + 1]!
+      gridA := gridA.set! i ((l + c + c + r) >>> 2)
+    s := s + 1
+  let mut sum : UInt64 := 0
+  for i in [0:n] do
+    sum := sum + gridA[i]!
+  return sum
+
 @[noinline]
 def runtimeZero : IO UInt64 := do
   let t ← IO.monoNanosNow
@@ -618,3 +785,8 @@ def main (args : List String) : IO Unit := do
   runEntry "regex_dfa_step" filter (fun z => benchRegexDfaStep 65536 (20 + z))
   runEntry "json_simd_scanner" filter (fun z => benchJsonSimdScanner 65536 (20 + z))
   runEntry "sparse_matmul_csr" filter (fun z => benchSparseMatmulCsr 2048 16 (40 + z))
+  runEntry "fenwick_bit" filter (fun z => benchFenwickBit 4096 (200000 + z))
+  runEntry "kmp_search" filter (fun z => benchKmpSearch 16 4096 (500 + z))
+  runEntry "union_find_dsu" filter (fun z => benchUnionFindDsu 256 500 (500 + z))
+  runEntry "chacha20_stream" filter (fun z => benchChacha20Stream (50000 + z))
+  runEntry "jacobi_stencil_1d" filter (fun z => benchJacobiStencil1d 4096 (1000 + z))

@@ -1,4 +1,4 @@
-// Deterministic 20-algorithm benchmark corpus for Rust (`rustc -C opt-level=3 -C target-cpu=native`)
+// Deterministic 25-algorithm benchmark corpus for Rust (`rustc -C opt-level=3 -C target-cpu=native`)
 // vs Lean 4 Official vs Lean-Native (`lean-native`).
 // Every benchmark uses exact deterministic 64-bit arithmetic and prints:
 // BENCH:<name>:<elapsed_ns>:<checksum_u64>
@@ -579,6 +579,214 @@ pub fn bench_sparse_matmul_csr(rows: usize, nnz_per_row: usize, rounds: u64) -> 
     checksum
 }
 
+// 21. fenwick_bit
+#[inline(never)]
+pub fn bench_fenwick_bit(n: usize, num_ops: u64) -> u64 {
+    let mut tree = vec![0u64; n + 1];
+    let mask = (n - 1) as u64;
+    let n_u64 = n as u64;
+    let mut i = 0u64;
+    let mut checksum = 0u64;
+    while i < num_ops {
+        let h = i.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(0xBF58476D1CE4E5B9);
+        let mut idx = (h & mask) + 1;
+        let delta = ((h >> 32) & 0xFF) + 1;
+        while idx <= n_u64 {
+            let idx_usize = idx as usize;
+            tree[idx_usize] = tree[idx_usize].wrapping_add(delta);
+            idx = idx.wrapping_add(idx & 0u64.wrapping_sub(idx));
+        }
+        let mut qidx = ((h >> 16) & mask) + 1;
+        let mut sum = 0u64;
+        while qidx > 0 {
+            let q_usize = qidx as usize;
+            sum = sum.wrapping_add(tree[q_usize]);
+            qidx &= qidx - 1;
+        }
+        checksum ^= sum.rotate_left((i & 31) as u32);
+        i += 1;
+    }
+    checksum
+}
+
+// 22. kmp_search
+#[inline(never)]
+pub fn bench_kmp_search(pat_len: usize, text_len: u64, rounds: u64) -> u64 {
+    let mut pat = vec![0u64; pat_len];
+    let mut pi = vec![0u64; pat_len];
+    let mut total_matches = 0u64;
+    let mut r = 0u64;
+    let pat_len_u64 = pat_len as u64;
+    while r < rounds {
+        for i in 0..pat_len {
+            let ch = if i + 1 == pat_len { 3 } else { (i % 3) as u64 };
+            pat[i] = ch;
+            pi[i] = 0;
+        }
+        let mut k = 0u64;
+        let mut q = 1u64;
+        while q < pat_len_u64 {
+            let qch = pat[q as usize];
+            while k > 0 && pat[k as usize] != qch {
+                k = pi[(k - 1) as usize];
+            }
+            if pat[k as usize] == qch {
+                k += 1;
+            }
+            pi[q as usize] = k;
+            q += 1;
+        }
+        let mut state = 0u64;
+        let mut z = r.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(0x123456789ABCDEF0);
+        let mut t = 0u64;
+        while t < text_len {
+            z = z.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let c = if (t & 255) >= 240 {
+                let off = (t & 255) - 240;
+                if off + 1 == pat_len_u64 { 3 } else { off % 3 }
+            } else {
+                (z >> 62) & 3
+            };
+            while state > 0 && pat[state as usize] != c {
+                state = pi[(state - 1) as usize];
+            }
+            if pat[state as usize] == c {
+                state += 1;
+            }
+            if state == pat_len_u64 {
+                total_matches += 1;
+                state = pi[(state - 1) as usize];
+            }
+            t += 1;
+        }
+        r += 1;
+    }
+    total_matches ^ pi[pat_len - 1]
+}
+
+// 23. union_find_dsu
+#[inline(never)]
+pub fn bench_union_find_dsu(n: usize, num_ops: u64, rounds: u64) -> u64 {
+    let mut parent = vec![0u64; n];
+    let mut sz = vec![1u64; n];
+    let mask = (n - 1) as u64;
+    let mut checksum = 0u64;
+    let mut r = 0u64;
+    while r < rounds {
+        for i in 0..n {
+            parent[i] = i as u64;
+            sz[i] = 1;
+        }
+        let mut op = 0u64;
+        while op < num_ops {
+            let h = (op.wrapping_add(r.wrapping_mul(1315423911)))
+                .wrapping_mul(0x9E3779B97F4A7C15)
+                .wrapping_add(0xD1B54A32D192ED03);
+            let u0 = h & mask;
+            let v0 = (h >> 32) & mask;
+            let mut ru = u0;
+            while parent[ru as usize] != ru {
+                let p = parent[ru as usize];
+                let gp = parent[p as usize];
+                parent[ru as usize] = gp;
+                ru = gp;
+            }
+            let mut rv = v0;
+            while parent[rv as usize] != rv {
+                let p = parent[rv as usize];
+                let gp = parent[p as usize];
+                parent[rv as usize] = gp;
+                rv = gp;
+            }
+            if ru != rv {
+                let su = sz[ru as usize];
+                let sv = sz[rv as usize];
+                if su < sv {
+                    parent[ru as usize] = rv;
+                    sz[rv as usize] = su + sv;
+                } else {
+                    parent[rv as usize] = ru;
+                    sz[ru as usize] = su + sv;
+                }
+            }
+            checksum = checksum.wrapping_add(ru ^ (rv << 16));
+            op += 1;
+        }
+        r += 1;
+    }
+    checksum
+}
+
+// 24. chacha20_stream
+#[inline(never)]
+pub fn bench_chacha20_stream(blocks: u64) -> u64 {
+    let mut st = vec![0u64; 16];
+    let mut b = 0u64;
+    let mut checksum = 0u64;
+    while b < blocks {
+        for i in 0..16 {
+            st[i] = b.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add((i as u64).wrapping_mul(0x617078653320646E)).wrapping_add(1);
+        }
+        let mut r = 0u64;
+        while r < 10 {
+            for q in 0..4 {
+                let ia = q;
+                let ib = q + 4;
+                let ic = q + 8;
+                let id = q + 12;
+                let mut a = st[ia];
+                let mut b_v = st[ib];
+                let mut c = st[ic];
+                let mut d = st[id];
+                a = a.wrapping_add(b_v); d = (d ^ a).rotate_left(16);
+                c = c.wrapping_add(d);   b_v = (b_v ^ c).rotate_left(12);
+                a = a.wrapping_add(b_v); d = (d ^ a).rotate_left(8);
+                c = c.wrapping_add(d);   b_v = (b_v ^ c).rotate_left(7);
+                st[ia] = a;
+                st[ib] = b_v;
+                st[ic] = c;
+                st[id] = d;
+            }
+            r += 1;
+        }
+        checksum ^= st[0] ^ st[5] ^ st[10] ^ st[15];
+        b += 1;
+    }
+    checksum
+}
+
+// 25. jacobi_stencil_1d
+#[inline(never)]
+pub fn bench_jacobi_stencil_1d(n: usize, steps: u64) -> u64 {
+    let mut grid_a = vec![0u64; n];
+    let mut grid_b = vec![0u64; n];
+    for i in 0..n {
+        grid_a[i] = ((i as u64).wrapping_mul(0x9E3779B97F4A7C15)) & 0xFFFF;
+        grid_b[i] = 0;
+    }
+    let mut s = 0u64;
+    while s < steps {
+        for i in 1..(n - 1) {
+            let l = grid_a[i - 1];
+            let c = grid_a[i];
+            let r = grid_a[i + 1];
+            grid_b[i] = (l + c + c + r) >> 2;
+        }
+        for i in 1..(n - 1) {
+            let l = grid_b[i - 1];
+            let c = grid_b[i];
+            let r = grid_b[i + 1];
+            grid_a[i] = (l + c + c + r) >> 2;
+        }
+        s += 1;
+    }
+    let mut sum = 0u64;
+    for i in 0..n {
+        sum = sum.wrapping_add(grid_a[i]);
+    }
+    sum
+}
+
 fn bench_entry<F: Fn() -> u64>(name: &str, filter: &str, f: F) {
     if filter != "all" && filter != name {
         return;
@@ -614,4 +822,9 @@ fn main() {
     bench_entry("regex_dfa_step", filter, || bench_regex_dfa_step(65_536, 20));
     bench_entry("json_simd_scanner", filter, || bench_json_simd_scanner(65_536, 20));
     bench_entry("sparse_matmul_csr", filter, || bench_sparse_matmul_csr(2048, 16, 40));
+    bench_entry("fenwick_bit", filter, || bench_fenwick_bit(4096, 200_000));
+    bench_entry("kmp_search", filter, || bench_kmp_search(16, 4096, 500));
+    bench_entry("union_find_dsu", filter, || bench_union_find_dsu(256, 500, 500));
+    bench_entry("chacha20_stream", filter, || bench_chacha20_stream(50_000));
+    bench_entry("jacobi_stencil_1d", filter, || bench_jacobi_stencil_1d(4096, 1000));
 }

@@ -1,5 +1,19 @@
 import re, sys
 
+def find_brace_end(c_text, start_pos):
+    depth = 0
+    started = False
+    for i in range(start_pos, len(c_text)):
+        c = c_text[i]
+        if c == "{":
+            depth += 1
+            started = True
+        elif c == "}":
+            depth -= 1
+            if started and depth == 0:
+                return i + 1
+    return start_pos
+
 def apply_pass1_scalar_array(c_text):
     preamble = """
 #include <string.h>
@@ -192,18 +206,7 @@ static inline lean_object* ln_array_fget_borrowed_auto(lean_object* a, lean_obje
     for m in re.finditer(r"(?:LEAN_EXPORT |static )[a-z0-9_* ]+ [a-zA-Z0-9_]+\([^;]*?\)\{\n_start:", c_text):
         pos = m.start()
         out_parts.append(c_text[last_idx:pos])
-        depth = 0
-        started = False
-        end_pos = pos
-        for i in range(pos, len(c_text)):
-            if c_text[i] == "{":
-                depth += 1
-                started = True
-            elif c_text[i] == "}":
-                depth -= 1
-                if started and depth == 0:
-                    end_pos = i + 1
-                    break
+        end_pos = find_brace_end(c_text, pos)
         f = c_text[pos:end_pos]
         last_idx = end_pos
 
@@ -214,13 +217,14 @@ static inline lean_object* ln_array_fget_borrowed_auto(lean_object* a, lean_obje
                 local_u64_defs.add(dm.group(1))
 
         u64_gets = {}
-        set_gets = {}
+        u64_gets_rebox = {}
         for gm in re.finditer(r"([a-zA-Z0-9_]+) = (lean_array_get_borrowed|lean_array_get|lean_array_uget_borrowed|lean_array_fget_borrowed)\(([^;]+)\);", f):
             dst, kind, args = gm.group(1), gm.group(2), gm.group(3)
             uses = [line.strip() for line in f.splitlines() if re.search(r"\b" + re.escape(dst) + r"\b", line) and "lean_object* " not in line]
             ok = True
             has_unbox = False
             has_set = False
+            has_ctor = False
             for u in uses:
                 if u.startswith(f"{dst} = {kind}("): continue
                 if f"lean_unbox_uint64({dst})" in u:
@@ -230,13 +234,18 @@ static inline lean_object* ln_array_fget_borrowed_auto(lean_object* a, lean_obje
                 if re.search(r"= lean_array_set\([^,]+, [^,]+, " + re.escape(dst) + r"\);", u):
                     has_set = True
                     continue
+                if re.match(r"lean_ctor_set\([a-zA-Z0-9_]+, [01], " + re.escape(dst) + r"\);", u):
+                    has_ctor = True
+                    continue
                 ok = False
             arg_list = [x.strip() for x in args.split(",")]
             is_u64_def = len(arg_list) == 3 and arg_list[0] in local_u64_defs
-            if ok and (has_unbox or (has_set and is_u64_def)):
+            if ok and not has_ctor and (has_unbox or (has_set and is_u64_def)):
                 u64_gets[dst] = (kind, args)
+            elif ok and has_ctor and has_set and is_u64_def and not has_unbox:
+                u64_gets_rebox[dst] = (kind, args)
 
-        if u64_gets:
+        if u64_gets or u64_gets_rebox:
             new_lines = []
             for line in f.splitlines():
                 s = line.strip()
@@ -253,6 +262,8 @@ static inline lean_object* ln_array_fget_borrowed_auto(lean_object* a, lean_obje
                     continue
                 if any(s in (f"lean_dec({dst});", f"lean_inc({dst});") for dst in u64_gets):
                     continue
+                if any(s == f"lean_inc({dst});" for dst in u64_gets_rebox):
+                    continue
                 replaced_assign = False
                 for dst, (kind, args) in u64_gets.items():
                     if s == f"{dst} = {kind}({args});":
@@ -267,11 +278,20 @@ static inline lean_object* ln_array_fget_borrowed_auto(lean_object* a, lean_obje
                             new_lines.append(f"{dst} = ln_sarray_uget_u64({a_arg}, lean_unbox({i_arg}));")
                         replaced_assign = True
                         break
+                for dst, (kind, args) in u64_gets_rebox.items():
+                    if s == f"{dst} = {kind}({args});":
+                        get_fn = "ln_sarray_get_u64" if kind == "lean_array_get" else "ln_sarray_get_borrowed_u64"
+                        new_lines.append(f"uint64_t ln_u64_{dst} = {get_fn}({args});")
+                        new_lines.append(f"{dst} = lean_box_uint64(ln_u64_{dst});")
+                        replaced_assign = True
+                        break
                 if replaced_assign:
                     continue
                 for dst in u64_gets:
                     line = line.replace(f"lean_unbox_uint64({dst})", dst)
                     line = re.sub(r"\blean_array_set\(([^,]+), ([^,]+), " + re.escape(dst) + r"\)", rf"ln_sarray_set_u64(\1, \2, {dst})", line)
+                for dst in u64_gets_rebox:
+                    line = re.sub(r"\blean_array_set\(([^,]+), ([^,]+), " + re.escape(dst) + r"\)", rf"ln_sarray_set_u64(\1, \2, ln_u64_{dst})", line)
                 new_lines.append(line)
             f = "\n".join(new_lines)
 
@@ -291,13 +311,25 @@ static inline lean_object* ln_array_fget_borrowed_auto(lean_object* a, lean_obje
             uses = [line.strip() for line in f.splitlines() if re.search(r"\b" + re.escape(bv) + r"\b", line) and "lean_object* " not in line]
             if len(uses) == 2 and any("= ln_array_set_auto(" in u and u.endswith(f", {bv});") for u in uses):
                 box_vars[bv] = uv
-        if box_vars:
+        const_box_vars = {}
+        for cm in re.finditer(r"([a-zA-Z0-9_]+) = \(\(lean_object\*\)\(([a-zA-Z0-9_]+)\)\);", f):
+            bv, cname = cm.group(1), cm.group(2)
+            if cname not in u64_default_consts and cname not in boxed_u64:
+                continue
+            uses = [line.strip() for line in f.splitlines() if re.search(r"\b" + re.escape(bv) + r"\b", line) and "lean_object* " not in line]
+            if len(uses) == 2 and any("= ln_array_set_auto(" in u and u.endswith(f", {bv});") for u in uses):
+                const_box_vars[bv] = (cname, f"{boxed_u64.get(cname, 0)}ULL")
+        if box_vars or const_box_vars:
             new_lines = []
             for line in f.splitlines():
                 s = line.strip()
                 if any(s == f"{bv} = lean_box_uint64({uv});" for bv, uv in box_vars.items()):
                     continue
+                if any(s == f"{bv} = ((lean_object*)({cname}));" for bv, (cname, _) in const_box_vars.items()):
+                    continue
                 for bv, uv in box_vars.items():
+                    line = re.sub(r"ln_array_set_auto\(([^,]+), ([^,]+), " + re.escape(bv) + r"\)", rf"ln_sarray_set_u64(\1, \2, {uv})", line)
+                for bv, (_, uv) in const_box_vars.items():
                     line = re.sub(r"ln_array_set_auto\(([^,]+), ([^,]+), " + re.escape(bv) + r"\)", rf"ln_sarray_set_u64(\1, \2, {uv})", line)
                 new_lines.append(line)
             f = "\n".join(new_lines)
@@ -316,18 +348,7 @@ def apply_pass2_range_forin(c_text):
         ret_ty = m.group(1)
         fn_name = m.group(2)
         params_str = m.group(3)
-        depth = 0
-        started = False
-        end_pos = pos
-        for i in range(pos, len(c_text)):
-            if c_text[i] == "{":
-                depth += 1
-                started = True
-            elif c_text[i] == "}":
-                depth -= 1
-                if started and depth == 0:
-                    end_pos = i + 1
-                    break
+        end_pos = find_brace_end(c_text, pos)
         f = c_text[pos:end_pos]
         last_idx = end_pos
 
@@ -390,13 +411,17 @@ def apply_pass2_range_forin(c_text):
         sarray_Params = set()
         direct_sarray_Params = set()
         offset_sarray_Params = {}
+        const_offset_sarray_Params = {}
         array_Params = set()
         direct_array_Params = set()
         offset_array_Params = {}
         nat_Params = set()
         nat_temps = {}
+        nat_const_vals = {}
         param_offset_temps = {}
+        const_offset_temps = {}
         range_temps = {}
+        b_ssa_aliases = {b_var}
         mut_b = False
         inner_forin_calls = False
 
@@ -415,23 +440,29 @@ def apply_pass2_range_forin(c_text):
                     direct_sarray_Params.add(arr)
                 elif idx in param_offset_temps:
                     offset_sarray_Params.setdefault(arr, set()).add(param_offset_temps[idx])
+                elif idx in const_offset_temps:
+                    const_offset_sarray_Params.setdefault(arr, set()).add(const_offset_temps[idx])
                 if idx != i_var and idx not in nat_temps and idx not in params:
                     supported = False; break
                 if idx in params and idx != i_var:
                     nat_Params.add(idx)
             elif "= ln_sarray_set_u64(" in cl:
-                sm = re.match(re.escape(next_b) + r" = ln_sarray_set_u64\(" + re.escape(b_var) + r", ([^,]+), ([^)]+)\);", cl)
-                if not sm or ret_ty != "lean_object*":
+                sm = re.match(r"([a-zA-Z0-9_]+) = ln_sarray_set_u64\(([a-zA-Z0-9_]+), ([^,]+), ([^)]+)\);", cl)
+                if not sm or ret_ty != "lean_object*" or sm.group(2) not in b_ssa_aliases:
                     supported = False; break
-                idx = sm.group(1).strip()
+                b_ssa_aliases.add(sm.group(1))
+                idx = sm.group(3).strip()
                 if idx != i_var and idx not in nat_temps:
                     supported = False; break
-                mut_b = True
+                if sm.group(1) == next_b:
+                    mut_b = True
                 sarray_Params.add(b_var)
                 if idx == i_var:
                     direct_sarray_Params.add(b_var)
                 elif idx in param_offset_temps:
                     offset_sarray_Params.setdefault(b_var, set()).add(param_offset_temps[idx])
+                elif idx in const_offset_temps:
+                    const_offset_sarray_Params.setdefault(b_var, set()).add(const_offset_temps[idx])
             elif "= lean_nat_add(" in cl:
                 nm = re.match(r"([a-zA-Z0-9_]+) = lean_nat_add\(([^,]+), ([^)]+)\);", cl)
                 if not nm:
@@ -444,12 +475,29 @@ def apply_pass2_range_forin(c_text):
                         param_offset_temps[nm.group(1)] = a1
                     else:
                         nat_temps[nm.group(1)] = f"ln_nt_{a1} + ln_i"
+                        if a1 in nat_const_vals:
+                            const_offset_temps[nm.group(1)] = nat_const_vals[a1]
                 elif a1 == i_var and (a2 in params or a2 in nat_temps):
                     if a2 in params:
                         nat_Params.add(a2)
                         nat_temps[nm.group(1)] = f"ln_i + ln_nat_{a2}"
                     else:
                         nat_temps[nm.group(1)] = f"ln_i + ln_nt_{a2}"
+                        if a2 in nat_const_vals:
+                            const_offset_temps[nm.group(1)] = nat_const_vals[a2]
+                else:
+                    supported = False; break
+            elif "= lean_nat_sub(" in cl:
+                nm = re.match(r"([a-zA-Z0-9_]+) = lean_nat_sub\(([^,]+), ([^)]+)\);", cl)
+                if not nm:
+                    supported = False; break
+                a1, a2 = nm.group(2).strip(), nm.group(3).strip()
+                if a1 == i_var and (a2 in params or a2 in nat_temps):
+                    if a2 in params:
+                        nat_Params.add(a2)
+                    nat_temps[nm.group(1)] = f"ln_nt_{nm.group(1)}"
+                    if a2 in nat_const_vals:
+                        const_offset_temps[nm.group(1)] = 0
                 else:
                     supported = False; break
             elif cl.startswith("lean_dec("):
@@ -488,6 +536,7 @@ def apply_pass2_range_forin(c_text):
                 if not um:
                     supported = False; break
                 nat_temps[um.group(1)] = um.group(2)
+                nat_const_vals[um.group(1)] = int(um.group(2))
             elif "= ln_array_get_borrowed_auto(" in cl:
                 gm = re.match(r"([a-zA-Z0-9_]+) = ln_array_get_borrowed_auto\(([^,]+), ([^,]+), ([^)]+)\);", cl)
                 if not gm:
@@ -601,6 +650,8 @@ def apply_pass2_range_forin(c_text):
                 fp.append(f"if (ln_sz_{sp} < ln_limit) ln_limit = ln_sz_{sp};")
             for base_n in sorted(offset_sarray_Params.get(sp, ())):
                 fp.append(f"size_t ln_rem_{sp}_{base_n} = (ln_nat_{base_n} < ln_sz_{sp}) ? (ln_sz_{sp} - ln_nat_{base_n}) : 0; if (ln_rem_{sp}_{base_n} < ln_limit) ln_limit = ln_rem_{sp}_{base_n};")
+            for c_off in sorted(const_offset_sarray_Params.get(sp, ())):
+                fp.append(f"size_t ln_crem_{sp}_{c_off} = ({c_off}u < ln_sz_{sp}) ? (ln_sz_{sp} - {c_off}u) : 0; if (ln_crem_{sp}_{c_off} < ln_limit) ln_limit = ln_crem_{sp}_{c_off};")
         for ap in sorted(array_Params):
             fp.append(f"lean_object* const* __restrict__ ln_aptr_{ap} = (lean_object* const*)lean_array_cptr({ap});")
             fp.append(f"size_t ln_asz_{ap} = lean_array_size({ap});")
@@ -629,6 +680,12 @@ def apply_pass2_range_forin(c_text):
                         b_expr = f"ln_nt_{a2}" if a2 in nat_temps else f"ln_nat_{a2}"
                         out_list.append(f"size_t ln_nt_{nm.group(1)} = ln_i + {b_expr};")
                     continue
+                nms = re.match(r"([a-zA-Z0-9_]+) = lean_nat_sub\(([^,]+), ([^)]+)\);", cl)
+                if nms:
+                    a2 = nms.group(3).strip()
+                    b_expr = f"ln_nt_{a2}" if a2 in nat_temps else f"ln_nat_{a2}"
+                    out_list.append(f"size_t ln_nt_{nms.group(1)} = (ln_i >= {b_expr}) ? (ln_i - {b_expr}) : 0;")
+                    continue
                 um2 = re.match(r"([a-zA-Z0-9_]+) = lean_unsigned_to_nat\(([0-9]+)u\);", cl)
                 if um2:
                     out_list.append(f"size_t ln_nt_{um2.group(1)} = {um2.group(2)};")
@@ -656,7 +713,7 @@ def apply_pass2_range_forin(c_text):
                 if gm:
                     dst_u, arr, idx = gm.group(1), gm.group(3).strip(), gm.group(4).strip()
                     idx_expr = "ln_i" if idx == i_var else (f"ln_nt_{idx}" if idx in nat_temps else f"ln_nat_{idx}")
-                    if (idx == i_var or idx in param_offset_temps) and not is_tail:
+                    if (idx == i_var or idx in param_offset_temps or idx in const_offset_temps) and not is_tail:
                         out_list.append(f"{dst_u} = ln_ptr_{arr}[{idx_expr}];")
                     else:
                         out_list.append(f"{dst_u} = ({idx_expr} < ln_sz_{arr}) ? ln_ptr_{arr}[{idx_expr}] : 0ULL;")
@@ -708,11 +765,11 @@ def apply_pass2_range_forin(c_text):
                         return f"ln_nat_{a}"
                     out_list.append(f"size_t ln_nt_{nm2.group(1)} = {nat_expr(nm2.group(2).strip())} * {nat_expr(nm2.group(3).strip())};")
                     continue
-                sm = re.match(re.escape(next_b) + r" = ln_sarray_set_u64\(" + re.escape(b_var) + r", ([^,]+), ([^)]+)\);", cl)
-                if sm:
-                    idx, val_u = sm.group(1).strip(), sm.group(2).strip()
+                sm = re.match(r"([a-zA-Z0-9_]+) = ln_sarray_set_u64\(([a-zA-Z0-9_]+), ([^,]+), ([^)]+)\);", cl)
+                if sm and sm.group(2) in b_ssa_aliases:
+                    idx, val_u = sm.group(3).strip(), sm.group(4).strip()
                     idx_expr = "ln_i" if idx == i_var else f"ln_nt_{idx}"
-                    if (idx == i_var or idx in param_offset_temps) and not is_tail:
+                    if (idx == i_var or idx in param_offset_temps or idx in const_offset_temps) and not is_tail:
                         out_list.append(f"ln_ptr_{b_var}[{idx_expr}] = {val_u};")
                     else:
                         out_list.append(f"if ({idx_expr} < ln_sz_{b_var}) ln_ptr_{b_var}[{idx_expr}] = {val_u};")
@@ -775,6 +832,8 @@ def apply_pass2_range_forin(c_text):
                         sc_b.append(f"if (ln_sz_{sp} < ln_limit) ln_limit = ln_sz_{sp};")
                     for base_n in sorted(offset_sarray_Params.get(sp, ())):
                         sc_b.append(f"size_t ln_rem_{sp}_{base_n} = (ln_nat_{base_n} < ln_sz_{sp}) ? (ln_sz_{sp} - ln_nat_{base_n}) : 0; if (ln_rem_{sp}_{base_n} < ln_limit) ln_limit = ln_rem_{sp}_{base_n};")
+                    for c_off in sorted(const_offset_sarray_Params.get(sp, ())):
+                        sc_b.append(f"size_t ln_crem_{sp}_{c_off} = ({c_off}u < ln_sz_{sp}) ? (ln_sz_{sp} - {c_off}u) : 0; if (ln_crem_{sp}_{c_off} < ln_limit) ln_limit = ln_crem_{sp}_{c_off};")
                 sc_b.append("for (; ln_i < ln_limit; ++ln_i) {")
                 emit_range_loop_body(False, sc_b)
                 sc_b.append("}")
@@ -1239,18 +1298,7 @@ def apply_pass2_range_forin(c_text):
         pos = m.start()
         out_parts.append(c_text[last_idx:pos])
         params_str = m.group(2)
-        depth = 0
-        started = False
-        end_pos = pos
-        for i in range(pos, len(c_text)):
-            if c_text[i] == "{":
-                depth += 1
-                started = True
-            elif c_text[i] == "}":
-                depth -= 1
-                if started and depth == 0:
-                    end_pos = i + 1
-                    break
+        end_pos = find_brace_end(c_text, pos)
         f = c_text[pos:end_pos]
         last_idx = end_pos
         if "ln_array_push_auto(" not in f and "ln_array_set_auto(" not in f and "ln_sarray_set_u64(" not in f:
@@ -1460,6 +1508,57 @@ def apply_pass2_range_forin(c_text):
                     ]
                     out_parts.append(f.replace("{\n_start:", "{\n" + "\n".join(fp) + "\n_start:", 1))
                     continue
+            sm_sa2 = re.findall(
+                r"([a-zA-Z0-9_]+) = ln_sarray_set_u64\(([a-zA-Z0-9_]+), " + re.escape(i_var) + r", ([a-zA-Z0-9_]+|[0-9]+ULL)\);",
+                core_2p
+            )
+            if len(sm_sa2) == 2 and {sm_sa2[0][1], sm_sa2[1][1]} == {fst_v, snd_v}:
+                v_map_sa = {sm_sa2[0][1]: sm_sa2[0][2], sm_sa2[1][1]: sm_sa2[1][2]}
+                val_fst, val_snd = v_map_sa[fst_v], v_map_sa[snd_v]
+                nat_params_sa = [p for p in params[:-3] if re.search(r"\b" + re.escape(p) + r"\b", core_2p)]
+                c_sa_lines = []
+                for cl in [l.strip() for l in core_2p.splitlines() if l.strip()]:
+                    if any(cl.startswith(f"{r_v} = ln_sarray_set_u64(") for r_v, _, _ in sm_sa2):
+                        continue
+                    cl_m = re.sub(r"lean_uint64_of_nat\(" + re.escape(i_var) + r"\)", "((uint64_t)ln_i)", cl)
+                    cl_m = re.sub(r"([a-zA-Z0-9_]+) = lean_unsigned_to_nat\(([0-9]+)u\);", r"\1 = (lean_object*)((size_t)\2u);", cl_m)
+                    cl_m = re.sub(r"([a-zA-Z0-9_]+) = lean_nat_add\(" + re.escape(i_var) + r", ([a-zA-Z0-9_]+)\);", r"\1 = (lean_object*)(ln_i + (size_t)\2);", cl_m)
+                    cl_m = re.sub(r"([a-zA-Z0-9_]+) = lean_nat_mod\(" + re.escape(i_var) + r", ([a-zA-Z0-9_]+)\);", r"\1 = (lean_object*)(ln_i % (size_t)\2);", cl_m)
+                    cl_m = re.sub(r"([a-zA-Z0-9_]+) = lean_uint64_of_nat\(([a-zA-Z0-9_]+)\);", r"\1 = (uint64_t)(size_t)\2;", cl_m)
+                    cl_m = re.sub(r"\bv___jp_([0-9_]+)\b", r"ln_jp_\1", cl_m)
+                    for np in nat_params_sa:
+                        cl_m = re.sub(r"lean_nat_dec_eq\(([a-zA-Z0-9_]+), " + re.escape(np) + r"\)", rf"((size_t)\1 == ln_nat_{np})", cl_m)
+                    if cl_m.startswith("lean_dec("):
+                        continue
+                    c_sa_lines.append(cl_m)
+                if not any(bad in "\n".join(c_sa_lines) for bad in ("lean_nat_", "lean_alloc_", "lean_uint64_of_nat(")):
+                    extra_close = "}" * max(0, "\n".join(c_sa_lines).count("{") - "\n".join(c_sa_lines).count("}"))
+                    conds_sa = [f"lean_is_scalar({i_var})", f"lean_is_scalar({stop_var})", f"{step_var} == lean_box(1)", f"lean_obj_tag({fst_v}) == 248", f"lean_obj_tag({snd_v}) == 248"]
+                    for np in nat_params_sa:
+                        conds_sa.append(f"lean_is_scalar({np})")
+                    fp = [
+                        "{",
+                        f"lean_object* {stop_var} = lean_ctor_get({range_var}, 1);",
+                        f"lean_object* {step_var} = lean_ctor_get({range_var}, 2);",
+                        f"lean_object* {fst_v} = lean_ctor_get({b_var}, 0);",
+                        f"lean_object* {snd_v} = lean_ctor_get({b_var}, 1);",
+                        f"if ({' && '.join(conds_sa)}) {{",
+                        f"size_t ln_i = lean_unbox({i_var}), ln_n = lean_unbox({stop_var});",
+                        *[f"size_t ln_nat_{np} = lean_unbox({np});" for np in nat_params_sa],
+                        f"if (ln_sarray_u64_size({fst_v}) >= ln_n && ln_sarray_u64_size({snd_v}) >= ln_n) {{",
+                        f"lean_inc({fst_v}); lean_inc({snd_v}); lean_dec({b_var}); lean_dec({i_var});",
+                        f"{fst_v} = ln_sarray_ensure_exclusive_u64({fst_v}); {snd_v} = ln_sarray_ensure_exclusive_u64({snd_v});",
+                        f"uint64_t * __restrict__ ln_pa = ln_sarray_u64_ptr({fst_v}), * __restrict__ ln_pb = ln_sarray_u64_ptr({snd_v});",
+                        "for (; ln_i < ln_n; ++ln_i) {",
+                        *c_sa_lines,
+                        f"ln_pa[ln_i] = {val_fst}; ln_pb[ln_i] = {val_snd};",
+                        *([extra_close] if extra_close else []),
+                        "}",
+                        f"lean_object* ln_r = lean_alloc_ctor(0, 2, 0); lean_ctor_set(ln_r, 0, {fst_v}); lean_ctor_set(ln_r, 1, {snd_v});",
+                        "return ln_r;\n}\n}\n}"
+                    ]
+                    out_parts.append(f.replace("{\n_start:", "{\n" + "\n".join(fp) + "\n_start:", 1))
+                    continue
         m_3n = re.search(
             r"_start:\n\{\nlean_object\* (v_stop_[0-9_]+); lean_object\* (v_step_[0-9_]+); uint8_t (v___x_[0-9_]+);[ \t]*\n"
             r"\1 = lean_ctor_get\(" + re.escape(range_var) + r", 1\);\n"
@@ -1642,7 +1741,7 @@ def apply_pass2_range_forin(c_text):
         r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
         r"([a-zA-Z0-9_]+) = (l___private_Init_Data_Range_Basic_0__Std_Legacy_Range_forIn_x27_loop___at___00[a-zA-Z0-9_]+)\(\12, \11, ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+, \13\);\n"
         r".*?"
-        r"([a-zA-Z0-9_]+) = ln_array_set_auto\(\12, ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+\);\n"
+        r"([a-zA-Z0-9_]+) = (?:ln_array_set_auto|ln_sarray_set_u64)\(\12, ([a-zA-Z0-9_]+), [a-zA-Z0-9_]+\);\n"
         r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
         r"([a-zA-Z0-9_]+) = ln_sarray_get_borrowed_u64\([a-zA-Z0-9_]+, \11, \18\);\n"
         r"[a-zA-Z0-9_]+ = \(\(lean_object\*\)\([^\n]+\)\);\n"
@@ -1718,16 +1817,8 @@ def apply_pass3_while_sroa(c_text):
         lam_name = m.group(1)
         params_str = m.group(2)
         pos = m.start()
-        depth = 0
-        end_pos = pos
-        for i in range(m.end() - 1, len(c_text)):
-            if c_text[i] == "{": depth += 1
-            elif c_text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end_pos = i + 1
-                    break
-        lam_body = c_text[m.end():end_pos-1].strip()
+        end_pos = find_brace_end(c_text, pos)
+        lam_body = c_text[m.end():end_pos-3].strip()
         params = [p.strip().split()[-1] for p in params_str.split(",") if p.strip()]
         lam_funcs[lam_name] = (params, lam_body)
 
@@ -1736,15 +1827,7 @@ def apply_pass3_while_sroa(c_text):
         m = re.search(r"LEAN_EXPORT lean_object\* " + re.escape(parent_name) + r"\([^)]*\)\{\n_start:", c_text)
         if not m: continue
         pos = m.start()
-        depth = 0
-        end_pos = pos
-        for i in range(pos, len(c_text)):
-            if c_text[i] == "{": depth += 1
-            elif c_text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end_pos = i + 1
-                    break
+        end_pos = find_brace_end(c_text, pos)
         f = c_text[pos:end_pos]
         jp_m = re.search(
             r"(v___jp_[0-9_]+):\n\{\nif \(lean_obj_tag\(([a-zA-Z0-9_]+)\) == 0\)\n\{.*?\n\}\nelse\n\{\nlean_object\* ([a-zA-Z0-9_]+);[ \t]*\n\3 = lean_ctor_get\(\2, 0\);\nlean_inc\(\3\);\nlean_dec_ref_known\(\2, 1\);\n([a-zA-Z0-9_]+) = \3;\ngoto _start;\n\}\n\}",
@@ -1753,13 +1836,20 @@ def apply_pass3_while_sroa(c_text):
         if not jp_m: continue
         jp_label, y_var, state_var = jp_m.group(1), jp_m.group(2), jp_m.group(4)
         lb_lines = [l.strip() for l in lbody.splitlines() if l.strip()]
-        if len(lb_lines) < 4 or not lb_lines[-1].startswith("return "): continue
-        ret_v = lb_lines[-1].split()[1].rstrip(";")
-        if lb_lines[-3] != f"{ret_v} = lean_alloc_ctor(1, 1, 0);": continue
-        m_inner = re.match(re.escape(f"lean_ctor_set({ret_v}, 0, ") + r"([a-zA-Z0-9_]+)\);", lb_lines[-2])
+        if len(lb_lines) < 4: continue
+        if lb_lines[-1] == "}" and len(lb_lines) >= 5 and lb_lines[-2].startswith("return "):
+            end_ret_idx = -2
+        elif lb_lines[-1].startswith("return "):
+            end_ret_idx = -1
+        else:
+            continue
+        ret_v = lb_lines[end_ret_idx].split()[1].rstrip(";")
+        if lb_lines[end_ret_idx - 2] != f"{ret_v} = lean_alloc_ctor(1, 1, 0);": continue
+        m_inner = re.match(re.escape(f"lean_ctor_set({ret_v}, 0, ") + r"([a-zA-Z0-9_]+)\);", lb_lines[end_ret_idx - 1])
         if not m_inner: continue
         inner_v = m_inner.group(1)
-        core_lb = lb_lines[:-3]
+        core_lb = lb_lines[:end_ret_idx - 2]
+        local_lvars = set(re.findall(r"\bv_(?:__x|__jp|totalMatches|state)_[0-9_]+\b", "\n".join(core_lb))) - set(lparams)
 
         def repl_call(cm):
             call_dst = cm.group(1)
@@ -1770,17 +1860,20 @@ def apply_pass3_while_sroa(c_text):
                 cl_sub = cl
                 for lp, arg in sub_map.items():
                     cl_sub = re.sub(r"\b" + re.escape(lp) + r"\b", arg, cl_sub)
-                for lv in set(re.findall(r"\bv___x_[0-9_]+\b", cl)):
+                for lv in local_lvars:
                     cl_sub = re.sub(r"\b" + re.escape(lv) + r"\b", f"{lv}_{call_dst}", cl_sub)
                 inlined.append(cl_sub)
             if cm.group(3):
-                inlined.append(f"lean_dec({cm.group(3)});")
+                for dec_l in [dl.strip() for dl in cm.group(3).splitlines() if dl.strip()]:
+                    inlined.append(dec_l)
             inlined.append(f"{state_var} = {inner_v}_{call_dst};")
             inlined.append("goto _start;")
+            if end_ret_idx == -2:
+                inlined.append("}")
             return "\n".join(inlined)
 
         f_new = re.sub(
-            r"([a-zA-Z0-9_]+) = " + re.escape(lam_name) + r"\(([^)]+)\);\n(?:lean_dec\(([a-zA-Z0-9_]+)\);\n)?" + re.escape(y_var) + r" = \1;\ngoto " + re.escape(jp_label) + r";",
+            r"([a-zA-Z0-9_]+) = " + re.escape(lam_name) + r"\(([^)]+)\);\n((?:[ \t]*lean_dec\([a-zA-Z0-9_]+\);\n)*)" + re.escape(y_var) + r" = \1;\ngoto " + re.escape(jp_label) + r";",
             repl_call,
             f
         )
@@ -1788,7 +1881,43 @@ def apply_pass3_while_sroa(c_text):
             f_new = f_new.replace(jp_m.group(0) + "\n", "")
         c_text = c_text[:pos] + f_new + c_text[end_pos:]
 
-    # Step 2: interprocedural nested whileM/repeatM scalar SROA
+    # Step 1.5: Promote pure uint64_t whileM/repeatM loops with sarray parameters to _scalar(const uint64_t* ...)
+    scalar_u64_while_fns = {}
+    for m_uf in list(re.finditer(r"LEAN_EXPORT uint64_t (l___private_Init_While_0__(?:whileM|repeatM)_erased___at___00[a-zA-Z0-9_]+___redArg)\(([^)]*)\)\{\n_start:\n\{", c_text)):
+        uf_name = m_uf.group(1)
+        uf_params_str = m_uf.group(2)
+        pos_uf = m_uf.start()
+        end_uf = find_brace_end(c_text, pos_uf)
+        f_uf = c_text[pos_uf:end_uf]
+        if "goto _start;" not in f_uf:
+            continue
+        f_uf_new = re.sub(
+            r"([a-zA-Z0-9_]+) = lean_uint64_to_nat\(([a-zA-Z0-9_]+)\);\n"
+            r"([a-zA-Z0-9_]+) = \(\(lean_object\*\)\(([a-zA-Z0-9_]+)\)\);\n"
+            r"([a-zA-Z0-9_]+) = ln_sarray_get_borrowed_u64\(\3, ([a-zA-Z0-9_]+), \1\);\n"
+            r"lean_dec\(\1\);",
+            r"\1 = lean_box(0); \3 = lean_box(0);\n\5 = ln_sarray_u64_ptr(\6)[(size_t)(\2)];",
+            f_uf
+        )
+        uf_decls = [p.strip() for p in uf_params_str.split(",") if p.strip()]
+        sarray_p_indices = set()
+        sc_p_decls = []
+        sc_body = f_uf_new[m_uf.end() - pos_uf:-4]
+        for idx_p, pd in enumerate(uf_decls):
+            pv = pd.split()[-1]
+            if pd.startswith("lean_object*") and f"ln_sarray_u64_ptr({pv})" in sc_body:
+                sarray_p_indices.add(idx_p)
+                sc_p_decls.append(f"const uint64_t* ptr_{pv}")
+                sc_body = sc_body.replace(f"ln_sarray_u64_ptr({pv})", f"ptr_{pv}")
+            else:
+                sc_p_decls.append(pd)
+        if sarray_p_indices:
+            sc_helper = (
+                f"static inline __attribute__((always_inline)) uint64_t {uf_name}_scalar({', '.join(sc_p_decls)}){{\n"
+                f"_start:\n{{\n{sc_body}\n}}\n}}\n"
+            )
+            c_text = c_text[:pos_uf] + sc_helper + f_uf_new + c_text[end_uf:]
+            scalar_u64_while_fns[uf_name] = sarray_p_indices
     scalar_consts = {}
     for m in re.finditer(r"static const lean_ctor_object ([a-zA-Z0-9_]+)_value = \{[^\n]*LEAN_SCALAR_PTR_LITERAL\(([^)]+)\)\}\};", c_text):
         bs = [int(x.strip()) for x in m.group(2).split(",")]
@@ -1866,15 +1995,7 @@ def apply_pass3_while_sroa(c_text):
         out_parts.append(c_text[last_idx:pos])
         fn_name = m.group(1)
         params_str = m.group(2)
-        depth = 0
-        end_pos = pos
-        for i in range(pos, len(c_text)):
-            if c_text[i] == "{": depth += 1
-            elif c_text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end_pos = i + 1
-                    break
+        end_pos = find_brace_end(c_text, pos)
         f = c_text[pos:end_pos]
         last_idx = end_pos
 
@@ -2015,6 +2136,10 @@ def apply_pass3_while_sroa(c_text):
             else:
                 const_var_map[cm.group(1)] = cname
 
+        nat_ops = {}
+        for nm in re.finditer(r"([a-zA-Z0-9_]+) = lean_nat_(mul|add|sub|mod|land)\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);", body):
+            nat_ops[nm.group(1)] = (nm.group(2), nm.group(3), nm.group(4))
+
         inner_calls = []
         inner_leaf_vars = {}
         inner_internal_nodes = set()
@@ -2028,9 +2153,9 @@ def apply_pass3_while_sroa(c_text):
                 continue
             call_args = [a.strip() for a in args_s.split(",") if a.strip()]
             if callee_fn in scalar_while_fns:
-                callee_tree, callee_leaf_kinds = scalar_while_fns[callee_fn]
+                callee_tree, callee_leaf_kinds, callee_extra_sarrays = scalar_while_fns[callee_fn]
                 state_arg = call_args[-1]
-                extra_call_args = ("while", call_args[:-1])
+                extra_call_args = ("while", call_args[:-1], callee_extra_sarrays)
             elif callee_fn in sarray_3tuple_scalar_fns and len(call_args) >= 3:
                 r_arg, state_arg, i_arg = call_args[-3], call_args[-2], call_args[-1]
                 r_cname = const_var_map.get(r_arg, r_arg)
@@ -2057,6 +2182,16 @@ def apply_pass3_while_sroa(c_text):
                         return extract_arg_tree(t_node[0], c0) and extract_arg_tree(t_node[1], c1)
                     return False
                 else:
+                    if callee_leaf_kinds[t_node] == "u64" and cur_v not in leaves:
+                        can_pass = (
+                            cur_v in box_map
+                            or cur_v in nat_to_u64
+                            or cur_v in scalar_consts
+                            or cur_v in nat_ops
+                            or (cur_v in inner_leaf_vars and inner_leaf_kind.get(cur_v) == "u64")
+                        )
+                        if not can_pass:
+                            return False
                     arg_leaves.append(cur_v)
                     return True
             if not extract_arg_tree(callee_tree, state_arg):
@@ -2099,6 +2234,14 @@ def apply_pass3_while_sroa(c_text):
             inner_calls.append((icm.group(0), ret_v, callee_fn, extra_call_args, arg_leaves, callee_leaf_kinds))
             inner_leaf_vars.update(ret_local_leaves)
             inner_leaf_kind.update(ret_local_kinds)
+            for idx_k, kind_k in enumerate(callee_leaf_kinds):
+                if kind_k == "sarray":
+                    av = arg_leaves[idx_k]
+                    root_av = av if av in leaves else inner_leaf_vars.get(av, av)
+                    for ilv, ic_var in list(inner_leaf_vars.items()):
+                        if ic_var == f"ic_{ret_v}_{idx_k}":
+                            inner_leaf_vars[ilv] = root_av
+                            inner_leaf_kind[root_av] = "sarray"
             inner_internal_nodes.update(ret_local_internal)
             inner_excl_info.update(ret_local_excl)
             inner_arg_pairs.update(arg_pairs_local)
@@ -2139,6 +2282,11 @@ def apply_pass3_while_sroa(c_text):
         sarray_mut_map = {}
         for sm in re.finditer(r"([a-zA-Z0-9_]+) = ln_sarray_set_u64\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);", body):
             sarray_mut_map[sm.group(1)] = (sm.group(2), sm.group(3), sm.group(4))
+        for sm in re.finditer(r"([a-zA-Z0-9_]+) = ln_array_set_auto\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);", body):
+            if sm.group(4) in inner_leaf_vars and inner_leaf_kind.get(sm.group(4)) == "u64":
+                sarray_mut_map[sm.group(1)] = (sm.group(2), sm.group(3), inner_leaf_vars[sm.group(4)])
+            elif sm.group(4) in box_map:
+                sarray_mut_map[sm.group(1)] = (sm.group(2), sm.group(3), box_map[sm.group(4)])
         def resolve_root_sarray(v_arr):
             visited = set()
             cur = v_arr
@@ -2155,6 +2303,17 @@ def apply_pass3_while_sroa(c_text):
                 for ex_v, ex_k in zip(extra_call_args[1], extra_call_args[2]):
                     if ex_k == "sarray":
                         inner_call_sarray_args.add(ex_v)
+            elif extra_call_args[0] == "while":
+                callee_ex_sarrays = extra_call_args[2] if len(extra_call_args) > 2 else set()
+                for idx_ex, ex_v in enumerate(extra_call_args[1]):
+                    if idx_ex in callee_ex_sarrays:
+                        inner_call_sarray_args.add(ex_v)
+        for u64_fn, sarray_idxs in scalar_u64_while_fns.items():
+            for u64_m in re.finditer(re.escape(u64_fn) + r"\(([^)]*)\);", body):
+                u64_args = [a.strip() for a in u64_m.group(1).split(",") if a.strip()]
+                for s_idx in sarray_idxs:
+                    if s_idx < len(u64_args):
+                        inner_call_sarray_args.add(u64_args[s_idx])
 
         for lv in all_candidate_leaves:
             uses = [l.strip() for l in body.splitlines() if re.search(r"\b" + re.escape(lv) + r"\b", l) and "lean_object* " not in l]
@@ -2179,11 +2338,19 @@ def apply_pass3_while_sroa(c_text):
                     has_sarray = True; u_ok = False; continue
                 if f"ln_sarray_set_u64(" in u and f", {lv}, " in u:
                     has_nat = True; continue
+                if f"ln_array_set_auto(" in u and u.endswith(f", {lv});") and lv in inner_leaf_vars and inner_leaf_kind.get(lv) == "u64":
+                    continue
+                if f"ln_array_set_auto({lv}, " in u and lv in inner_leaf_vars and inner_leaf_kind.get(lv) == "sarray":
+                    has_sarray = True; u_ok = False; continue
                 if re.search(rf"lean_nat_(?:mul|add|sub|mod|land|dec_eq|dec_lt|dec_le)\((?:{re.escape(lv)}, [a-zA-Z0-9_]+|[a-zA-Z0-9_]+, {re.escape(lv)})\)", u):
                     has_nat = True; continue
                 if u in (f"lean_dec({lv});", f"lean_inc({lv});"): continue
                 if re.match(r"lean_ctor_set\([^,]+, [01], " + re.escape(lv) + r"\);", u): continue
                 if re.match(r"[a-zA-Z0-9_]+ = " + re.escape(lv) + r";", u): continue
+                if lv in inner_call_sarray_args and any(u == ic_tup[0] for ic_tup in inner_calls):
+                    has_sarray = True; u_ok = False; continue
+                if lv in inner_leaf_vars and inner_leaf_kind.get(lv) == "u64" and any(u == ic_tup[0] for ic_tup in inner_calls):
+                    continue
                 if lv in inner_call_sarray_args and "_loop___at___00" in u:
                     has_sarray = True; u_ok = False; continue
                 u_ok = False
@@ -2200,17 +2367,20 @@ def apply_pass3_while_sroa(c_text):
             if seen is None: seen = set()
             if v_arr in seen: return None
             cur = resolve_root_sarray(v_arr)
-            if cur in leaves or cur in inner_leaf_vars:
+            if cur in leaves:
                 return cur
+            if cur in inner_leaf_vars:
+                return inner_leaf_vars[cur] if inner_leaf_vars[cur] in leaves else cur
             if cur in sarray_alias_map:
                 roots = {resolve_root_sarray_with_alias(src, seen | {v_arr, cur}) for src in sarray_alias_map[cur]}
                 if len(roots) == 1 and None not in roots:
                     return next(iter(roots))
             return cur
 
-        nat_ops = {}
-        for nm in re.finditer(r"([a-zA-Z0-9_]+) = lean_nat_(mul|add|sub|mod|land)\(([a-zA-Z0-9_]+), ([a-zA-Z0-9_]+)\);", body):
-            nat_ops[nm.group(1)] = (nm.group(2), nm.group(3), nm.group(4))
+        u64_assign_aliases = {}
+        for uam in re.finditer(r"\b([a-zA-Z0-9_]+) = ([a-zA-Z0-9_]+);", body):
+            if not uam.group(0).startswith("lean_object*"):
+                u64_assign_aliases.setdefault(uam.group(1), set()).add(uam.group(2))
 
         leaf_is_u64 = {lv: leaf_can_unbox[lv] for lv in leaves}
         changed = True
@@ -2226,6 +2396,21 @@ def apply_pass3_while_sroa(c_text):
                     _, na, nb = nat_ops[v_cand]
                     return can_eval_u64(na, seen | {v_cand}) and can_eval_u64(nb, seen | {v_cand})
                 return False
+            def eval_u64_rhs(v_cand, seen=None):
+                if seen is None: seen = set()
+                if v_cand in seen: return v_cand
+                if v_cand in box_map:
+                    res = box_map[v_cand]
+                    while res in u64_assign_aliases and len(u64_assign_aliases[res]) == 1:
+                        nxt = next(iter(u64_assign_aliases[res]))
+                        if nxt in seen: break
+                        seen = seen | {res}
+                        res = box_map.get(nxt, f"u_{nxt}" if nxt in leaves and leaf_is_u64.get(nxt, False) else inner_leaf_vars.get(nxt, nxt))
+                    return res
+                if v_cand in leaves and leaf_is_u64.get(v_cand, False): return f"u_{v_cand}"
+                if v_cand in inner_leaf_vars: return inner_leaf_vars[v_cand]
+                if v_cand in scalar_consts: return scalar_consts[v_cand]
+                return v_cand
             for idx_l, lv in enumerate(leaves):
                 if not leaf_is_u64[lv]: continue
                 for nr, vals in be_leaf_vals.items():
@@ -2272,18 +2457,54 @@ def apply_pass3_while_sroa(c_text):
                 if kind_k == "u64":
                     if not can_eval_u64(av): ok_ic = False; break
                 elif kind_k == "sarray":
-                    if not ((av in leaves and leaf_is_sarray.get(av, False)) or (av in inner_leaf_vars and inner_leaf_kind.get(av) == "sarray") or (const_var_map.get(av, av) in const_sarrays)):
+                    if not (
+                        (av in leaves and leaf_is_sarray.get(av, False))
+                        or (av in inner_leaf_vars and inner_leaf_kind.get(av) == "sarray")
+                        or (const_var_map.get(av, av) in const_sarrays)
+                    ):
                         ok_ic = False; break
                 else:
                     ok_ic = False; break
+            if ok_ic and extra_args[0] == "while":
+                callee_ex_sarrays = extra_args[2] if len(extra_args) > 2 else set()
+                for idx_ex, ex_v in enumerate(extra_args[1]):
+                    if idx_ex in callee_ex_sarrays:
+                        if not (
+                            (ex_v in leaves and leaf_is_sarray.get(ex_v, False))
+                            or (ex_v in inner_leaf_vars and inner_leaf_kind.get(ex_v) == "sarray")
+                            or ex_v in params
+                        ):
+                            ok_ic = False; break
             if ok_ic:
                 valid_inner_calls.append(ic_tup)
         if len(valid_inner_calls) != len(inner_calls):
+            for lv_sa in leaves:
+                if leaf_is_sarray.get(lv_sa, False):
+                    direct_sarray = any(
+                        f"ln_sarray_u64_ptr({lv_sa})" in u
+                        or f"ln_sarray_set_u64({lv_sa}, " in u
+                        or (f", {lv_sa}, " in u and ("ln_sarray_get_borrowed_u64(" in u or "ln_sarray_get_u64(" in u))
+                        for u in [l.strip() for l in body.splitlines() if re.search(r"\b" + re.escape(lv_sa) + r"\b", l) and "lean_object* " not in l]
+                    )
+                    if not direct_sarray:
+                        leaf_is_sarray[lv_sa] = False
             inner_calls = []
             inner_leaf_vars = {}
             inner_internal_nodes = set()
             inner_excl_info = {}
             inner_arg_pairs = set()
+            changed = True
+            while changed:
+                changed = False
+                for idx_l, lv in enumerate(leaves):
+                    if not leaf_is_u64[lv]: continue
+                    for nr, vals in be_leaf_vals.items():
+                        if can_eval_u64(vals[idx_l]): continue
+                        leaf_is_u64[lv] = False
+                        changed = True
+                        break
+            if not any(leaf_is_u64[lv] or leaf_is_sarray.get(lv, False) for lv in leaves):
+                out_parts.append(f); continue
 
         ok_internal = True
         for (node, f0, s1) in spine_nodes:
@@ -2446,6 +2667,21 @@ def apply_pass3_while_sroa(c_text):
         for lv_sa in leaves:
             if leaf_is_sarray.get(lv_sa, False):
                 new_body = new_body.replace(f"ln_sarray_u64_ptr({lv_sa})", f"ptr_{lv_sa}")
+        for u64_fn, sarray_idxs in scalar_u64_while_fns.items():
+            def repl_u64_call(m_uc, u64_fn=u64_fn, sarray_idxs=sarray_idxs):
+                u64_args = [a.strip() for a in m_uc.group(1).split(",") if a.strip()]
+                new_u64_args = []
+                for idx_ua, ua in enumerate(u64_args):
+                    if idx_ua in sarray_idxs:
+                        root_ua = resolve_root_sarray_with_alias(ua)
+                        if leaf_is_sarray.get(root_ua, False):
+                            new_u64_args.append(f"ptr_{root_ua}")
+                        else:
+                            new_u64_args.append(f"ln_sarray_u64_ptr({ua})")
+                    else:
+                        new_u64_args.append(ua)
+                return f"{u64_fn}_scalar({', '.join(new_u64_args)});"
+            new_body = re.sub(re.escape(u64_fn) + r"\(([^)]*)\);", repl_u64_call, new_body)
         for gm in list(re.finditer(r"([a-zA-Z0-9_]+) = ln_array_get_borrowed_auto\(([^,]+), ([^,]+), ([^)]+)\);", new_body)):
             dst_g, arr_g, idx_g = gm.group(1), gm.group(3).strip(), gm.group(4).strip()
             root_g = resolve_root_sarray_with_alias(arr_g)
@@ -2456,10 +2692,15 @@ def apply_pass3_while_sroa(c_text):
         for dst_s, (arr_s, idx_s, val_s) in sarray_mut_map.items():
             root_s = resolve_root_sarray_with_alias(arr_s)
             if leaf_is_sarray.get(root_s, False) and idx_s in nat_to_u64:
-                u_idx = nat_to_u64[idx_s]
+                u_idx = eval_u64_rhs(idx_s)
                 new_body = new_body.replace(
                     f"{dst_s} = ln_sarray_set_u64({arr_s}, {idx_s}, {val_s});",
                     f"if ((size_t)({u_idx}) < sz_{root_s}) ptr_{root_s}[(size_t)({u_idx})] = {val_s}; {dst_s} = {root_s};"
+                )
+                new_body = re.sub(
+                    re.escape(dst_s) + r" = ln_array_set_auto\(" + re.escape(arr_s) + r", " + re.escape(idx_s) + r", [a-zA-Z0-9_]+\);",
+                    f"if ((size_t)({u_idx}) < sz_{root_s}) ptr_{root_s}[(size_t)({u_idx})] = {val_s}; {dst_s} = {root_s};",
+                    new_body
                 )
 
         # Rewrite inner calls to scalar helper calls
@@ -2476,7 +2717,7 @@ def apply_pass3_while_sroa(c_text):
                         lines_ic.append(f"uint64_t stk_{ret_v}_{idx_k}[{len(words)}] = {{{w_inits}}};")
                         ptr_args.extend([f"stk_{ret_v}_{idx_k}", f"{len(words)}ULL"])
                         for ilv, ic_var in list(inner_leaf_vars.items()):
-                            if ic_var == f"ic_{ret_v}_{idx_k}":
+                            if ic_var in (f"ic_{ret_v}_{idx_k}", av):
                                 inner_leaf_vars[ilv] = f"stk_{ret_v}_{idx_k}"
                                 leaf_is_sarray[f"stk_{ret_v}_{idx_k}"] = True
                     else:
@@ -2496,9 +2737,9 @@ def apply_pass3_while_sroa(c_text):
                     elif av in inner_leaf_vars:
                         a_expr = inner_leaf_vars[av]
                     elif av in box_map:
-                        a_expr = box_map[av]
+                        a_expr = eval_u64_rhs(av)
                     elif av in nat_to_u64:
-                        a_expr = nat_to_u64[av]
+                        a_expr = eval_u64_rhs(av)
                     elif av in scalar_consts:
                         a_expr = scalar_consts[av]
                     else:
@@ -2516,11 +2757,17 @@ def apply_pass3_while_sroa(c_text):
                         ex_c_args.append(nat_to_u64.get(ex_v, ex_v))
                 all_c_args = ", ".join(ex_c_args + [i_expr, stop_expr] + ptr_args)
             else:
+                callee_ex_sarrays = extra_args[2] if len(extra_args) > 2 else set()
                 ex_c_args = []
-                for ex_v in extra_args[1]:
-                    if ex_v in inner_leaf_vars and inner_leaf_kind.get(ex_v) == "sarray":
-                        root_ev = inner_leaf_vars[ex_v]
-                        ex_c_args.extend([f"ptr_{root_ev}", f"sz_{root_ev}"])
+                for idx_ex, ex_v in enumerate(extra_args[1]):
+                    if (ex_v in leaves and leaf_is_sarray.get(ex_v, False)) or (ex_v in inner_leaf_vars and inner_leaf_kind.get(ex_v) == "sarray"):
+                        root_ev = ex_v if ex_v in leaves else inner_leaf_vars[ex_v]
+                        if idx_ex in callee_ex_sarrays:
+                            ex_c_args.extend([f"ptr_{root_ev}", f"sz_{root_ev}"])
+                        else:
+                            ex_c_args.append(root_ev)
+                    elif idx_ex in callee_ex_sarrays:
+                        ex_c_args.extend([f"ln_sarray_u64_ptr({ex_v})", f"ln_sarray_u64_size({ex_v})"])
                     elif ex_v in inner_leaf_vars and inner_leaf_kind.get(ex_v) == "u64":
                         ex_c_args.append(f"lean_box_uint64({inner_leaf_vars[ex_v]})")
                     else:
@@ -2596,6 +2843,7 @@ def apply_pass3_while_sroa(c_text):
 
         if tail_while_call is not None:
             tw_full, tw_ret, tw_fn, tw_extra, tw_nr, tw_trail = tail_while_call
+            _, _, tw_extra_sarrays = scalar_while_fns.get(tw_fn, (None, None, set()))
             vals = be_leaf_vals[tw_nr]
             tw_lines = ["{"]
             tw_ptr_args = []
@@ -2616,7 +2864,17 @@ def apply_pass3_while_sroa(c_text):
                     tw_ptr_args.extend([f"ptr_{lv}", f"sz_{lv}"])
                 else:
                     tw_lines.append(f"{lv} = {v_i};")
-            tw_all_args = ", ".join(tw_extra + tw_ptr_args)
+            tw_ex_args = []
+            for idx_ex, ex_v in enumerate(tw_extra):
+                if idx_ex in tw_extra_sarrays:
+                    if (ex_v in leaves and leaf_is_sarray.get(ex_v, False)) or (ex_v in inner_leaf_vars and inner_leaf_kind.get(ex_v) == "sarray"):
+                        root_ev = ex_v if ex_v in leaves else inner_leaf_vars[ex_v]
+                        tw_ex_args.extend([f"ptr_{root_ev}", f"sz_{root_ev}"])
+                    else:
+                        tw_ex_args.extend([f"ln_sarray_u64_ptr({ex_v})", f"ln_sarray_u64_size({ex_v})"])
+                else:
+                    tw_ex_args.append(ex_v)
+            tw_all_args = ", ".join(tw_ex_args + tw_ptr_args)
             tw_lines.append(f"{tw_fn}_scalar({tw_all_args});")
             def emit_repack(cur_node, dst_var):
                 if cur_node in node_set:
@@ -2709,15 +2967,27 @@ def apply_pass3_while_sroa(c_text):
         scalar_helper = ""
         if all(leaf_is_u64[lv] or leaf_is_sarray.get(lv, False) for lv in leaves):
             leaf_kinds = ["u64" if leaf_is_u64[lv] else "sarray" for lv in leaves]
-            scalar_while_fns[fn_name] = (spine_tree, leaf_kinds)
             extra_p_decls = []
-            for ep in param_decls[:-1]:
+            extra_sarray_indices = set()
+            cleaned_joined = "\n".join(cleaned_lines)
+            for idx_ep, ep in enumerate(param_decls[:-1]):
                 ev = ep.split()[-1]
+                other_ev_uses = [
+                    l.strip() for l in cleaned_lines
+                    if re.search(r"\b" + re.escape(ev) + r"\b", l)
+                    and f"ln_sarray_u64_ptr({ev})" not in l
+                    and not ("ln_sarray_get" in l and (f"({ev}," in l or f", {ev}," in l))
+                ]
                 if ev in inner_leaf_vars and inner_leaf_kind.get(ev) == "sarray":
                     root_ev = inner_leaf_vars[ev]
                     extra_p_decls.extend([f"uint64_t* __restrict__ ptr_{root_ev}", f"size_t sz_{root_ev}"])
+                    extra_sarray_indices.add(idx_ep)
+                elif not other_ev_uses and (f"ln_sarray_u64_ptr({ev})" in cleaned_joined or any(("ln_sarray_get" in l and (f"({ev}," in l or f", {ev}," in l)) for l in cleaned_lines)):
+                    extra_p_decls.extend([f"const uint64_t* ptr_{ev}", f"size_t sz_{ev}"])
+                    extra_sarray_indices.add(idx_ep)
                 else:
                     extra_p_decls.append(ep)
+            scalar_while_fns[fn_name] = (spine_tree, leaf_kinds, extra_sarray_indices)
             ptr_p_decls = []
             for idx_l, lv in enumerate(leaves):
                 if leaf_is_u64[lv]:
@@ -2770,6 +3040,15 @@ def apply_pass3_while_sroa(c_text):
                 if f"ln_sarray_u64_ptr({ep_name})" in sh_body:
                     sh_hdr.append(f"const uint64_t* ptr_{ep_name} = ln_sarray_u64_ptr({ep_name});")
                     sh_body = sh_body.replace(f"ln_sarray_u64_ptr({ep_name})", f"ptr_{ep_name}")
+            for idx_ep, ep in enumerate(param_decls[:-1]):
+                if idx_ep in extra_sarray_indices:
+                    ev = ep.split()[-1]
+                    sh_body = sh_body.replace(f"ln_sarray_u64_ptr({ev})", f"ptr_{ev}").replace(f"ln_sarray_u64_size({ev})", f"sz_{ev}")
+                    sh_body = re.sub(
+                        r"ln_sarray_(?:get_borrowed_u64|get_u64)\(([^,]+), " + re.escape(ev) + r", ([^)]+)\)",
+                        rf"ptr_{ev}[(size_t)(\2)]",
+                        sh_body
+                    )
             unroll_prag = "\n#pragma clang loop unroll(full)" if (all(leaf_is_u64[lv] for lv in leaves) and "_scalar(" not in sh_body and "goto v_reusejp_" not in sh_body) else ""
             scalar_helper = (
                 f"static inline __attribute__((always_inline)) void {fn_name}_scalar({sig_args}){{\n"
@@ -2812,18 +3091,10 @@ def apply_pass3_while_sroa(c_text):
         c_pos = m_cf.start()
         caller_parts.append(c_text[last_c_idx:c_pos])
         c_fn_name = m_cf.group(1)
-        depth = 0
-        c_end = c_pos
-        for i in range(c_pos, len(c_text)):
-            if c_text[i] == "{": depth += 1
-            elif c_text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    c_end = i + 1
-                    break
+        c_end = find_brace_end(c_text, c_pos)
         cf = c_text[c_pos:c_end]
         last_c_idx = c_end
-        if c_fn_name.startswith("l___private_Init_While_0__") or c_fn_name.startswith("l___private_Init_Data_Range_"):
+        if c_fn_name.startswith("l___private_Init_Data_Range_"):
             caller_parts.append(cf); continue
         c_body = cf[m_cf.end() - c_pos:-4]
         if not any(sw in c_body for sw in scalar_while_fns):
@@ -2887,7 +3158,7 @@ def apply_pass3_while_sroa(c_text):
             ret_v, callee_fn, args_s = icm.group(1), icm.group(2), icm.group(3)
             if callee_fn not in scalar_while_fns:
                 continue
-            callee_tree, callee_leaf_kinds = scalar_while_fns[callee_fn]
+            callee_tree, callee_leaf_kinds, callee_extra_sarrays = scalar_while_fns[callee_fn]
             if not all(k in ("u64", "sarray") for k in callee_leaf_kinds):
                 continue
             call_args = [a.strip() for a in args_s.split(",") if a.strip()]
@@ -2992,7 +3263,7 @@ def apply_pass3_while_sroa(c_text):
                 if not clean_uses: break
             if not clean_uses:
                 continue
-            c_calls.append((icm.group(0), ret_v, callee_fn, call_args[:-1], arg_leaves, callee_leaf_kinds))
+            c_calls.append((icm.group(0), ret_v, callee_fn, call_args[:-1], arg_leaves, callee_leaf_kinds, callee_extra_sarrays))
             c_leaf_vars.update(ret_local_leaves)
             c_internal_nodes.update(ret_local_internal)
             c_excl_info.update(ret_local_excl)
@@ -3013,7 +3284,7 @@ def apply_pass3_while_sroa(c_text):
 
         new_c_body = c_body
         ensured_sarrays = set()
-        for call_str, ret_v, callee_fn, ex_args, arg_leaves, callee_leaf_kinds in c_calls:
+        for call_str, ret_v, callee_fn, ex_args, arg_leaves, callee_leaf_kinds, callee_extra_sarrays in c_calls:
             lines_ic = []
             ptr_args = []
             for idx_k, (av, lk) in enumerate(zip(arg_leaves, callee_leaf_kinds), 1):
@@ -3029,7 +3300,17 @@ def apply_pass3_while_sroa(c_text):
                     a_expr = c_leaf_vars.get(av, c_box_map.get(av, scalar_consts.get(av, av)))
                     lines_ic.append(f"uint64_t ic_{ret_v}_{idx_k} = {a_expr};")
                     ptr_args.append(f"&ic_{ret_v}_{idx_k}")
-            all_c_args = ", ".join(ex_args + ptr_args)
+            ex_c_args = []
+            for idx_ex, ex_v in enumerate(ex_args):
+                root_ev = resolve_c_sarray(ex_v)
+                if idx_ex in callee_extra_sarrays:
+                    if root_ev in ensured_sarrays:
+                        ex_c_args.extend([f"ptr_{root_ev}", f"sz_{root_ev}"])
+                    else:
+                        ex_c_args.extend([f"ln_sarray_u64_ptr({root_ev})", f"ln_sarray_u64_size({root_ev})"])
+                else:
+                    ex_c_args.append(ex_v)
+            all_c_args = ", ".join(ex_c_args + ptr_args)
             lines_ic.append(f"{callee_fn}_scalar({all_c_args});")
             new_c_body = new_c_body.replace(call_str, "\n".join(lines_ic))
 
@@ -3321,25 +3602,38 @@ def apply_pass3b_structural_peepholes(c_text):
         c_text
     )
     # Mark pure uint64_t tail-recursive helper functions as static inline __attribute__((always_inline))
-    for m_uf in list(re.finditer(r"LEAN_EXPORT uint64_t (l_[a-zA-Z0-9_]+)\((uint64_t [^)]*)\)\{\n_start:\n\{", c_text)):
+    for m_uf in list(re.finditer(r"LEAN_EXPORT uint64_t (l_[a-zA-Z0-9_]+)\(([^)]*)\)\{\n_start:\n\{", c_text)):
         uf_name = m_uf.group(1)
         pos_uf = m_uf.start()
-        depth_uf = 0
-        end_uf = pos_uf
-        for i in range(pos_uf, len(c_text)):
-            if c_text[i] == "{": depth_uf += 1
-            elif c_text[i] == "}":
-                depth_uf -= 1
-                if depth_uf == 0:
-                    end_uf = i + 1
-                    break
+        end_uf = find_brace_end(c_text, pos_uf)
         f_uf = c_text[pos_uf:end_uf]
-        if "goto _start;" in f_uf and "lean_object*" not in f_uf:
-            c_text = re.sub(
-                r"LEAN_EXPORT uint64_t " + re.escape(uf_name) + r"\(",
-                f"static inline __attribute__((always_inline)) uint64_t {uf_name}(",
-                c_text
+        if "goto _start;" in f_uf:
+            f_uf_new = re.sub(
+                r"([a-zA-Z0-9_]+) = lean_uint64_to_nat\(([a-zA-Z0-9_]+)\);\n"
+                r"([a-zA-Z0-9_]+) = \(\(lean_object\*\)\(([a-zA-Z0-9_]+)\)\);\n"
+                r"([a-zA-Z0-9_]+) = ln_sarray_get_borrowed_u64\(\3, ([a-zA-Z0-9_]+), \1\);\n"
+                r"lean_dec\(\1\);",
+                r"\1 = lean_box(0); \3 = lean_box(0);\n\5 = ln_sarray_u64_ptr(\6)[(size_t)(\2)];",
+                f_uf
             )
+            if f_uf_new != f_uf:
+                c_text = c_text[:pos_uf] + f_uf_new + c_text[end_uf:]
+                f_uf = f_uf_new
+            if "lean_alloc_" not in f_uf and "lean_uint64_to_nat(" not in f_uf:
+                c_text = re.sub(
+                    r"LEAN_EXPORT uint64_t " + re.escape(uf_name) + r"\(",
+                    f"static inline __attribute__((always_inline)) uint64_t {uf_name}(",
+                    c_text
+                )
+    c_text = re.sub(
+        r"([a-zA-Z0-9_]+) = lean_uint64_to_nat\(([a-zA-Z0-9_]+)\);\n"
+        r"([a-zA-Z0-9_]+) = (?:lean_box_uint64\([a-zA-Z0-9_]+\)|\(\(lean_object\*\)\([a-zA-Z0-9_]+\)\));\n"
+        r"([a-zA-Z0-9_]+) = ln_sarray_(?:get_borrowed_u64|get_u64)\(\3, ([a-zA-Z0-9_]+), \1\);\n"
+        r"lean_dec\(\1\);\n"
+        r"(?:lean_dec\(\3\);\n)?",
+        r"\1 = lean_box(0); \3 = lean_box(0);\n\4 = ln_sarray_u64_ptr(\5)[(size_t)(\2)];\n",
+        c_text
+    )
     return c_text
 
 def apply_pass2c_hot_loops(c_text):
