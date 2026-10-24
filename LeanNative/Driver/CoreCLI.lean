@@ -347,15 +347,15 @@ def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) (optMod? : Option LNIRModu
       match (if allU64 then emitRustCodeBody d.body else none) with
       | some bodyStr =>
         let paramsInl := String.intercalate ", " (d.params.map fun p => s!"v{p.id}: u64")
-        s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsInl}){retPart} \{\n    unsafe \{\n{bodyStr}\n    }\n}"
+        s!"#[cfg_attr(not(debug_assertions), inline(always))]\npub unsafe fn {s.cSymbol}({paramsInl}){retPart} \{\n    unsafe \{\n{bodyStr}\n    }\n}"
       | none =>
         let paramsRs := String.intercalate ", " (s.params.map fun (n, _, rsTy) => s!"{n}: {rsTy}")
         let argsRs := String.intercalate ", " (s.params.map fun (n, _, _) => n)
-        s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
+        s!"#[cfg_attr(not(debug_assertions), inline(always))]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
     | none =>
       let paramsRs := String.intercalate ", " (s.params.map fun (n, _, rsTy) => s!"{n}: {rsTy}")
       let argsRs := String.intercalate ", " (s.params.map fun (n, _, _) => n)
-      s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
+      s!"#[cfg_attr(not(debug_assertions), inline(always))]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
   String.intercalate "\n" ([
     "// Auto-generated Rust FFI & LNIR Inlined Bindings by lean-native C-ABI Binding Generator",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
