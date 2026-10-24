@@ -824,11 +824,11 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
     ["l_clmul64Hi", "l_clmul64", "l_gf2Affine", "l_eor3"].any fun s => d.name.endsWith s
   if !intrDecls.isEmpty then
     let intrPath := s!"{outBin}.intr.ll"
-    let intrText := (LeanNative.Backend.LLVM.emitLLVMOptimized { optMod with decls := intrDecls } hostArch).replace ") #0 {" ") alwaysinline #0 {"
-    IO.FS.writeFile intrPath intrText
-    let linkBin : System.FilePath := "/usr/lib/llvm-18/bin/llvm-link"
-    let linkCmd ← if (← linkBin.pathExists) then pure linkBin.toString else pure "llvm-link"
-    discard <| IO.Process.output { cmd := linkCmd, args := #["-S", rawLlPath, s!"--override={intrPath}", "-o", rawLlPath] }
+    IO.FS.writeFile intrPath ((LeanNative.Backend.LLVM.emitLLVMOptimized { optMod with decls := intrDecls } hostArch).replace ") #0 {" ") alwaysinline #0 {")
+    if (← (System.FilePath.mk "/usr/lib/llvm-18/bin/llvm-link").pathExists) then
+      discard <| IO.Process.output { cmd := "/usr/lib/llvm-18/bin/llvm-link", args := #["-S", rawLlPath, s!"--override={intrPath}", "-o", rawLlPath] }
+    else
+      discard <| IO.Process.output { cmd := "python3", args := #[cOptPath, "--override-ll", rawLlPath, intrPath, rawLlPath] }
 
   -- Step 2: /usr/lib/llvm-18/bin/opt with O3 + loop-vectorize + slp-vectorizer on both rawLlPath and lnirLlPath
   let optBin : System.FilePath := "/usr/lib/llvm-18/bin/opt"
@@ -845,15 +845,13 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   runOptPass rawLlPath optLlPath (IO.FS.readFile rawLlPath)
   runOptPass lnirLlPath lnirOptLlPath (pure lnirLlText)
 
-  -- Step 3: clang -O3 linking both optLlPath and lnirOptLlPath against libleanshared.so and runtime/lean_native_runtime.c
+  -- Step 3: clang -O3 linking against libleanshared and runtime/lean_native_runtime.c
+  let isDarwin := (System.Platform.target.splitOn "darwin").length > 1 || (System.Platform.target.splitOn "apple").length > 1
+  let linkInputs := if isDarwin then #[optLlPath, runtimePath] else #[optLlPath, lnirOptLlPath, runtimePath, "-Wl,--allow-multiple-definition"]
   let linkOut ← IO.Process.output {
     cmd  := clangCmd
-    args := #[
-      optLevel, "-DNDEBUG", "-march=native", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}"
-    ] ++ extraIncArgs ++ #[
-      optLlPath, lnirOptLlPath, runtimePath, "-Wl,--allow-multiple-definition",
-      s!"-L{libDir}", "-lleanshared", s!"-Wl,-rpath,{libDir}", "-lm", "-lpthread", "-ldl", "-o", outBin
-    ]
+    args := #[optLevel, "-DNDEBUG", "-march=native", "-Wno-override-module", s!"-I{incDir}", s!"-I{runtimeDir}"] ++
+      extraIncArgs ++ linkInputs ++ #[s!"-L{libDir}", "-lleanshared", s!"-Wl,-rpath,{libDir}", "-lm", "-lpthread", "-ldl", "-o", outBin]
   }
   if linkOut.exitCode != 0 then
     throw <| IO.userError s!"clang native link failed:\n{linkOut.stderr}"

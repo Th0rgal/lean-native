@@ -3347,6 +3347,19 @@ def apply_pass2c_hot_loops(c_text):
     return c_text
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--override-ll":
+        raw_ll = open(sys.argv[2]).read()
+        intr_ll = open(sys.argv[3]).read()
+        for m in re.finditer(r"(?ms)^define dso_local i64 @(l_[a-zA-Z0-9_]+)\([^\n]*\n.*?\n\}\n", intr_ll):
+            fn_name = m.group(1)
+            fn_body = re.sub(r"\) alwaysinline #[0-9]+ \{", ") alwaysinline {", m.group(0))
+            raw_ll = re.sub(rf"(?ms)^define [^\n]*@{re.escape(fn_name)}\([^\n]*\n.*?\n\}}\n", fn_body, raw_ll)
+        for d in re.findall(r"^declare [^\n]+", intr_ll, re.M):
+            base = re.sub(r" #[0-9]+$", "", d)
+            if base.split("(")[0] not in raw_ll:
+                raw_ll = raw_ll + "\n" + base + "\n"
+        open(sys.argv[4], "w").write(raw_ll)
+        sys.exit(0)
     raw = open(sys.argv[1]).read()
     c1 = apply_pass1_scalar_array(raw)
     c2 = apply_pass2_range_forin(c1)

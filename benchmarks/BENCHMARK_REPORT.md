@@ -83,3 +83,20 @@
 | `mersenne31_circle_butterfly_u64` | `222.69 ± 43.27` | `61.08 ± 2.90` | `58.11 ± 2.83` | `24.91 ± 1.87` | `10.09 ± 1.39` | `10.09 ± 1.39` | **22.08x** | **2.47x** | `0.002165` |
 | `holdout_bitwise` | `13.61 ± 0.42` | `12.26 ± 0.09` | `12.32 ± 0.36` | `14.35 ± 0.37` | `11.00 ± 0.69` | `11.00 ± 0.69` | **1.24x** | **1.30x** | `0.000583` |
 | `holdout_loop_bounds` | `12.55 ± 0.80` | `11.24 ± 0.18` | `11.08 ± 0.14` | `13.93 ± 0.30` | `11.58 ± 1.25` | `11.58 ± 1.25` | **1.08x** | **1.20x** | `0.000583` |
+
+---
+
+## 4. GF(2^128) Carryless Multiplication & Modular NTT Benchmark (`gf128_ntt_v1`)
+
+- **Suite**: `benchmarks/run_gf128_ntt.py --trials 9 --warmups 9` (interleaved `(lean_native, c_o3)` / `(c_o3, lean_native)`)
+- **Primitives**:
+  - `gf128_scalar` (`4,096` field multiplications/trial, checksum `13665706732021628708`): 4 independent $64 \times 64 \to 128$ carryless products (`clmul64` + `clmul64Hi`) lowered to `@llvm.x86.pclmulqdq` (`x86_64`) and `@llvm.aarch64.neon.pmull64` (`arm64`) with deferred reduction mod $x^{128} + x^7 + x^2 + x + 1$ (`0x87`).
+  - `ntt_modular` (`65,536` butterflies/trial, checksum `26402257024`): iterative modular butterfly mod `998244353` with 2-round radix-4 lookahead (no Karatsuba).
+
+| Host / Architecture | Hardware | Benchmark | `lean_native` Median (ns ± IQR) | `lean_native` Throughput (ops/s) | `c_o3` Median (ns ± IQR) | `c_o3` Throughput (ops/s) | Checksum Match |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| **`ashur` (`x86_64`)** | Intel Core i7-7700 (`pclmulqdq`) | `gf128_scalar` | **`61,113 ± 336 ns`** | **`67.02M muls/s`** | `668,980 ± 4,007 ns` | `6.12M muls/s` | **PASS** |
+| **`ashur` (`x86_64`)** | Intel Core i7-7700 | `ntt_modular` | **`343,282 ± 5,847 ns`** | **`190.91M bfly/s`** | `248,022 ± 5,971 ns` | `264.23M bfly/s` | **PASS** |
+| **`air-2` (`arm64`)** | Apple M2 (`pmull.1q` / `pmull2.1q`) | `gf128_scalar` | **`68,291 ± 126 ns`** | **`59.98M muls/s`** | `597,000 ± 8,000 ns` | `6.86M muls/s` | **PASS** |
+| **`air-2` (`arm64`)** | Apple M2 | `ntt_modular` | **`228,541 ± 542 ns`** | **`286.76M bfly/s`** | `202,000 ± 7,000 ns` | `324.44M bfly/s` | **PASS** |
+

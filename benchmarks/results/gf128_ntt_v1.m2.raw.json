@@ -1,0 +1,154 @@
+{
+  "suite": "gf128_ntt",
+  "version": "v1",
+  "warmups": 9,
+  "trials": 9,
+  "interleaving": "alternating (lean_native,c_o3) / (c_o3,lean_native) across warmups and trials",
+  "flags": {
+    "lean_native": [
+      "build-exe",
+      "--opt",
+      "-O3",
+      "-march=native"
+    ],
+    "c_o3": [
+      "-O3",
+      "-march=native"
+    ]
+  },
+  "primitives_truth": {
+    "gf128": "4 independent 64x64->128 carryless products (clmul64 + clmul64Hi) lowered to @llvm.x86.pclmulqdq / @llvm.aarch64.neon.pmull64 with deferred reduction mod x^128+x^7+x^2+x+1 (0x87); portable fallback on wasm32/nvptx64/baseline; gf2Affine remains scalar parity; eor3 remains packed binary",
+    "ntt": "iterative modular butterfly mod 998244353 with 2-round radix-4 lookahead (no Karatsuba)",
+    "build_exe_path": "Lean source -> LCNF -> emitC + ln_c_opt.py + LNIR LLVM intrinsic override + opt -O3"
+  },
+  "host": {
+    "uname": {
+      "system": "Darwin",
+      "node": "air",
+      "release": "27.0.0",
+      "version": "Darwin Kernel Version 27.0.0: Tue Aug 11 21:02:16 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T8112",
+      "machine": "arm64",
+      "processor": "arm"
+    },
+    "cpu": "arm"
+  },
+  "commit_id": "73f5964cebc83b620680010fb22b613d94fa1afa",
+  "scripts_ln_c_opt_status": "M scripts/ln_c_opt.py",
+  "commands": {
+    "lean_build": [
+      "/private/tmp/lean-native/.lake/build/bin/lean-native",
+      "build-exe",
+      "benchmarks/gf128_ntt_v1.lean",
+      "-o",
+      "/tmp/gf128_ntt_v1_lean"
+    ],
+    "c_build": [
+      "clang",
+      "-O3",
+      "-march=native",
+      "benchmarks/gf128_ntt_v1.c",
+      "-o",
+      "/tmp/gf128_ntt_v1_c"
+    ]
+  },
+  "generated_at_utc": "2026-10-24T07:14:45.002840+00:00",
+  "source_sha256": {
+    "gf128_ntt_v1.lean": "e2796aa4f1c6b9b356d197f45232f8ae5f0811a3853dc43e1a4b29b3f64565ba",
+    "gf128_ntt_v1.c": "57b2748e521ed7a0bd9d220e4307f0ac0496ba532c58d4a73e4578f45c7a76fc",
+    "ln_c_opt.py": "a2677cac2ac3378c8d8256d45557495b4ef4476aa23df7b9e53ed0880d0e53ae"
+  },
+  "results": {
+    "lean_native": {
+      "gf128_scalar": {
+        "checksum": 13665706732021628708,
+        "metric": "field_muls_per_sec",
+        "samples_ns": [
+          68208,
+          68334,
+          68208,
+          68292,
+          70750,
+          68291,
+          68166,
+          68083,
+          69541
+        ],
+        "median_ns": 68291,
+        "iqr_ns": 126,
+        "min_ns": 68083,
+        "max_ns": 70750,
+        "stdev_ns": 901.8866490739165,
+        "ops_per_trial": 4096,
+        "median_ops_per_sec": 59978620.90172937
+      },
+      "ntt_modular": {
+        "checksum": 26402257024,
+        "metric": "butterflies_per_sec",
+        "samples_ns": [
+          228917,
+          228541,
+          228458,
+          228417,
+          237000,
+          228959,
+          238583,
+          227666,
+          227875
+        ],
+        "median_ns": 228541,
+        "iqr_ns": 542,
+        "min_ns": 227666,
+        "max_ns": 238583,
+        "stdev_ns": 4179.311994814458,
+        "ops_per_trial": 65536,
+        "median_ops_per_sec": 286758174.6820046
+      }
+    },
+    "c_o3": {
+      "gf128_scalar": {
+        "checksum": 13665706732021628708,
+        "metric": "field_muls_per_sec",
+        "samples_ns": [
+          597000,
+          597000,
+          597000,
+          605000,
+          850000,
+          620000,
+          605000,
+          597000,
+          596000
+        ],
+        "median_ns": 597000,
+        "iqr_ns": 8000,
+        "min_ns": 596000,
+        "max_ns": 850000,
+        "stdev_ns": 83109.8670435707,
+        "ops_per_trial": 4096,
+        "median_ops_per_sec": 6860971.524288108
+      },
+      "ntt_modular": {
+        "checksum": 26402257024,
+        "metric": "butterflies_per_sec",
+        "samples_ns": [
+          202000,
+          203000,
+          201000,
+          202000,
+          282000,
+          209000,
+          212000,
+          202000,
+          202000
+        ],
+        "median_ns": 202000,
+        "iqr_ns": 7000,
+        "min_ns": 201000,
+        "max_ns": 282000,
+        "stdev_ns": 26233.460397828658,
+        "ops_per_trial": 65536,
+        "median_ops_per_sec": 324435643.56435645
+      }
+    }
+  }
+}
