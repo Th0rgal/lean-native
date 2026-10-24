@@ -276,22 +276,144 @@ def emitCAbiHeaderFromSigs (sigs : List CAbiBindingSig) : String :=
     "#ifdef __cplusplus", "extern \"C\" {", "#endif"
   ] ++ declProtos ++ ["#ifdef __cplusplus", "}", "#endif", "#endif /* LEAN_NATIVE_GENERATED_C_ABI_H */", ""])
 
-def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) : String :=
+partial def emitRustScalarExpr (e : ScalarExpr) : String :=
+  match e with
+  | .constU64 v => s!"{v}u64"
+  | .constBool b => if b then "1u64" else "0u64"
+  | .var id => s!"v{id}"
+  | .binOp op l r =>
+    let ls := emitRustScalarExpr l
+    let rs := emitRustScalarExpr r
+    match op with
+    | .add => s!"({ls}.wrapping_add({rs}))"
+    | .sub => s!"({ls}.wrapping_sub({rs}))"
+    | .mul => s!"({ls}.wrapping_mul({rs}))"
+    | .div => s!"(if {rs} == 0 \{ 0u64 } else \{ {ls} / {rs} })"
+    | .mod => s!"(if {rs} == 0 \{ 0u64 } else \{ {ls} % {rs} })"
+    | .bitAnd => s!"({ls} & {rs})"
+    | .bitOr => s!"({ls} | {rs})"
+    | .bitXor => s!"({ls} ^ {rs})"
+    | .shl => s!"({ls}.wrapping_shl(({rs} & 63) as u32))"
+    | .shr => s!"({ls}.wrapping_shr(({rs} & 63) as u32))"
+    | .sar => s!"((({ls} as i64).wrapping_shr(({rs} & 63) as u32)) as u64)"
+    | .eq => s!"(if {ls} == {rs} \{ 1u64 } else \{ 0u64 })"
+    | .lt => s!"(if {ls} < {rs} \{ 1u64 } else \{ 0u64 })"
+    | .le => s!"(if {ls} <= {rs} \{ 1u64 } else \{ 0u64 })"
+    | .clmul64 => s!"lean_native_clmul64_lo({ls}, {rs})"
+    | .clmul64Hi => s!"lean_native_clmul64_hi({ls}, {rs})"
+    | .eor3 => s!"({ls} ^ ({rs} >> 32) ^ ({rs} & 0xFFFF_FFFFu64))"
+    | _ => s!"({ls} ^ {rs})"
+  | .unaryOp op a =>
+    let as_ := emitRustScalarExpr a
+    match op with
+    | .not => s!"(!{as_})"
+    | .neg => s!"(0u64.wrapping_sub({as_}))"
+    | .clz256 => s!"({as_}.leading_zeros() as u64)"
+  | .select c t e =>
+    s!"(if ({emitRustScalarExpr c}) != 0 \{ {emitRustScalarExpr t} } else \{ {emitRustScalarExpr e} })"
+  | .fma a b c =>
+    s!"(({emitRustScalarExpr a}).wrapping_mul({emitRustScalarExpr b}).wrapping_add({emitRustScalarExpr c}))"
+
+partial def emitRustCodeBody (c : LNIRCode) (indent : String := "        ") : Option String :=
+  match c with
+  | .letBind dst _ (.scalar e) k => do
+    let rest ← emitRustCodeBody k indent
+    some s!"{indent}let v{dst}: u64 = {emitRustScalarExpr e};\n{rest}"
+  | .letBind dst _ (.call fnName args _ _) k => do
+    let rest ← emitRustCodeBody k indent
+    let argStr := String.intercalate ", " (args.map fun a => s!"v{a}")
+    some s!"{indent}let v{dst}: u64 = {fnName}({argStr});\n{rest}"
+  | .incRef _ _ k | .decRef _ _ k => emitRustCodeBody k indent
+  | .ite cv t e => do
+    let tb ← emitRustCodeBody t (indent ++ "    ")
+    let eb ← emitRustCodeBody e (indent ++ "    ")
+    some s!"{indent}if v{cv} != 0 \{\n{tb}\n{indent}} else \{\n{eb}\n{indent}}"
+  | .ret v => some s!"{indent}v{v}"
+  | _ => none
+
+def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) (optMod? : Option LNIRModule := none) : String :=
   let declExterns := sigs.map fun s =>
     let paramsRs := String.intercalate ", " (s.params.map fun (n, _, rsTy) => s!"{n}: {rsTy}")
     let retPart := if s.retRustType == "()" then "" else s!" -> {s.retRustType}"
-    s!"    pub fn {s.cSymbol}({paramsRs}){retPart};"
+    s!"        pub fn {s.cSymbol}({paramsRs}){retPart};"
+  let declWrappers := sigs.map fun s =>
+    let retPart := if s.retRustType == "()" then "" else s!" -> {s.retRustType}"
+    let matchDecl? := optMod?.bind fun m =>
+      m.decls.find? fun d => d.name == s.cSymbol || d.name.endsWith ("_" ++ s.leanName)
+    match matchDecl? with
+    | some d =>
+      let allU64 := s.retRustType == "u64" && d.params.length == s.params.length &&
+        s.params.all (fun (_, _, rsTy) => rsTy == "u64")
+      match (if allU64 then emitRustCodeBody d.body else none) with
+      | some bodyStr =>
+        let paramsInl := String.intercalate ", " (d.params.map fun p => s!"v{p.id}: u64")
+        s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsInl}){retPart} \{\n    unsafe \{\n{bodyStr}\n    }\n}"
+      | none =>
+        let paramsRs := String.intercalate ", " (s.params.map fun (n, _, rsTy) => s!"{n}: {rsTy}")
+        let argsRs := String.intercalate ", " (s.params.map fun (n, _, _) => n)
+        s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
+    | none =>
+      let paramsRs := String.intercalate ", " (s.params.map fun (n, _, rsTy) => s!"{n}: {rsTy}")
+      let argsRs := String.intercalate ", " (s.params.map fun (n, _, _) => n)
+      s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
   String.intercalate "\n" ([
-    "//! Auto-generated Rust FFI bindings by lean-native C-ABI Binding Generator",
-    "#![allow(dead_code, non_camel_case_types, non_snake_case, clashing_extern_declarations)]",
+    "//! Auto-generated Rust FFI & LNIR Inlined Bindings by lean-native C-ABI Binding Generator",
+    "#![allow(dead_code, non_camel_case_types, non_snake_case, clashing_extern_declarations, unused_unsafe, unused_variables, unused_parens)]",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
     "pub struct LeanNativeFlatSlice { pub data: *const core::ffi::c_void, pub len: usize, pub stride_bytes: usize }",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
     "pub struct LeanNativeMutSlice { pub data: *mut core::ffi::c_void, pub len: usize, pub cap: usize }",
     "pub type LeanNativeSliceOutScanFn = extern \"C\" fn(ptr: *const u8, len: usize, out_spans: *mut u64, cap: usize, state_io: *mut u64) -> u32;",
     "#[inline] pub const fn lean_native_pack_span(start: u32, len: u32, kind: u8) -> u64 { ((start as u64) << 32) | (((len & 0xFF_FFFF) as u64) << 8) | (kind as u64) }",
-    "unsafe extern \"C\" {"
-  ] ++ declExterns ++ ["}", ""])
+    "#[inline(always)]",
+    "pub unsafe fn lean_native_clmul64_lo(a: u64, b: u64) -> u64 {",
+    "    #[cfg(all(target_arch = \"x86_64\", target_feature = \"pclmulqdq\"))]",
+    "    unsafe {",
+    "        use core::arch::x86_64::*;",
+    "        let va = _mm_set_epi64x(0, a as i64);",
+    "        let vb = _mm_set_epi64x(0, b as i64);",
+    "        return _mm_extract_epi64::<0>(_mm_clmulepi64_si128::<0x00>(va, vb)) as u64;",
+    "    }",
+    "    #[cfg(all(target_arch = \"aarch64\", target_feature = \"aes\"))]",
+    "    unsafe {",
+    "        use core::arch::aarch64::*;",
+    "        let prod = vmull_p64(a, b);",
+    "        return vgetq_lane_u64::<0>(vreinterpretq_u64_p128(prod));",
+    "    }",
+    "    #[cfg(not(any(all(target_arch = \"x86_64\", target_feature = \"pclmulqdq\"), all(target_arch = \"aarch64\", target_feature = \"aes\"))))]",
+    "    {",
+    "        let mut acc = 0u64;",
+    "        let mut i = 0u32;",
+    "        while i < 64 { if ((b >> i) & 1) != 0 { acc ^= a << i; } i += 1; }",
+    "        acc",
+    "    }",
+    "}",
+    "#[inline(always)]",
+    "pub unsafe fn lean_native_clmul64_hi(a: u64, b: u64) -> u64 {",
+    "    #[cfg(all(target_arch = \"x86_64\", target_feature = \"pclmulqdq\"))]",
+    "    unsafe {",
+    "        use core::arch::x86_64::*;",
+    "        let va = _mm_set_epi64x(0, a as i64);",
+    "        let vb = _mm_set_epi64x(0, b as i64);",
+    "        return _mm_extract_epi64::<1>(_mm_clmulepi64_si128::<0x00>(va, vb)) as u64;",
+    "    }",
+    "    #[cfg(all(target_arch = \"aarch64\", target_feature = \"aes\"))]",
+    "    unsafe {",
+    "        use core::arch::aarch64::*;",
+    "        let prod = vmull_p64(a, b);",
+    "        return vgetq_lane_u64::<1>(vreinterpretq_u64_p128(prod));",
+    "    }",
+    "    #[cfg(not(any(all(target_arch = \"x86_64\", target_feature = \"pclmulqdq\"), all(target_arch = \"aarch64\", target_feature = \"aes\"))))]",
+    "    {",
+    "        let mut acc = 0u64;",
+    "        let mut i = 1u32;",
+    "        while i < 64 { if ((b >> i) & 1) != 0 { acc ^= a >> (64 - i); } i += 1; }",
+    "        acc",
+    "    }",
+    "}",
+    "pub mod c_abi {",
+    "    unsafe extern \"C\" {"
+  ] ++ declExterns ++ ["    }", "}"] ++ declWrappers ++ [""])
 
 def emitGuardFixturesJson (sourcePath : String) (sigs : List CAbiBindingSig) (guards : List (String × String)) : String :=
   let esc := LeanNative.IR.jsonEscape
@@ -383,7 +505,7 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
   let irText := emitLLVMOptimized optMod arch
   let hdrText := emitCAbiHeaderFromSigs sigs
   IO.FS.writeFile headerPath hdrText
-  if !rustPath.isEmpty then IO.FS.writeFile rustPath (emitCAbiRustFromSigs sigs)
+  if !rustPath.isEmpty then IO.FS.writeFile rustPath (emitCAbiRustFromSigs sigs (some optMod))
   if !fixPath.isEmpty then IO.FS.writeFile fixPath (emitGuardFixturesJson optMod.moduleName sigs guards)
   let tmpLl := outPath ++ ".tmp.ll"
   let tmpObj := outPath ++ ".tmp.o"
