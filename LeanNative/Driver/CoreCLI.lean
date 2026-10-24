@@ -357,7 +357,7 @@ def emitCAbiRustFromSigs (sigs : List CAbiBindingSig) (optMod? : Option LNIRModu
       let argsRs := String.intercalate ", " (s.params.map fun (n, _, _) => n)
       s!"#[inline(always)]\npub unsafe fn {s.cSymbol}({paramsRs}){retPart} \{\n    unsafe \{ c_abi::{s.cSymbol}({argsRs}) }\n}"
   String.intercalate "\n" ([
-    "//! Auto-generated Rust FFI & LNIR Inlined Bindings by lean-native C-ABI Binding Generator",
+    "// Auto-generated Rust FFI & LNIR Inlined Bindings by lean-native C-ABI Binding Generator",
     "#![allow(dead_code, non_camel_case_types, non_snake_case, clashing_extern_declarations, unused_unsafe, unused_variables, unused_parens)]",
     "#[repr(C)] #[derive(Copy, Clone, Debug, PartialEq, Eq)]",
     "pub struct LeanNativeFlatSlice { pub data: *const core::ffi::c_void, pub len: usize, pub stride_bytes: usize }",
