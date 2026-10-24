@@ -1,0 +1,154 @@
+{
+  "suite": "gf128_ntt",
+  "version": "v1",
+  "warmups": 9,
+  "trials": 9,
+  "interleaving": "alternating (lean_native,c_o3) / (c_o3,lean_native) across warmups and trials",
+  "flags": {
+    "lean_native": [
+      "build-exe",
+      "--opt",
+      "-O3",
+      "-march=native"
+    ],
+    "c_o3": [
+      "-O3",
+      "-march=native"
+    ]
+  },
+  "primitives_truth": {
+    "gf128": "4 independent 64x64->128 carryless products (clmul64 + clmul64Hi) lowered to @llvm.x86.pclmulqdq / @llvm.aarch64.neon.pmull64 with deferred reduction mod x^128+x^7+x^2+x+1 (0x87); portable fallback on wasm32/nvptx64/baseline; gf2Affine remains scalar parity; eor3 remains packed binary",
+    "ntt": "iterative modular butterfly mod 998244353 with 2-round radix-4 lookahead (no Karatsuba)",
+    "build_exe_path": "Lean source -> LCNF -> emitC + ln_c_opt.py + LNIR LLVM intrinsic override + opt -O3"
+  },
+  "host": {
+    "uname": {
+      "system": "Linux",
+      "node": "ashur",
+      "release": "6.8.0-147-generic",
+      "version": "#147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026",
+      "machine": "x86_64",
+      "processor": "x86_64"
+    },
+    "cpu": "x86_64"
+  },
+  "commit_id": "11f8c5f8a16d7d69538145038e9dd67dbdad49eb",
+  "scripts_ln_c_opt_status": "M scripts/ln_c_opt.py",
+  "commands": {
+    "lean_build": [
+      "/var/lib/sandboxed-node/.transfers/3b52f4d5-d644-4313-97ee-5edbe60ddbed/destination/workspace/lean-native/.lake/build/bin/lean-native",
+      "build-exe",
+      "benchmarks/gf128_ntt_v1.lean",
+      "-o",
+      "/tmp/gf128_ntt_v1_lean"
+    ],
+    "c_build": [
+      "clang",
+      "-O3",
+      "-march=native",
+      "benchmarks/gf128_ntt_v1.c",
+      "-o",
+      "/tmp/gf128_ntt_v1_c"
+    ]
+  },
+  "generated_at_utc": "2026-10-24T05:54:38.489156+00:00",
+  "source_sha256": {
+    "gf128_ntt_v1.lean": "e2796aa4f1c6b9b356d197f45232f8ae5f0811a3853dc43e1a4b29b3f64565ba",
+    "gf128_ntt_v1.c": "57b2748e521ed7a0bd9d220e4307f0ac0496ba532c58d4a73e4578f45c7a76fc",
+    "ln_c_opt.py": "69a974e946438611b17edf801cbe833b7b35eac86a043e58fc4dabf4f700821b"
+  },
+  "results": {
+    "lean_native": {
+      "gf128_scalar": {
+        "checksum": 13665706732021628708,
+        "metric": "field_muls_per_sec",
+        "samples_ns": [
+          61471,
+          61287,
+          162970,
+          62189,
+          64608,
+          61564,
+          61389,
+          61296,
+          61299
+        ],
+        "median_ns": 61471,
+        "iqr_ns": 890,
+        "min_ns": 61287,
+        "max_ns": 162970,
+        "stdev_ns": 33710.87176927414,
+        "ops_per_trial": 4096,
+        "median_ops_per_sec": 66633046.477200635
+      },
+      "ntt_modular": {
+        "checksum": 26402257024,
+        "metric": "butterflies_per_sec",
+        "samples_ns": [
+          467639,
+          472214,
+          479438,
+          468543,
+          466453,
+          473573,
+          470714,
+          475825,
+          464085
+        ],
+        "median_ns": 470714,
+        "iqr_ns": 5934,
+        "min_ns": 464085,
+        "max_ns": 479438,
+        "stdev_ns": 4853.509168632527,
+        "ops_per_trial": 65536,
+        "median_ops_per_sec": 139226791.63993424
+      }
+    },
+    "c_o3": {
+      "gf128_scalar": {
+        "checksum": 13665706732021628708,
+        "metric": "field_muls_per_sec",
+        "samples_ns": [
+          665190,
+          669944,
+          671642,
+          665196,
+          665218,
+          670814,
+          671452,
+          668071,
+          686907
+        ],
+        "median_ns": 669944,
+        "iqr_ns": 6234,
+        "min_ns": 665190,
+        "max_ns": 686907,
+        "stdev_ns": 6726.212214166306,
+        "ops_per_trial": 4096,
+        "median_ops_per_sec": 6113943.8520234525
+      },
+      "ntt_modular": {
+        "checksum": 26402257024,
+        "metric": "butterflies_per_sec",
+        "samples_ns": [
+          291794,
+          267700,
+          267502,
+          275024,
+          273091,
+          267114,
+          267422,
+          267296,
+          267465
+        ],
+        "median_ns": 267502,
+        "iqr_ns": 5669,
+        "min_ns": 267114,
+        "max_ns": 291794,
+        "stdev_ns": 8115.961209931397,
+        "ops_per_trial": 65536,
+        "median_ops_per_sec": 244992560.80328372
+      }
+    }
+  }
+}

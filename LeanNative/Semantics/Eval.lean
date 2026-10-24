@@ -138,11 +138,11 @@ def evalBinOp (op : BinOp) (v1 v2 : Val) : Except UBError Val :=
       | some res => .ok (.u256 res)
       | none => .error (.arithmeticOverflow "mulChecked256 overflow")
     | _, _ => .error (.typeError "mulChecked256 requires u256/u64 operands")
-  | .clmul64 | .gf2Affine | .eor3 =>
+  | .clmul64 | .clmul64Hi | .gf2Affine | .eor3 =>
     match v1, v2 with
     | .u64 a, .u64 b =>
-      .ok (.u64 (match op with | .clmul64 => clmul64 a b | .gf2Affine => gf2Affine a b | _ => eor3 a b))
-    | _, _ => .error (.typeError "evalBinOp: clmul64/gf2Affine/eor3 require u64")
+      .ok (.u64 (match op with | .clmul64 => clmul64 a b | .clmul64Hi => clmul64Hi a b | .gf2Affine => gf2Affine a b | _ => eor3 a b))
+    | _, _ => .error (.typeError "evalBinOp: clmul64/clmul64Hi/gf2Affine/eor3 require u64")
 
 /-- Total, deterministic evaluation of unary scalar operators on `Val`. -/
 def evalUnaryOp (op : UnaryOp) (v : Val) : Except UBError Val :=

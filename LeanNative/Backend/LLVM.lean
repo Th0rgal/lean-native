@@ -105,6 +105,7 @@ def declSlotVars (d : LNIRDecl) : List (VarId × LNIRType) :=
 /-- Mutable state for emitting LLVM instructions within a single declaration. -/
 structure EmitState where
   optimized : Bool
+  target    : TargetArch := .x86_64
   varTypes  : List (VarId × LNIRType)
   nextTmp   : Nat := 0
   scalarBindings : List (VarId × String) := []
@@ -287,7 +288,7 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
         emitLine s!"  {wide} = zext i64 {v} to i256"
         return wide
   | .binOp op lhs rhs =>
-    if is256 && (op == .clmul64 || op == .gf2Affine || op == .eor3) then
+    if is256 && (op == .clmul64 || op == .clmul64Hi || op == .gf2Affine || op == .eor3) then
       let v64 ← emitScalarExprWithWidth "i64" "63" e
       let res ← freshTmp "alu256_gf"
       emitLine s!"  {res} = zext i64 {v64} to i256"
@@ -342,14 +343,26 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
     | .addChecked256 => (← emitChecked "uadd") lVal rVal res
     | .subChecked256 => (← emitChecked "usub") lVal rVal res
     | .mulChecked256 => (← emitChecked "umul") lVal rVal res
-    | .clmul64 =>
-      let mut acc := "0"
-      for i in [0:64] do
-        let bit ← freshTmp "cl_bit"; let low ← freshTmp "cl_low"; let mask ← freshTmp "cl_mask"
-        let shifted ← freshTmp "cl_shift"; let term ← freshTmp "cl_term"; let next ← freshTmp "cl_acc"
-        emitLine s!"  {bit} = lshr i64 {rVal}, {i}\n  {low} = and i64 {bit}, 1\n  {mask} = sub i64 0, {low}\n  {shifted} = shl i64 {lVal}, {i}\n  {term} = and i64 {shifted}, {mask}\n  {next} = xor i64 {acc}, {term}"
-        acc := next
-      return acc
+    | .clmul64 | .clmul64Hi =>
+      let st ← get
+      let isHi := op == .clmul64Hi
+      let lane := if isHi then "1" else "0"
+      if st.optimized && (st.target == .x86_64 || st.target == .hybridCpuGpu) then
+        let va ← freshTmp "cl_va"; let vb ← freshTmp "cl_vb"; let vp ← freshTmp "cl_vp"
+        emitLine s!"  {va} = insertelement <2 x i64> zeroinitializer, i64 {lVal}, i64 0\n  {vb} = insertelement <2 x i64> zeroinitializer, i64 {rVal}, i64 0\n  {vp} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> {va}, <2 x i64> {vb}, i8 0)\n  {res} = extractelement <2 x i64> {vp}, i64 {lane}"
+        return res
+      else if st.optimized && (st.target == .arm64 || st.target == .iosArm64 || st.target == .iosSimArm64 || st.target == .androidArm64) then
+        let vp8 ← freshTmp "cl_vp8"; let vp ← freshTmp "cl_vp"
+        emitLine s!"  {vp8} = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 {lVal}, i64 {rVal})\n  {vp} = bitcast <16 x i8> {vp8} to <2 x i64>\n  {res} = extractelement <2 x i64> {vp}, i64 {lane}"
+        return res
+      else
+        let mut acc := "0"
+        for i in [(if isHi then 1 else 0):64] do
+          let bit ← freshTmp "cl_bit"; let low ← freshTmp "cl_low"; let mask ← freshTmp "cl_mask"
+          let shifted ← freshTmp "cl_shift"; let term ← freshTmp "cl_term"; let next ← freshTmp "cl_acc"
+          let shInstr := if isHi then s!"lshr i64 {lVal}, {64 - i}" else s!"shl i64 {lVal}, {i}"
+          emitLine s!"  {bit} = lshr i64 {rVal}, {i}\n  {low} = and i64 {bit}, 1\n  {mask} = sub i64 0, {low}\n  {shifted} = {shInstr}\n  {term} = and i64 {shifted}, {mask}\n  {next} = xor i64 {acc}, {term}"; acc := next
+        return acc
     | .gf2Affine =>
       let mut acc := "0"
       for i in [0:8] do
@@ -897,7 +910,7 @@ partial def emitCode (code : LNIRCode) (retTy : LNIRType)
                 else if llvmRet == "i256" then "  ret i256 0" else "  ret i64 0")
 
 /-- Emit an LLVM 18 function definition for a single `LNIRDecl`. -/
-def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
+def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) (target : TargetArch := .x86_64) : String :=
   let fnSym := sanitizeSymbol d.name
   let retTypeStr := sigLLVMType d.retTy
   let paramSigs := d.params.map fun p =>
@@ -916,16 +929,20 @@ def emitDeclLLVM (optimized : Bool) (d : LNIRDecl) : String :=
     acc ++ [s!"  %slot_v{vid} = alloca {sTy}, align 8\n  store {sTy} {zeroVal}, ptr %slot_v{vid}, align 8"]
   ) []
   let storeArgLines := d.params.map fun p => s!"  store {slotLLVMType p.ty} %arg_v{p.id}, ptr %slot_v{p.id}, align 8"
-  let (_, finalState) := (emitCode d.body d.retTy none).run { optimized, varTypes := allVars }
+  let (_, finalState) := (emitCode d.body d.retTy none).run { optimized, target, varTypes := allVars }
   String.intercalate "\n" ([
     s!"; LNIRDecl: {d.name} (assurance={d.assurance}, isGpuCand={d.isGpuCand})",
     s!"define dso_local {retTypeStr} @{fnSym}({paramSigStr}) {fnAttr} \{\nentry:"
   ] ++ allocaLines ++ storeArgLines ++ finalState.lines ++ ["}"])
 
 /-- Emit self-contained `weak_odr` runtime and C ABI benchmark kernels in LLVM 18 opaque-pointer IR. -/
-def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
+def emitRuntimeAndCAbiHelpers (optimized : Bool) (target : TargetArch := .x86_64) : String :=
   let attr := if optimized then "#0" else "#1"
   let loopMd := if optimized then ", !llvm.loop !0" else ", !llvm.loop !3"
+  let clmulDecl :=
+    if target == .arm64 || target == .iosArm64 || target == .iosSimArm64 || target == .androidArm64 then
+      "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64) #2"
+    else "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8 immarg) #2"
   let mkRcFn (fnName lbl op : String) : String :=
     String.intercalate "\n" [
       s!"define weak_odr dso_local void @{fnName}(ptr %obj, i64 %count) {attr} \{",
@@ -947,7 +964,7 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
   String.intercalate "\n\n" [
     String.intercalate "\n" [
       "; --- LeanNative Runtime Intrinsics & C ABI Entrypoints ---",
-      "declare i1 @llvm.expect.i1(i1, i1) #2",
+      "declare i1 @llvm.expect.i1(i1, i1) #2\n" ++ clmulDecl,
       "declare { i256, i1 } @llvm.uadd.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.usub.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.umul.with.overflow.i256(i256, i256) #2",
       "declare i256 @llvm.ctlz.i256(i256, i1 immarg) #2\ndeclare void @llvm.trap()",
       "declare void @lean_native_evm_sload(ptr, ptr, ptr)\ndeclare void @lean_native_evm_sstore(ptr, ptr, ptr)\ndeclare i64 @lean_native_trm_matryoshka_parity_u64(i64)",
@@ -987,10 +1004,10 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
     scalar-unroll `shufflevector` overhead. -/
 def emitMetadataFooter (target : TargetArch) : String :=
   let cpuAttr := match target with
-    | .arm64 | .androidArm64 => "\"target-cpu\"=\"neoverse-v2\""
-    | .iosArm64 | .iosSimArm64 => "\"target-cpu\"=\"apple-m1\""
+    | .arm64 | .androidArm64 => "\"target-cpu\"=\"neoverse-v2\" \"target-features\"=\"+neon,+aes\""
+    | .iosArm64 | .iosSimArm64 => "\"target-cpu\"=\"apple-m1\" \"target-features\"=\"+neon,+aes\""
     | .wasm32 => "\"target-features\"=\"+simd128\""
-    | _      => "\"target-cpu\"=\"x86-64-v3\" \"target-features\"=\"+pclmul,+gfni,+avx2\""
+    | _      => "\"target-cpu\"=\"x86-64-v3\" \"target-features\"=\"+pclmul,+avx2\""
   let vecModeMeta := match target with
     | .arm64 | .iosArm64 | .iosSimArm64 | .androidArm64 => "!8 = !{!\"llvm.loop.vectorize.scalable.enable\", i1 false}"
     | _      => "!8 = !{!\"llvm.loop.vectorize.width\", i32 4}"
@@ -1011,59 +1028,36 @@ def emitMetadataFooter (target : TargetArch) : String :=
     vecModeMeta
   ]
 
-/-- Check whether an `LNIRType` is a scalar integer type boxed/unboxed as a tagged Lean scalar pointer. -/
-def isABIScalarIntType : LNIRType → Bool
-  | .i64 | .usize | .i32 | .i16 | .i8 | .i1 => true
-  | _ => false
-
-/-- Check whether an `LNIRType` is a pointer type passed directly across the Lean 4 C ABI. -/
-def isABIPtrType : LNIRType → Bool
-  | .sarray _ | .objPtr | .taggedPtr => true
-  | _ => false
-
-/-- Check whether an `LNIRType` is ABI-thunkable for `emitLLVMABIWrapperDecl`. -/
-def isABIThunkableType (ty : LNIRType) : Bool :=
-  isABIScalarIntType ty || isABIPtrType ty
-
-/-- Check whether `d` is an extern wrapper declaration stub. -/
+def isABIScalarIntType : LNIRType → Bool | .i64 | .usize | .i32 | .i16 | .i8 | .i1 => true | _ => false
+def isABIPtrType : LNIRType → Bool | .sarray _ | .objPtr | .taggedPtr => true | _ => false
+def isABIThunkableType (ty : LNIRType) : Bool := isABIScalarIntType ty || isABIPtrType ty
 def isExternDecl (d : LNIRDecl) : Bool :=
   match d.body with
   | .letBind dst _ (.call fn _ _ true) (.ret retVar) => dst == retVar && fn == d.name
   | _ => false
 
-/-- Emit a Lean 4 C-ABI boxing/unboxing wrapper thunk `@lean_native_abi_<sanitizedName>`
-    for any non-extern declaration `d` whose parameters and return type are ABI-thunkable. -/
 def emitLLVMABIWrapperDecl (d : LNIRDecl) : String :=
-  if isExternDecl d || !(d.params.all (fun p => isABIThunkableType p.ty)) || !(isABIThunkableType d.retTy) then
-    ""
+  if isExternDecl d || !(d.params.all (fun p => isABIThunkableType p.ty)) || !(isABIThunkableType d.retTy) then ""
   else
     let fnSym := sanitizeSymbol d.name
     let indexedParams := (List.range d.params.length).zip d.params
     let abiParamSig := String.intercalate ", " (indexedParams.map fun (idx, _) => s!"ptr %abi_arg{idx}")
     let (unboxLines, callArgs) := indexedParams.foldl (fun (lines, args) (idx, p) =>
       if isABIScalarIntType p.ty then
-        let uLines := [
-          s!"  %raw_{idx} = ptrtoint ptr %abi_arg{idx} to i64",
-          s!"  %unboxed_{idx} = lshr i64 %raw_{idx}, 1"
-        ]
-        (lines ++ uLines, args ++ [s!"i64 %unboxed_{idx}"])
-      else
-        (lines, args ++ [s!"ptr %abi_arg{idx}"])
+        (lines ++ [s!"  %raw_{idx} = ptrtoint ptr %abi_arg{idx} to i64", s!"  %unboxed_{idx} = lshr i64 %raw_{idx}, 1"], args ++ [s!"i64 %unboxed_{idx}"])
+      else (lines, args ++ [s!"ptr %abi_arg{idx}"])
     ) ([], [])
     let callArgsStr := String.intercalate ", " callArgs
     let callAndRetLines :=
       if isABIScalarIntType d.retTy then
         [ s!"  %ret64 = call i64 @{fnSym}({callArgsStr})",
           "  %shl = shl i64 %ret64, 1\n  %tagged = or i64 %shl, 1\n  %boxptr = inttoptr i64 %tagged to ptr\n  ret ptr %boxptr" ]
-      else
-        [ s!"  %ret = call ptr @{fnSym}({callArgsStr})\n  ret ptr %ret" ]
+      else [ s!"  %ret = call ptr @{fnSym}({callArgsStr})\n  ret ptr %ret" ]
     String.intercalate "\n" ([
       s!"; Lean 4 C-ABI Wrapper Thunk for {d.name}",
       s!"define dso_local ptr @lean_native_abi_{fnSym}({abiParamSig}) #0 \{\nentry:"
     ] ++ unboxLines ++ callAndRetLines ++ ["}"])
 
-/-- Emit LLVM 18 IR (`emitLLVMModule`) in either baseline (`optimized = false`) or
-    optimized (`optimized = true`) mode. -/
 def emitLLVMModule (optimized : Bool) (m : LNIRModule) (target : TargetArch := .x86_64) : String :=
   let modeStr := if optimized then "optimized" else "baseline"
   let header := String.intercalate "\n" [
@@ -1072,9 +1066,9 @@ def emitLLVMModule (optimized : Bool) (m : LNIRModule) (target : TargetArch := .
     s!"target datalayout = \"{targetDataLayout target}\"",
     s!"target triple = \"{cpuTriple target}\""
   ]
-  let declStrs := m.decls.map (emitDeclLLVM optimized)
+  let declStrs := m.decls.map (emitDeclLLVM optimized · target)
   let abiWrapperStrs := if optimized then (m.decls.map emitLLVMABIWrapperDecl).filter (!·.isEmpty) else []
-  let runtimeStr := emitRuntimeAndCAbiHelpers optimized
+  let runtimeStr := emitRuntimeAndCAbiHelpers optimized target
   let footer := emitMetadataFooter target
   String.intercalate "\n\n" ([header, runtimeStr] ++ declStrs ++ abiWrapperStrs ++ [footer]) ++ "\n"
 

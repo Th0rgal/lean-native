@@ -8,7 +8,7 @@ open LeanNative.IR LeanNative.Backend.Hybrid LeanNative.Backend.LLVM LeanNative.
 #guard !SymExpr.isCommutative .eor3
 #guard (symEvalScalar {} (.binOp .shl (.constU64 1) (.constU64 64))).nonPoison
 #guard normSymBinOpStep .eor3 (.constU64 0) (.constU64 4294967296) == .constU64 1
-#guard normSymBinOpStep .clmul64 (.constU64 3) (.constU64 3) == .constU64 5
+#guard normSymBinOpStep .clmul64 (.constU64 3) (.constU64 3) == .constU64 5 && normSymBinOpStep .clmul64Hi (.constU64 ((1 : UInt64) <<< 63)) (.constU64 2) == .constU64 1
 #guard normSymBinOpStep .gf2Affine (.constU64 1) (.constU64 1) == .constU64 1
 def routingDecl (body : LNIRCode) : LNIRDecl := { name := "routing", params := [], retTy := .i64, body, isGpuCand := true }
 def routingPlan (body : LNIRCode) : HybridPartitionPlan := partitionModule { moduleName := "Routing", decls := [routingDecl body] }

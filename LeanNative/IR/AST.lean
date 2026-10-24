@@ -21,7 +21,7 @@ inductive BinOp where
   | addChecked256  -- 256-bit checked addition (traps/errors on overflow >= 2^256)
   | subChecked256  -- 256-bit checked subtraction (traps/errors on underflow < 0)
   | mulChecked256  -- 256-bit checked multiplication (traps/errors on overflow >= 2^256)
-  | clmul64        -- carryless product, low 64 bits (pclmulqdq / pmull)
+  | clmul64 | clmul64Hi -- carryless product low/high 64 bits (pclmulqdq / pmull)
   | gf2Affine      -- GF(2^8) affine map, low byte (vgf2p8affineqb)
   | eor3           -- a ^^^ b ^^^ c, with c the low 64 of the rhs word (vpternlogq / eor3)
   deriving Repr, DecidableEq, Inhabited, BEq

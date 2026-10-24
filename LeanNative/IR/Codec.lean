@@ -286,7 +286,7 @@ private def binOpTable : List (BinOp × String) :=
   , (.bitAnd, "B_bitAnd"), (.bitOr, "B_bitOr"), (.bitXor, "B_bitXor")
   , (.shl, "B_shl"), (.shr, "B_shr"), (.sar, "B_sar"), (.eq, "B_eq"), (.lt, "B_lt"), (.le, "B_le")
   , (.addChecked256, "B_addChecked256"), (.subChecked256, "B_subChecked256"), (.mulChecked256, "B_mulChecked256")
-  , (.clmul64, "B_clmul64"), (.gf2Affine, "B_gf2Affine"), (.eor3, "B_eor3") ]
+  , (.clmul64, "B_clmul64"), (.clmul64Hi, "B_clmul64Hi"), (.gf2Affine, "B_gf2Affine"), (.eor3, "B_eor3") ]
 
 private def encodeBinOp (op : BinOp) : String :=
   (binOpTable.find? (fun p => p.1 == op)).map Prod.snd |>.getD "B_add"

@@ -203,6 +203,13 @@ def lowerLitValue (lit : Lean.Compiler.LCNF.LitValue) : LNIRExpr :=
   | .usize v   => .scalar (.constU64 v)
   | .str s     => .scalar (.constU64 s.length.toUInt64)
 
+def tryLowerGfSimdIntrinsic (fnName : Lean.Name) (argVars : List VarId) : Option LNIRExpr :=
+  let nameStr := fnName.toString
+  let gfOps : List (String × BinOp) := [("clmul64Hi", .clmul64Hi), ("clmul64", .clmul64), ("gf2Affine", .gf2Affine), ("eor3", .eor3)]
+  match argVars with
+  | [lhs, rhs] => (gfOps.find? fun p => nameStr.endsWith p.1).map fun p => .scalar (.binOp p.2 (.var lhs) (.var rhs))
+  | _ => none
+
 /-- Try to recognize primitive arithmetic/comparison/array operations in LCNF function calls. -/
 def tryLowerIntrinsicCall (fnName : Lean.Name) (argVars : List VarId) (retTy : LNIRType) : Option LNIRExpr :=
   let nameStr := fnName.toString
@@ -210,7 +217,7 @@ def tryLowerIntrinsicCall (fnName : Lean.Name) (argVars : List VarId) (retTy : L
   let suffixOps : List (String × BinOp) := [
     ("add", .add), ("sub", .sub), ("mul", .mul), ("div", .div), ("mod", .mod), ("rem", .mod),
     ("land", .bitAnd), ("lor", .bitOr), ("xor", .bitXor), ("shiftLeft", .shl), ("shiftRight", .shr),
-    ("clmul64", .clmul64), ("gf2Affine", .gf2Affine), ("eor3", .eor3),
+    ("clmul64Hi", .clmul64Hi), ("clmul64", .clmul64), ("gf2Affine", .gf2Affine), ("eor3", .eor3),
     ("decEq", .eq), ("beq", .eq), ("decLt", .lt), ("blt", .lt), ("decLe", .le), ("ble", .le)
   ]
   match argVars with
@@ -481,22 +488,22 @@ def ingestLCNFDeclGeneric {pu} (decl : Lean.Compiler.LCNF.Decl pu)
     match decl.value with
     | .code c =>
       let body ←
-        if codeHasSelfTailCall decl.name c then do
+        if let some intrExpr := tryLowerGfSimdIntrinsic decl.name (lnirParams.map (·.id)) then do
+          let retVar ← freshBridgeVar retTy
+          pure (.letBind retVar retTy intrExpr (.ret retVar))
+        else if codeHasSelfTailCall decl.name c then do
           let (idxVar, accVar, accTy) ← match lnirParams with
             | p0 :: p1 :: _ => pure (p0.id, p1.id, p1.ty)
             | [p0]          => pure (← freshBridgeVar .i64, p0.id, p0.ty)
             | []            => pure (← freshBridgeVar .i64, ← freshBridgeVar retTy, retTy)
           modify fun st => { st with selfLoopAccVar := some accVar, selfParams := toImpureParams decl.params }
           let stepBody ← lowerCodeFn c
-          let loVar ← freshBridgeVar .i64
-          let hiVar ← freshBridgeVar .i64
-          let accInit ← freshBridgeVar accTy
+          let loVar ← freshBridgeVar .i64; let hiVar ← freshBridgeVar .i64; let accInit ← freshBridgeVar accTy
           pure (.letBind loVar .i64 (.scalar (.constU64 0))
             (.letBind hiVar .i64 (.scalar (.constU64 64))
               (.letBind accInit accTy (.scalar (.var accVar))
                 (.seqFor idxVar loVar hiVar accVar accInit accTy stepBody (.ret accVar)))))
-        else
-          lowerCodeFn c
+        else lowerCodeFn c
       let st ← get
       let assurance : AssuranceLevel :=
         if isDeclExtern || st.hasExtern then .unverifiedFallback else .verifiedKernelProof
@@ -521,91 +528,61 @@ def ingestLCNFDeclGeneric {pu} (decl : Lean.Compiler.LCNF.Decl pu)
       }
   Prod.fst <$> action.run initSt
 
-/-- Lower a Lean 4.31 `LCNF.Decl .impure` into a verified/auditable `LNIRDecl`. -/
-def ingestLCNFImpureDecl (decl : Lean.Compiler.LCNF.Decl .impure)
-    (localDeclNames : Array Lean.Name := #[]) : Lean.CoreM LNIRDecl :=
+def ingestLCNFImpureDecl (decl : Lean.Compiler.LCNF.Decl .impure) (localDeclNames : Array Lean.Name := #[]) : Lean.CoreM LNIRDecl :=
   ingestLCNFDeclGeneric decl lowerImpureCode localDeclNames
-
-/-- Lower a Lean 4.31 `LCNF.Decl .pure` (mono phase) into an `LNIRDecl`. -/
-def ingestLCNFMonoDecl (decl : Lean.Compiler.LCNF.Decl .pure)
-    (localDeclNames : Array Lean.Name := #[]) : Lean.CoreM LNIRDecl :=
+def ingestLCNFMonoDecl (decl : Lean.Compiler.LCNF.Decl .pure) (localDeclNames : Array Lean.Name := #[]) : Lean.CoreM LNIRDecl :=
   ingestLCNFDeclGeneric decl lowerPureCode localDeclNames
 
-/--
-Extract and lower an array of declaration names from the Lean 4.31 environment,
-preferring stage-2 `getLocalImpureDecl?` and falling back to stage-1 `getMonoDecl?`.
--/
 def ingestModuleDecls (declNames : Array Lean.Name) (moduleName : String := "LeanNative.Ingested") :
     Lean.CoreM LNIRModule := do
   let mut decls : List LNIRDecl := []
   for name in declNames do
     if let some impureDecl ← Lean.Compiler.LCNF.getLocalImpureDecl? name then
-      let d ← ingestLCNFImpureDecl impureDecl declNames
-      decls := decls ++ [d]
+      decls := decls ++ [← ingestLCNFImpureDecl impureDecl declNames]
     else if let some monoDecl ← Lean.Compiler.LCNF.getMonoDecl? name then
-      let d ← ingestLCNFMonoDecl monoDecl declNames
-      decls := decls ++ [d]
-  return {
-    moduleName := moduleName
-    decls      := decls
-  }
+      decls := decls ++ [← ingestLCNFMonoDecl monoDecl declNames]
+  return { moduleName := moduleName, decls := decls }
 
-/-- Check whether `name` is an internal compiler-synthesized closed constant or repr auxiliary. -/
 def isInternalClosedOrReprAux (name : Lean.Name) : Bool :=
   let s := name.toString
   ["___closed__", "instRepr", "_cstage", "ctorElim"].any fun pat => (s.splitOn pat).length > 1
 
-/-- Extract and lower all local impure and mono LCNF declarations compiled in the current environment. -/
 def ingestAllLocalDecls (moduleName : String := "LeanNative.Ingested") : Lean.CoreM LNIRModule := do
   let impureNames ← Lean.Compiler.LCNF.getLocalImpureDecls
   let env ← getEnv
   let extraNames := env.constants.map₂.foldl (fun acc name _ =>
-    if impureNames.contains name || isInternalClosedOrReprAux name then acc else acc.push name
-  ) #[]
+    if impureNames.contains name || isInternalClosedOrReprAux name then acc else acc.push name) #[]
   let filteredImpure := impureNames.filter (fun n => !isInternalClosedOrReprAux n)
-  let finalNames := if filteredImpure.isEmpty && extraNames.isEmpty then impureNames else (filteredImpure ++ extraNames)
-  ingestModuleDecls finalNames moduleName
+  ingestModuleDecls (if filteredImpure.isEmpty && extraNames.isEmpty then impureNames else (filteredImpure ++ extraNames)) moduleName
 
-/-- Compute the maximum fresh `VarId` in an `LNIRCode` block. -/
 partial def maxVarIdInCode : LNIRCode → VarId
   | .letBind dst _ _ k => max dst (maxVarIdInCode k)
   | .rawStore pv iv vv _ k => max (max pv iv) (max vv (maxVarIdInCode k))
   | .incRef ov _ k | .decRef ov _ k => max ov (maxVarIdInCode k)
   | .ite cv t e => max cv (max (maxVarIdInCode t) (maxVarIdInCode e))
-  | .seqFor iv lv hv av ai _ s k =>
-    max (max iv lv) (max (max hv av) (max ai (max (maxVarIdInCode s) (maxVarIdInCode k))))
+  | .seqFor iv lv hv av ai _ s k => max (max iv lv) (max (max hv av) (max ai (max (maxVarIdInCode s) (maxVarIdInCode k))))
   | .parFor ov lv _ _ _ k => max (max ov lv) (maxVarIdInCode k)
-  | .ret v => v
-  | .unreachable => 0
+  | .ret v => v | .unreachable => 0
 
-/-- Check whether `code` contains a recursive call to `fnName`. -/
 partial def codeCallsDecl (fnName : String) : LNIRCode → Bool
   | .letBind _ _ (.call callee _ _ _) k => callee == fnName || codeCallsDecl fnName k
-  | .letBind _ _ _ k | .rawStore _ _ _ _ k | .incRef _ _ k | .decRef _ _ k | .parFor _ _ _ _ _ k =>
-    codeCallsDecl fnName k
+  | .letBind _ _ _ k | .rawStore _ _ _ _ k | .incRef _ _ k | .decRef _ _ k | .parFor _ _ _ _ _ k => codeCallsDecl fnName k
   | .ite _ t e | .seqFor _ _ _ _ _ _ t e => codeCallsDecl fnName t || codeCallsDecl fnName e
   | .ret _ | .unreachable => false
 
-/-- Check whether `code` is a simple straight-line/ite non-looping helper body suitable for
-    pre-LNIR $\delta$-normalization/inlining (`normalizeAndInlineLocalDefs`). -/
 partial def isSimpleInlinableBody (selfName : String) : LNIRCode → Bool
   | .letBind _ _ (.call callee _ _ _) _ => callee != selfName && false
   | .letBind _ _ _ k => isSimpleInlinableBody selfName k
   | .ite _ t e => isSimpleInlinableBody selfName t && isSimpleInlinableBody selfName e
-  | .ret _ => true
-  | _ => false
+  | .ret _ => true | _ => false
 
-/-- Alpha-rename all `VarId`s in a `ScalarExpr` by adding `offset`, or mapping parameter ids via `paramMap`. -/
 def renameScalarExpr (paramMap : List (VarId × VarId)) (offset : VarId) : ScalarExpr → ScalarExpr
-  | .constU64 v => .constU64 v
-  | .constBool b => .constBool b
+  | .constU64 v => .constU64 v | .constBool b => .constBool b
   | .var id => .var ((paramMap.lookup id).getD (id + offset))
   | .binOp op l r => .binOp op (renameScalarExpr paramMap offset l) (renameScalarExpr paramMap offset r)
   | .unaryOp op a => .unaryOp op (renameScalarExpr paramMap offset a)
-  | .select c t f =>
-    .select (renameScalarExpr paramMap offset c) (renameScalarExpr paramMap offset t) (renameScalarExpr paramMap offset f)
-  | .fma a b c =>
-    .fma (renameScalarExpr paramMap offset a) (renameScalarExpr paramMap offset b) (renameScalarExpr paramMap offset c)
+  | .select c t f => .select (renameScalarExpr paramMap offset c) (renameScalarExpr paramMap offset t) (renameScalarExpr paramMap offset f)
+  | .fma a b c => .fma (renameScalarExpr paramMap offset a) (renameScalarExpr paramMap offset b) (renameScalarExpr paramMap offset c)
 
 private def renameVarId (paramMap : List (VarId × VarId)) (offset : VarId) (v : VarId) : VarId :=
   (paramMap.lookup v).getD (v + offset)
@@ -750,13 +727,23 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let extraIncArgs : Array String :=
     if clangCmd == tcClang.toString then #[s!"-isystem{clangIncDir}"] else #[]
 
-  -- Step 1: clang -S -emit-llvm -O3 -DNDEBUG -march=native -I<sysroot>/include
+  -- Step 1: clang -S -emit-llvm -O3 -Xclang -disable-llvm-passes -DNDEBUG -march=native -I<sysroot>/include
   let clangEmitOut ← IO.Process.output {
     cmd  := clangCmd
-    args := #["-S", "-emit-llvm", optLevel, "-DNDEBUG", "-march=native", s!"-I{incDir}", s!"-I{runtimeDir}"] ++ extraIncArgs ++ #[cPath, "-o", rawLlPath]
+    args := #["-S", "-emit-llvm", optLevel, "-Xclang", "-disable-llvm-passes", "-DNDEBUG", "-march=native", s!"-I{incDir}", s!"-I{runtimeDir}"] ++ extraIncArgs ++ #[cPath, "-o", rawLlPath]
   }
   if clangEmitOut.exitCode != 0 then
     throw <| IO.userError s!"clang -emit-llvm failed:\n{clangEmitOut.stderr}"
+
+  let intrDecls := optMod.decls.filter fun d =>
+    ["l_clmul64Hi", "l_clmul64", "l_gf2Affine", "l_eor3"].any fun s => d.name.endsWith s
+  if !intrDecls.isEmpty then
+    let intrPath := s!"{outBin}.intr.ll"
+    let intrText := (LeanNative.Backend.LLVM.emitLLVMOptimized { optMod with decls := intrDecls } hostArch).replace ") #0 {" ") alwaysinline #0 {"
+    IO.FS.writeFile intrPath intrText
+    let linkBin : System.FilePath := "/usr/lib/llvm-18/bin/llvm-link"
+    let linkCmd ← if (← linkBin.pathExists) then pure linkBin.toString else pure "llvm-link"
+    discard <| IO.Process.output { cmd := linkCmd, args := #["-S", rawLlPath, s!"--override={intrPath}", "-o", rawLlPath] }
 
   -- Step 2: /usr/lib/llvm-18/bin/opt with O3 + loop-vectorize + slp-vectorizer on both rawLlPath and lnirLlPath
   let optBin : System.FilePath := "/usr/lib/llvm-18/bin/opt"

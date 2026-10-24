@@ -391,9 +391,8 @@ def rewriteConstFoldBinOp (op : BinOp) (a b : UInt64) : ScalarExpr :=
   | .eq => .constBool (a == b)
   | .lt => .constBool (a < b)
   | .le => .constBool (a ≤ b)
-  | .clmul64 => .constU64 (clmul64 a b)
-  | .gf2Affine => .constU64 (gf2Affine a b)
-  | .eor3 => .constU64 (eor3 a b)
+  | .clmul64 => .constU64 (clmul64 a b) | .clmul64Hi => .constU64 (clmul64Hi a b)
+  | .gf2Affine => .constU64 (gf2Affine a b) | .eor3 => .constU64 (eor3 a b)
   | other => .binOp other (.constU64 a) (.constU64 b)
 
 /-- Machine-checked soundness theorem for `rewriteConstFoldBinOp`:

@@ -78,7 +78,7 @@ partial def emitMLIRScalarExpr (e : ScalarExpr) (counter : Nat) : List String ×
       | .addChecked256 => s!"{dst} = arith.addi {lVal}, {rVal} : i64"
       | .subChecked256 => s!"{dst} = arith.subi {lVal}, {rVal} : i64"
       | .mulChecked256 => s!"{dst} = arith.muli {lVal}, {rVal} : i64"
-      | .clmul64       => s!"{dst} = llvm.call @llvm.aarch64.neon.pmull64({lVal}, {rVal}) : (i64, i64) -> vector<16xi8>"
+      | .clmul64 | .clmul64Hi => s!"{dst} = llvm.call @llvm.aarch64.neon.pmull64({lVal}, {rVal}) : (i64, i64) -> vector<16xi8>"
       | .gf2Affine     => s!"{dst} = llvm.call @llvm.x86.vgf2p8affineqb.128({lVal}, {rVal}) : (vector<16xi8>, vector<16xi8>) -> vector<16xi8>"
       | .eor3          => s!"{dst} = llvm.call @llvm.aarch64.neon.eor3.v16i8({lVal}, {rVal}, {rVal}) : (vector<16xi8>, vector<16xi8>, vector<16xi8>) -> vector<16xi8>"
     (lLines ++ rLines ++ [s!"      {instr}"], dst, c2 + 1)

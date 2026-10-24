@@ -63,7 +63,7 @@ def rank : SymExpr → Nat
 
 /-- Check whether `op` is commutative in `SymExpr`. -/
 def isCommutative : BinOp → Bool
-  | .add | .mul | .bitAnd | .bitOr | .bitXor | .eq | .clmul64 => true
+  | .add | .mul | .bitAnd | .bitOr | .bitXor | .eq | .clmul64 | .clmul64Hi => true
   | _ => false
 
 end SymExpr
@@ -94,8 +94,8 @@ def normSymBinOpStep (op : BinOp) (lhs rhs : SymExpr) : SymExpr :=
   | .sub, .constU64 a, .constU64 b => .constU64 (a - b)
   | .mul, .constU64 a, .constU64 b => .constU64 (a * b)
   | .clmul64, .constU64 a, .constU64 b => .constU64 (clmul64 a b)
-  | .gf2Affine, .constU64 a, .constU64 b => .constU64 (gf2Affine a b)
-  | .eor3, .constU64 a, .constU64 b => .constU64 (eor3 a b)
+  | .clmul64Hi, .constU64 a, .constU64 b => .constU64 (clmul64Hi a b)
+  | .gf2Affine, .constU64 a, .constU64 b => .constU64 (gf2Affine a b) | .eor3, .constU64 a, .constU64 b => .constU64 (eor3 a b)
   | .div, .constU64 a, .constU64 b =>
     if b == 0 then .binOp .div l r else .constU64 (a / b)
   | .mod, .constU64 a, .constU64 b =>
