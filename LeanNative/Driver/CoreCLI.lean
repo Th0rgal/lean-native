@@ -396,7 +396,14 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
     | .x86_64 => #["-O3", "-fPIC", "-mpclmul", "-mavx2"]
     | _       => #["-O3", "-fPIC"]
   if !asmPath.isEmpty then
-    let _ ← runCmdOk "clang" (cpuFlags ++ #["-S", tmpLl, "-o", asmPath])
+    if ← runCmdOk "clang" (cpuFlags ++ #["-S", tmpLl, "-o", asmPath]) then
+      let rawAsm ← try IO.FS.readFile asmPath catch _ => pure ""
+      let keepAsmLine (ln : String) : Bool :=
+        let t := ln.trimAscii.toString
+        !(t.startsWith ".cfi_" || t.startsWith ".file" || t.startsWith ".addrsig" ||
+          t.startsWith ".prefalign" || t.startsWith ".ident")
+      let cleanAsm := String.intercalate "\n" ((rawAsm.splitOn "\n").filter keepAsmLine)
+      IO.FS.writeFile asmPath cleanAsm
   let clangOk ← runCmdOk "clang" (cpuFlags ++ #["-c", tmpLl, "-o", tmpObj])
   let builtArchive ← if clangOk then do
     try IO.FS.removeFile outPath catch _ => pure ()
