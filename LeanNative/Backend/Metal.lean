@@ -90,12 +90,10 @@ def emitMetalMatMulTiledKernel (fnName : String) : String :=
     "    if (row < dim && col < dim) {\n        C[row * dim + col] = acc;\n    }\n}"
   ]
 
-def emitMetalDeclKernel (d : LNIRDecl) : String :=
+def emitMetalDeclKernel (d : LNIRDecl) : Option String :=
   let fnName := s!"lean_native_metal_decl_{d.name}"
-  let is256 := d.retTy.is256Bit || d.params.any (fun p => p.ty.is256Bit || p.ty == .storageMap)
-  let regions := extractParForRegions d.body
   if d.name == "dot_product_u64" then
-    String.intercalate "\n" [
+    some (String.intercalate "\n" [
       s!"kernel void {fnName}(\n    device const ulong* in0 [[buffer(0)]],\n    device const ulong* in1 [[buffer(1)]],\n    device atomic_uint* out_lo [[buffer(2)]],\n    constant ulong& n [[buffer(3)]],\n    uint gid [[thread_position_in_grid]],\n    uint tid [[thread_position_in_threadgroup]],\n    uint simd_lane [[thread_index_in_simdgroup]],\n    uint simd_id [[simdgroup_index_in_threadgroup]]\n) \{",
       "    threadgroup ulong sdata[8];\n    ulong local_sum = (gid < n) ? (in0[gid] * in1[gid]) : 0UL;\n    ulong sg_sum = simd_sum(local_sum);",
       "    if (simd_lane == 0u) { sdata[simd_id] = sg_sum; }\n    threadgroup_barrier(mem_flags::mem_threadgroup);",
@@ -103,20 +101,19 @@ def emitMetalDeclKernel (d : LNIRDecl) : String :=
       "        if (simd_lane == 0u) {\n            uint lo = (uint)(block_sum & 0xffffffffUL);\n            uint hi = (uint)(block_sum >> 32UL);",
       "            uint old_lo = atomic_fetch_add_explicit(&out_lo[0], lo, memory_order_relaxed);\n            uint carry = ((old_lo + lo) < old_lo) ? 1u : 0u;",
       "            atomic_fetch_add_explicit(&out_lo[1], hi + carry, memory_order_relaxed);\n        }\n    }\n}"
-    ]
-  else if d.name == "matmul_tiled_u64" then emitMetalMatMulTiledKernel fnName
-  else if is256 then
-    emitMetal1DKernel fnName
-      ["device const ln_u256* in_a", "device const ln_u256* in_b", "device ln_u256* out", "constant ulong& n"]
-      "ln_u256 a = in_a[gid]; ln_u256 b = in_b[gid]; ln_u256 sum = ln_u256_add(a, b); ln_u256 diff = ln_u256_sub(sum, b); ln_u256 prod = ln_u256_mul_lo(diff, b); ln_u256 lz = ln_u256_clz(sum); out[gid] = ln_u256_add(prod, lz);"
+    ])
+  else if d.name == "matmul_tiled_u64" then some (emitMetalMatMulTiledKernel fnName)
   else
-    match regions with
-    | (_, _, _, _, .saxpy alpha) :: _ =>
-      emitMetal1DKernel fnName ["device const ulong* x", "device const ulong* y", "device ulong* out", "constant ulong& n"] s!"out[gid] = {alpha}UL * x[gid] + y[gid];"
-    | (_, _, _, _, .mapScaleAdd scale bias) :: _ =>
-      emitMetal1DKernel fnName ["device const ulong* in0", "device ulong* out", "constant ulong& n"] s!"out[gid] = in0[gid] * {scale}UL + {bias}UL;"
-    | _ =>
-      emitMetal1DKernel fnName ["device const ulong* in0", "device ulong* out", "constant ulong& n"] "out[gid] = in0[gid];"
+    match extractParForRegions d.body with
+    | [(_, _, _, .i64, .saxpy alpha)] =>
+      some (emitMetal1DKernel fnName ["device const ulong* x", "device const ulong* y", "device ulong* out", "constant ulong& n"] s!"out[gid] = {alpha}UL * x[gid] + y[gid];")
+    | [(_, _, _, .i64, .mapScaleAdd scale bias)] =>
+      some (emitMetal1DKernel fnName ["device const ulong* in0", "device ulong* out", "constant ulong& n"] s!"out[gid] = in0[gid] * {scale}UL + {bias}UL;")
+    | [(_, _, _, .i64, .zipAdd)] =>
+      some (emitMetal1DKernel fnName ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"] "out[gid] = in0[gid] + in1[gid];")
+    | [(_, _, _, .i64, .zipMul)] =>
+      some (emitMetal1DKernel fnName ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"] "out[gid] = in0[gid] * in1[gid];")
+    | _ => none
 
 /-- Emit a complete Apple Metal Shading Language (MSL 3.0) module for an `LNIRModule`. -/
 def emitMetalModule (m : LNIRModule) : String :=
@@ -143,17 +140,12 @@ def emitMetalModule (m : LNIRModule) : String :=
     "        if (simd_lane == 0u) { block_partials[bid] = block_sum; }\n    }\n}"
   ]
   let kMatMulTiledU64 := emitMetalMatMulTiledKernel "lean_native_kernel_matmul_tiled_u64"
-  let kEvmU256Batch := String.intercalate "\n" [
-    "kernel void lean_native_kernel_evm_u256_batch(\n    device const ln_u256* in_a [[buffer(0)]],\n    device const ln_u256* in_b [[buffer(1)]],\n    device ln_u256* out [[buffer(2)]],\n    constant ulong& n [[buffer(3)]],\n    uint gid [[thread_position_in_grid]]\n) {",
-    "    if ((ulong)gid < n) {\n        ln_u256 a = in_a[gid]; ln_u256 b = in_b[gid];\n        ln_u256 sum = ln_u256_add(a, b); ln_u256 diff = ln_u256_sub(sum, b);",
-    "        ln_u256 prod = ln_u256_mul_lo(diff, b); ln_u256 lz = ln_u256_clz(sum);",
-    "        ulong denom = (b.l0 == 0UL) ? 1UL : b.l0;\n        prod.l0 = (prod.l0 / denom) ^ lz.l0;\n        out[gid] = ln_u256_add(sum, prod);\n    }\n}"
-  ]
   let declKernels := m.decls.foldl (fun acc d =>
-    if (analyzeDeclGpuSuitability d).1 then acc ++ [emitMetalDeclKernel d] else acc) []
+    if !(analyzeDeclGpuSuitability d).1 then acc
+    else match emitMetalDeclKernel d with | some k => acc ++ [k] | none => acc) []
   String.intercalate "\n\n" ([
     headerComment, emitMetalU256Library, kMapScaleAdd, kZipAdd, kZipMul, kSaxpy,
-    kStencil1D, kDotReduceU64, kMatMulTiledU64, kEvmU256Batch
+    kStencil1D, kDotReduceU64, kMatMulTiledU64
   ] ++ declKernels) ++ "\n"
 
 /-- Emit the Apple Metal FastCheck GPU counterexample search kernel (`lean_native_fastcheck_metal_kernel`)

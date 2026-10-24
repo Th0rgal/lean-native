@@ -345,11 +345,9 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
     | .clmul64 =>
       let mut acc := "0"
       for i in [0:64] do
-        let bit ← freshTmp "cl_bit"; let mask ← freshTmp "cl_mask"
-        let shifted ← freshTmp "cl_shift"; let term ← freshTmp "cl_term"
-        let next ← freshTmp "cl_acc"; let low ← freshTmp "cl_low"
-        emitLine s!"  {bit} = lshr i64 {rVal}, {i}\n  {low} = and i64 {bit}, 1\n  {mask} = sub i64 0, {low}"
-        emitLine s!"  {shifted} = shl i64 {lVal}, {i}\n  {term} = and i64 {shifted}, {mask}\n  {next} = xor i64 {acc}, {term}"
+        let bit ← freshTmp "cl_bit"; let low ← freshTmp "cl_low"; let mask ← freshTmp "cl_mask"
+        let shifted ← freshTmp "cl_shift"; let term ← freshTmp "cl_term"; let next ← freshTmp "cl_acc"
+        emitLine s!"  {bit} = lshr i64 {rVal}, {i}\n  {low} = and i64 {bit}, 1\n  {mask} = sub i64 0, {low}\n  {shifted} = shl i64 {lVal}, {i}\n  {term} = and i64 {shifted}, {mask}\n  {next} = xor i64 {acc}, {term}"
         acc := next
       return acc
     | .gf2Affine =>
@@ -360,11 +358,9 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
         let mut parity := byte
         for shift in [4, 2, 1] do
           let hi ← freshTmp "gf_hi"; let folded ← freshTmp "gf_fold"
-          emitLine s!"  {hi} = lshr i64 {parity}, {shift}\n  {folded} = xor i64 {parity}, {hi}"
-          parity := folded
+          emitLine s!"  {hi} = lshr i64 {parity}, {shift}\n  {folded} = xor i64 {parity}, {hi}"; parity := folded
         let bit ← freshTmp "gf_bit"; let placed ← freshTmp "gf_placed"; let next ← freshTmp "gf_acc"
-        emitLine s!"  {bit} = and i64 {parity}, 1\n  {placed} = shl i64 {bit}, {i}\n  {next} = or i64 {acc}, {placed}"
-        acc := next
+        emitLine s!"  {bit} = and i64 {parity}, 1\n  {placed} = shl i64 {bit}, {i}\n  {next} = or i64 {acc}, {placed}"; acc := next
       return acc
     | .eor3 =>
       let hi ← freshTmp "eor3_hi"; let lo ← freshTmp "eor3_lo"; let hiXor ← freshTmp "eor3_hi_xor"
@@ -738,11 +734,7 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
     | .zipAdd => do
       let v1 ← loadIn1; let a ← freshTmp "za_add"
       emitLine s!"  {a} = add i64 {v0}, {v1}"; pure a
-     | .zipMul => do
-       let v1 ← loadIn1
-       let m ← freshTmp "zm_mul"
-       emitLine s!"  {m} = mul i64 {v0}, {v1}"; pure m
-    | .dotProduct => do
+    | .zipMul | .dotProduct => do
       let v1 ← loadIn1; let m ← freshTmp "zm_mul"
       emitLine s!"  {m} = mul i64 {v0}, {v1}"; pure m
     | .saxpy alphaBits => do
@@ -754,16 +746,12 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
       let saved := (← get).scalarBindings
       let mut bindings := [(idxVar, ivVal)]
       for (bound, input) in inVars.zip inputs do
-        let arr ← loadVarAsPtr input
-        let ptr ← freshTmp "cs_ptr"; let value ← freshTmp "cs_value"
-        emitLine s!"  {ptr} = getelementptr inbounds i64, ptr {arr}, i64 3"
-        let elemPtr ← freshTmp "cs_at"
-        emitLine s!"  {elemPtr} = getelementptr inbounds i64, ptr {ptr}, i64 {ivVal}\n  {value} = load i64, ptr {elemPtr}, align 8"
+        let arr ← loadVarAsPtr input; let ptr ← freshTmp "cs_ptr"; let elemPtr ← freshTmp "cs_at"; let value ← freshTmp "cs_value"
+        emitLine s!"  {ptr} = getelementptr inbounds i64, ptr {arr}, i64 3\n  {elemPtr} = getelementptr inbounds i64, ptr {ptr}, i64 {ivVal}\n  {value} = load i64, ptr {elemPtr}, align 8"
         bindings := bindings ++ [(bound, value)]
       modify fun s => { s with scalarBindings := bindings ++ saved }
       let value ← emitScalarExprWithWidth "i64" "63" body
-      modify fun s => { s with scalarBindings := saved }
-      pure value
+      modify fun s => { s with scalarBindings := saved }; pure value
   let pOut ← freshTmp "p_out"
   emitLine s!"  {pOut} = getelementptr inbounds i64, ptr {outData}, i64 {ivVal}\n  store i64 {resVal}, ptr {pOut}, align 8"
   let nextIv ← freshTmp "par_iv_next"
@@ -962,7 +950,6 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) : String :=
       "declare i1 @llvm.expect.i1(i1, i1) #2",
       "declare { i256, i1 } @llvm.uadd.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.usub.with.overflow.i256(i256, i256) #2\ndeclare { i256, i1 } @llvm.umul.with.overflow.i256(i256, i256) #2",
       "declare i256 @llvm.ctlz.i256(i256, i1 immarg) #2\ndeclare void @llvm.trap()",
-      "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8 immarg)\ndeclare <16 x i8> @llvm.x86.vgf2p8affineqb.128(<16 x i8>, <16 x i8>, i8 immarg)\ndeclare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64)\ndeclare <16 x i8> @llvm.aarch64.neon.eor3.v16i8(<16 x i8>, <16 x i8>, <16 x i8>)",
       "declare void @lean_native_evm_sload(ptr, ptr, ptr)\ndeclare void @lean_native_evm_sstore(ptr, ptr, ptr)\ndeclare i64 @lean_native_trm_matryoshka_parity_u64(i64)",
       "declare noalias ptr @malloc(i64 noundef)\ndeclare void @free(ptr noundef)\ndeclare void @llvm.memcpy.p0.p0.i64(ptr noalias nocapture writeonly, ptr noalias nocapture readonly, i64, i1 immarg)"
     ],
