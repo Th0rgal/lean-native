@@ -74,7 +74,9 @@ def findFirstPositional : List String → String
   | [] => ""
   | "--input" :: v :: _ | "--lnir" :: v :: _ => v
   | flag :: v :: rest =>
-    if ["-o", "--opt", "--arch", "--target", "--profile", "--sm", "--samples"].contains flag then findFirstPositional rest
+    if ["-o", "--opt", "--arch", "--target", "--profile", "--sm", "--samples",
+        "--emit-header", "--header", "--emit-rust", "--rust", "--emit-fixtures", "--fixtures",
+        "--emit-asm", "--asm", "--telemetry-spool"].contains flag then findFirstPositional rest
     else if flag.startsWith "-" then findFirstPositional (v :: rest) else flag
   | [a] => if a.startsWith "-" then "" else a
 
@@ -366,22 +368,36 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
   let headerPath := findFlagValue args "--emit-header" (findFlagValue args "--header" (outPath ++ ".h"))
   let rustPath := findFlagValue args "--emit-rust" (findFlagValue args "--rust" "")
   let fixPath := findFlagValue args "--emit-fixtures" (findFlagValue args "--fixtures" "")
+  let asmPath := findFlagValue args "--emit-asm" (findFlagValue args "--asm" "")
   let jsonFlag := hasFlag args "--json"
+  let posPath := findFirstPositional args
   let baseMod ← loadInputModule elaborateHook? args
   let (optMod, _) := runDefaultPipeline baseMod
-  let sigs := moduleToCAbiSigs optMod
+  let (sigs, guards) ←
+    if posPath.endsWith ".lean" then
+      let src ← try IO.FS.readFile posPath catch _ => pure ""
+      let (srcSigs, srcGuards) := extractLeanSourceCAbiAndGuards src
+      pure (if srcSigs.isEmpty then moduleToCAbiSigs optMod else srcSigs, srcGuards)
+    else
+      pure (moduleToCAbiSigs optMod, [])
   let irText := emitLLVMOptimized optMod arch
   let hdrText := emitCAbiHeaderFromSigs sigs
   IO.FS.writeFile headerPath hdrText
   if !rustPath.isEmpty then IO.FS.writeFile rustPath (emitCAbiRustFromSigs sigs)
-  if !fixPath.isEmpty then IO.FS.writeFile fixPath (emitGuardFixturesJson optMod.moduleName sigs [])
+  if !fixPath.isEmpty then IO.FS.writeFile fixPath (emitGuardFixturesJson optMod.moduleName sigs guards)
   let tmpLl := outPath ++ ".tmp.ll"
   let tmpObj := outPath ++ ".tmp.o"
   IO.FS.writeFile tmpLl irText
   let runCmdOk (cmd : String) (cmdArgs : Array String) : IO Bool := do
     try return (← IO.Process.output { cmd, args := cmdArgs }).exitCode == 0
     catch _ => return false
-  let clangOk ← runCmdOk "clang" #["-O3", "-fPIC", "-c", tmpLl, "-o", tmpObj]
+  let cpuFlags : Array String :=
+    match arch with
+    | .x86_64 => #["-O3", "-fPIC", "-mpclmul", "-mavx2"]
+    | _       => #["-O3", "-fPIC"]
+  if !asmPath.isEmpty then
+    let _ ← runCmdOk "clang" (cpuFlags ++ #["-S", tmpLl, "-o", asmPath])
+  let clangOk ← runCmdOk "clang" (cpuFlags ++ #["-c", tmpLl, "-o", tmpObj])
   let builtArchive ← if clangOk then do
     try IO.FS.removeFile outPath catch _ => pure ()
     if ← runCmdOk "llvm-ar" #["rcs", outPath, tmpObj] then pure true
@@ -389,7 +405,7 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
   else pure false
   if !builtArchive then IO.FS.writeFile outPath irText
   if jsonFlag then
-    IO.println s!"\{\"status\":\"compiled_static_lib\",\"archive\":{if builtArchive then "true" else "false"},\"library\":\"{outPath}\",\"header\":\"{headerPath}\",\"rust\":\"{rustPath}\",\"decls\":{optMod.decls.length}}"
+    IO.println s!"\{\"status\":\"compiled_static_lib\",\"archive\":{if builtArchive then "true" else "false"},\"library\":\"{outPath}\",\"asm\":\"{asmPath}\",\"header\":\"{headerPath}\",\"rust\":\"{rustPath}\",\"decls\":{optMod.decls.length}}"
   else
     IO.println s!"[{tag}] Wrote C-ABI static library ({outPath}, archive={builtArchive}) and header ({headerPath}, decls={optMod.decls.length})"
   return 0

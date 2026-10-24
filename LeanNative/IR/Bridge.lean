@@ -30,6 +30,12 @@ def mangleDeclName (declName : Lean.Name) : String :=
   if declName == `main then "_lean_main"
   else declName.mangle
 
+/-- Compute the C ABI symbol in `env`, honoring `@[export <sym>]` attributes when present. -/
+def mangleDeclNameInEnv (env : Lean.Environment) (declName : Lean.Name) : String :=
+  match Lean.getExportNameFor? env declName with
+  | some exportName => exportName.toString
+  | none => mangleDeclName declName
+
 /-- Metadata recorded for a lowered LCNF declaration (`Name.mangle` C symbol and `SimpleGroundExpr` status). -/
 structure LCNFDeclMetadata where
   declName       : Lean.Name
@@ -41,7 +47,7 @@ structure LCNFDeclMetadata where
 /-- Extract `LCNFDeclMetadata` for `declName` in `env`. -/
 def getLCNFDeclMetadata (env : Lean.Environment) (declName : Lean.Name) : LCNFDeclMetadata := {
   declName       := declName
-  mangledSymbol  := mangleDeclName declName
+  mangledSymbol  := mangleDeclNameInEnv env declName
   isSimpleGround := hasSimpleGroundDecl env declName
   isExtern       := Lean.isExtern env declName
 }
@@ -253,7 +259,7 @@ def tryLowerGfSimdIntrinsic (env : Lean.Environment) (fnName : Lean.Name) (argVa
 
 /-- Try to recognize primitive arithmetic/comparison/array operations in LCNF function calls. -/
 def tryLowerIntrinsicCall (env : Lean.Environment) (fnName : Lean.Name) (argVars : List VarId)
-    (retTy : LNIRType) (argTys : List LNIRType := []) : Option LNIRExpr :=
+    (retTy : LNIRType) (argTys : List LNIRType := []) (isLocal : Bool := false) : Option LNIRExpr :=
   let nameStr := fnName.toString
   let bin (op : BinOp) (l r : VarId) : LNIRExpr := .scalar (.binOp op (.var l) (.var r))
   let suffixOps : List (String × BinOp) := [
@@ -266,16 +272,18 @@ def tryLowerIntrinsicCall (env : Lean.Environment) (fnName : Lean.Name) (argVars
     match tryLowerGfSimdIntrinsic env fnName argVars retTy argTys with
     | some intr => some intr
     | none =>
-      match suffixOps.find? (fun p => nameStr.endsWith p.1) with
-      | some p => some (bin p.2 lhs rhs)
-      | none =>
-        if nameStr.endsWith "uget" || nameStr.endsWith "get!" || nameStr.endsWith "fget" then
-          some (.sarrayGet lhs rhs retTy)
-        else none
+      if isLocal then none
+      else
+        match suffixOps.find? (fun p => nameStr.endsWith p.1) with
+        | some p => some (bin p.2 lhs rhs)
+        | none =>
+          if nameStr.endsWith "uget" || nameStr.endsWith "get!" || nameStr.endsWith "fget" then
+            some (.sarrayGet lhs rhs retTy)
+          else none
   | [arr] =>
-    if nameStr.endsWith "size" || nameStr.endsWith "usize" then some (.sarrayLen arr) else none
+    if !isLocal && (nameStr.endsWith "size" || nameStr.endsWith "usize") then some (.sarrayLen arr) else none
   | [arr, idx, val] =>
-    if nameStr.endsWith "uset" || nameStr.endsWith "set!" || nameStr.endsWith "fset" then
+    if !isLocal && (nameStr.endsWith "uset" || nameStr.endsWith "set!" || nameStr.endsWith "fset") then
       some (.sarraySet arr idx val (match retTy with | .sarray elem => elem | _ => .i64))
     else none
   | _ => none
@@ -286,14 +294,14 @@ def lowerNamedCall (fnName : Lean.Name) (args : Array (Lean.Compiler.LCNF.Arg pu
   let argVars ← args.toList.mapM lowerArg
   let argTys ← argVars.mapM getVarType
   let env ← getEnv
-  match tryLowerIntrinsicCall env fnName argVars retTy argTys with
+  let st ← get
+  let isLocal := st.localDeclNames.contains fnName || fnName == st.selfDeclName
+  match tryLowerIntrinsicCall env fnName argVars retTy argTys isLocal with
   | some intrinsicExpr => return intrinsicExpr
   | none =>
-    let st ← get
-    let isLocal := st.localDeclNames.contains fnName || fnName == st.selfDeclName
     let isExt := !isLocal && Lean.isExtern env fnName
     if isExt then modify fun st => { st with hasExtern := true }
-    return .call (mangleDeclName fnName) argVars retTy isExt
+    return .call (mangleDeclNameInEnv env fnName) argVars retTy isExt
 
 /-- Lower an LCNF fvar (partial) application shared by the pure and impure bridges. -/
 def lowerFVarCall (fvarId : Lean.FVarId) (args : Array (Lean.Compiler.LCNF.Arg pu)) (retTy : LNIRType) :
@@ -655,12 +663,16 @@ partial def spliceInlinedBody (paramMap : List (VarId × VarId)) (offset : VarId
 /-- Inline non-recursive local helper calls (`Inv`, `ValidSszContainerHeader`, `declaredGasLimit`) inside `code`. -/
 partial def inlineLocalHelperCalls (helpers : List LNIRDecl) (nextOffset : VarId) : LNIRCode → LNIRCode
   | .letBind dst ty (.call callee args retTy isExt) k =>
-    let k' := inlineLocalHelperCalls helpers (nextOffset + 128) k
-    if isExt then .letBind dst ty (.call callee args retTy isExt) k'
+    if isExt then
+      .letBind dst ty (.call callee args retTy isExt) (inlineLocalHelperCalls helpers (nextOffset + 128) k)
     else
       match helpers.find? (fun h => h.name == callee && h.params.length == args.length) with
-      | some hDecl => spliceInlinedBody ((hDecl.params.map (·.id)).zip args) nextOffset dst ty k' hDecl.body
-      | none => .letBind dst ty (.call callee args retTy isExt) k'
+      | some hDecl =>
+        let stepSpan := maxVarIdInCode hDecl.body + 128
+        let k' := inlineLocalHelperCalls helpers (nextOffset + stepSpan) k
+        spliceInlinedBody ((hDecl.params.map (·.id)).zip args) nextOffset dst ty k' hDecl.body
+      | none =>
+        .letBind dst ty (.call callee args retTy isExt) (inlineLocalHelperCalls helpers (nextOffset + 128) k)
   | .letBind dst ty val k => .letBind dst ty val (inlineLocalHelperCalls helpers nextOffset k)
   | .rawStore pv iv vv ty k => .rawStore pv iv vv ty (inlineLocalHelperCalls helpers nextOffset k)
   | .incRef ov c k => .incRef ov c (inlineLocalHelperCalls helpers nextOffset k)
@@ -672,10 +684,8 @@ partial def inlineLocalHelperCalls (helpers : List LNIRDecl) (nextOffset : VarId
   | .ret v => .ret v
   | .unreachable => .unreachable
 
-/-- Normalize an `LNIRModule` by $\delta$-inlining non-recursive local helper declarations
-    (`Inv`, `ValidSszContainerHeader`, `declaredGasLimit`) so `FastCheck` and `UnboxTupleSROA`
-    inspect the full arithmetic/relational structure without opaque local calls. -/
-def normalizeAndInlineLocalDefs (m : LNIRModule) : LNIRModule :=
+/-- Perform one round of $\delta$-inlining of simple straight-line local helper declarations. -/
+private def inlineLocalDefsOnce (m : LNIRModule) : LNIRModule :=
   let helpers := m.decls.filter (fun d => isSimpleInlinableBody d.name d.body)
   if helpers.isEmpty then m
   else
@@ -684,6 +694,15 @@ def normalizeAndInlineLocalDefs (m : LNIRModule) : LNIRModule :=
       { d with body := inlineLocalHelperCalls helpers baseOff d.body }
     )
     { m with decls := decls' }
+
+/-- Normalize an `LNIRModule` by $\delta$-inlining non-recursive local helper declarations
+    (`Inv`, `ValidSszContainerHeader`, `declaredGasLimit`) across up to 4 fixed-point rounds
+    so `FastCheck` and `UnboxTupleSROA` inspect the full arithmetic/relational structure. -/
+def normalizeAndInlineLocalDefs (m : LNIRModule) : LNIRModule :=
+  let m1 := inlineLocalDefsOnce m
+  let m2 := inlineLocalDefsOnce m1
+  let m3 := inlineLocalDefsOnce m2
+  inlineLocalDefsOnce m3
 
 /-- Resolve the Lean 4.35 sysroot path reliably even when `lean` is not on `PATH`. -/
 def resolveLeanSysroot : IO System.FilePath := do
