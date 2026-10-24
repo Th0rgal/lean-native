@@ -26,10 +26,7 @@ def tupleFieldLLVMType (f : LNIRType) : String := if f.is256Bit then "i256" else
 def slotLLVMType : LNIRType → String
   | .objPtr | .taggedPtr | .sarray _ | .rawPtr _ | .storageMap => "ptr"
   | .u256 | .i256 => "i256"
-  | .tuple fs =>
-    if fs.all (· == .i64) && (fs.length == 2 || fs.length == 4 || fs.length == 8) then
-      s!"<{fs.length} x i64>"
-    else "{ " ++ String.intercalate ", " (fs.map tupleFieldLLVMType) ++ " }"
+  | .tuple fs => "{ " ++ String.intercalate ", " (fs.map tupleFieldLLVMType) ++ " }"
   | _ => "i64"
 
 def sigLLVMType : LNIRType → String | .unit => "void" | ty => slotLLVMType ty
@@ -110,6 +107,7 @@ structure EmitState where
   optimized : Bool
   varTypes  : List (VarId × LNIRType)
   nextTmp   : Nat := 0
+  scalarBindings : List (VarId × String) := []
   lines     : List String := []
   deriving Inhabited
 
@@ -280,7 +278,14 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
   | .constU64 v => emitConst s!"{v}" "c256"
   | .constBool b => emitConst (if b then "1" else "0") "b256"
   | .var id =>
-    if is256 then loadVarAsI256 id else loadVarAsI64 id
+    match (← get).scalarBindings.lookup id with
+    | none => if is256 then loadVarAsI256 id else loadVarAsI64 id
+    | some v =>
+      if !is256 then return v
+      else
+        let wide ← freshTmp "bound256"
+        emitLine s!"  {wide} = zext i64 {v} to i256"
+        return wide
   | .binOp op lhs rhs =>
     if is256 && (op == .clmul64 || op == .gf2Affine || op == .eor3) then
       let v64 ← emitScalarExprWithWidth "i64" "63" e
@@ -338,51 +343,32 @@ partial def emitScalarExprWithWidth (tyStr : String) (shiftMask : String) (e : L
     | .subChecked256 => (← emitChecked "usub") lVal rVal res
     | .mulChecked256 => (← emitChecked "umul") lVal rVal res
     | .clmul64 =>
-      let av ← freshTmp "clmul_a"
-      let bv ← freshTmp "clmul_b"
-      let pv ← freshTmp "clmul_p"
-      emitLine s!"  {av} = insertelement <2 x i64> poison, i64 {lVal}, i64 0"
-      emitLine s!"  {bv} = insertelement <2 x i64> poison, i64 {rVal}, i64 0"
-      emitLine s!"  {pv} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> {av}, <2 x i64> {bv}, i8 0)"
-      emitLine s!"  {res} = extractelement <2 x i64> {pv}, i64 0"
-      return res
+      let mut acc := "0"
+      for i in [0:64] do
+        let bit ← freshTmp "cl_bit"; let mask ← freshTmp "cl_mask"
+        let shifted ← freshTmp "cl_shift"; let term ← freshTmp "cl_term"
+        let next ← freshTmp "cl_acc"; let low ← freshTmp "cl_low"
+        emitLine s!"  {bit} = lshr i64 {rVal}, {i}\n  {low} = and i64 {bit}, 1\n  {mask} = sub i64 0, {low}"
+        emitLine s!"  {shifted} = shl i64 {lVal}, {i}\n  {term} = and i64 {shifted}, {mask}\n  {next} = xor i64 {acc}, {term}"
+        acc := next
+      return acc
     | .gf2Affine =>
-      let xv ← freshTmp "gf2_x"
-      let mv ← freshTmp "gf2_m"
-      let xb ← freshTmp "gf2_xb"
-      let mb ← freshTmp "gf2_mb"
-      let rv ← freshTmp "gf2_r"
-      let rb ← freshTmp "gf2_rb"
-      emitLine s!"  {xv} = insertelement <2 x i64> poison, i64 {lVal}, i64 0"
-      emitLine s!"  {mv} = insertelement <2 x i64> poison, i64 {rVal}, i64 0"
-      emitLine s!"  {xb} = bitcast <2 x i64> {xv} to <16 x i8>"
-      emitLine s!"  {mb} = bitcast <2 x i64> {mv} to <16 x i8>"
-      emitLine s!"  {rv} = call <16 x i8> @llvm.x86.vgf2p8affineqb.128(<16 x i8> {xb}, <16 x i8> {mb}, i8 0)"
-      emitLine s!"  {rb} = bitcast <16 x i8> {rv} to <2 x i64>"
-      emitLine s!"  {res} = extractelement <2 x i64> {rb}, i64 0"
-      return res
+      let mut acc := "0"
+      for i in [0:8] do
+        let row ← freshTmp "gf_row"; let bits ← freshTmp "gf_bits"; let byte ← freshTmp "gf_byte"
+        emitLine s!"  {row} = lshr i64 {rVal}, {i * 8}\n  {bits} = and i64 {row}, {lVal}\n  {byte} = and i64 {bits}, 255"
+        let mut parity := byte
+        for shift in [4, 2, 1] do
+          let hi ← freshTmp "gf_hi"; let folded ← freshTmp "gf_fold"
+          emitLine s!"  {hi} = lshr i64 {parity}, {shift}\n  {folded} = xor i64 {parity}, {hi}"
+          parity := folded
+        let bit ← freshTmp "gf_bit"; let placed ← freshTmp "gf_placed"; let next ← freshTmp "gf_acc"
+        emitLine s!"  {bit} = and i64 {parity}, 1\n  {placed} = shl i64 {bit}, {i}\n  {next} = or i64 {acc}, {placed}"
+        acc := next
+      return acc
     | .eor3 =>
-      let lo ← freshTmp "eor3_lo"
-      let hi ← freshTmp "eor3_hi"
-      let av ← freshTmp "eor3_a"
-      let bv ← freshTmp "eor3_b"
-      let cv ← freshTmp "eor3_c"
-      let ab ← freshTmp "eor3_ab"
-      let bb ← freshTmp "eor3_bb"
-      let cb ← freshTmp "eor3_cb"
-      let rv ← freshTmp "eor3_r"
-      let rb ← freshTmp "eor3_rb"
-      emitLine s!"  {lo} = and i64 {rVal}, 4294967295"
-      emitLine s!"  {hi} = lshr i64 {rVal}, 32"
-      emitLine s!"  {av} = insertelement <2 x i64> poison, i64 {lVal}, i64 0"
-      emitLine s!"  {bv} = insertelement <2 x i64> poison, i64 {hi}, i64 0"
-      emitLine s!"  {cv} = insertelement <2 x i64> poison, i64 {lo}, i64 0"
-      emitLine s!"  {ab} = bitcast <2 x i64> {av} to <16 x i8>"
-      emitLine s!"  {bb} = bitcast <2 x i64> {bv} to <16 x i8>"
-      emitLine s!"  {cb} = bitcast <2 x i64> {cv} to <16 x i8>"
-      emitLine s!"  {rv} = call <16 x i8> @llvm.aarch64.neon.eor3.v16i8(<16 x i8> {ab}, <16 x i8> {bb}, <16 x i8> {cb})"
-      emitLine s!"  {rb} = bitcast <16 x i8> {rv} to <2 x i64>"
-      emitLine s!"  {res} = extractelement <2 x i64> {rb}, i64 0"
+      let hi ← freshTmp "eor3_hi"; let lo ← freshTmp "eor3_lo"; let hiXor ← freshTmp "eor3_hi_xor"
+      emitLine s!"  {hi} = lshr i64 {rVal}, 32\n  {lo} = and i64 {rVal}, 4294967295\n  {hiXor} = xor i64 {lVal}, {hi}\n  {res} = xor i64 {hiXor}, {lo}"
       return res
   | .unaryOp op arg =>
     if !is256 && op == .clz256 then
@@ -752,13 +738,10 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
     | .zipAdd => do
       let v1 ← loadIn1; let a ← freshTmp "za_add"
       emitLine s!"  {a} = add i64 {v0}, {v1}"; pure a
-    | .zipMul => do
-      let v1 ← loadIn1
-      let a ← freshTmp "zm_a"; let b ← freshTmp "zm_b"; let p ← freshTmp "zm_p"; let m ← freshTmp "zm_mul"
-      emitLine s!"  {a} = insertelement <2 x i64> poison, i64 {v0}, i64 0"
-      emitLine s!"  {b} = insertelement <2 x i64> poison, i64 {v1}, i64 0"
-      emitLine s!"  {p} = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> {a}, <2 x i64> {b}, i8 0)"
-      emitLine s!"  {m} = extractelement <2 x i64> {p}, i64 0"; pure m
+     | .zipMul => do
+       let v1 ← loadIn1
+       let m ← freshTmp "zm_mul"
+       emitLine s!"  {m} = mul i64 {v0}, {v1}"; pure m
     | .dotProduct => do
       let v1 ← loadIn1; let m ← freshTmp "zm_mul"
       emitLine s!"  {m} = mul i64 {v0}, {v1}"; pure m
@@ -767,9 +750,20 @@ def emitParForLoop (outVar lenVar : VarId) (inputs : List VarId) (_elemTy : LNIR
       emitLine s!"  {m} = mul i64 {v0}, {alphaBits}\n  {a} = add i64 {m}, {v1}"; pure a
     | .stencil1D3Pt _ wCenter _ => do
       let m ← freshTmp "st_mul"; emitLine s!"  {m} = mul i64 {v0}, {wCenter}"; pure m
-    | .customScalar idxVar _ _ => do
-      storeI64ToVar idxVar ivVal; let v1 ← loadIn1; let m ← freshTmp "cs_mul"; let a ← freshTmp "cs_add"
-      emitLine s!"  {m} = mul i64 {v0}, {v1}\n  {a} = add i64 {m}, {ivVal}"; pure a
+    | .customScalar idxVar inVars body => do
+      let saved := (← get).scalarBindings
+      let mut bindings := [(idxVar, ivVal)]
+      for (bound, input) in inVars.zip inputs do
+        let arr ← loadVarAsPtr input
+        let ptr ← freshTmp "cs_ptr"; let value ← freshTmp "cs_value"
+        emitLine s!"  {ptr} = getelementptr inbounds i64, ptr {arr}, i64 3"
+        let elemPtr ← freshTmp "cs_at"
+        emitLine s!"  {elemPtr} = getelementptr inbounds i64, ptr {ptr}, i64 {ivVal}\n  {value} = load i64, ptr {elemPtr}, align 8"
+        bindings := bindings ++ [(bound, value)]
+      modify fun s => { s with scalarBindings := bindings ++ saved }
+      let value ← emitScalarExprWithWidth "i64" "63" body
+      modify fun s => { s with scalarBindings := saved }
+      pure value
   let pOut ← freshTmp "p_out"
   emitLine s!"  {pOut} = getelementptr inbounds i64, ptr {outData}, i64 {ivVal}\n  store i64 {resVal}, ptr {pOut}, align 8"
   let nextIv ← freshTmp "par_iv_next"

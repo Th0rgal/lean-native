@@ -35,6 +35,7 @@ echo "=================================================================="
 
 echo "[1/5] Building lean-native-core (zero-Lean-frontend) & lean-native..."
 lake build lean-native-core lean-native
+lake env lean tests/backend_routing.lean
 
 CORE_BIN="./.lake/build/bin/lean-native-core"
 FULL_BIN="./.lake/build/bin/lean-native"

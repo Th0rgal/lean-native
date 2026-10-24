@@ -205,7 +205,7 @@ def emitMLIRModule (m : LNIRModule) : String :=
     else
       let regions := extractParForRegions d.body
       if regions.isEmpty then
-        acc ++ [emitMLIRGpuFunc d.name 0 .i64 (.mapScaleAdd 1 0)]
+        acc
       else
         let rec emitRegions (idx : Nat) :
             List (VarId × VarId × List VarId × LNIRType × ParallelKernelKind) → List String
@@ -362,7 +362,7 @@ def emitPTXDeclKernel (fnSymbol : String) (kernel : ParallelKernelKind) : String
       s!"$L_boundary_{fnSymbol}:\n    st.global.u64 [%rd9], %rd10;\n\n$L_done_{fnSymbol}:\n    ret;\n}"
     ]
   | .customScalar _ _ _ =>
-    emitPTXUnaryU64Kernel fnSymbol "%rd<10>" "add.u64      %rd9, %rd9, %rd6;" "%rd9"
+    s!".error \"{fnSymbol}: unsupported customScalar lowering\""
 
 /-- Lower GPU-compatible kernels in `m` directly to valid NVIDIA PTX 8.0 assembly
     (`.version 8.0`, `.target sm_90`, `.address_size 64`). -/
@@ -457,51 +457,15 @@ def emitPTXModule (m : LNIRModule) (smArch : String := "sm_90") : String :=
     "$L_done_fma_f32:\n    ret;\n}"
   ]
 
-  -- 11. lean_native_kernel_evm_u256_batch: 256-bit (4 x u64 limb) EVM batch arithmetic kernel
-  let emitPTXEvmU256BatchKernel (fnSymbol : String) : String :=
-    String.intercalate "\n" [
-      s!".visible .entry {fnSymbol}(\n    .param .u64 param_out,\n    .param .u64 param_in_a,\n    .param .u64 param_in_b,\n    .param .u64 param_n\n)\n\{",
-      "    .reg .pred %p<6>;\n    .reg .b32  %r<12>;\n    .reg .b64  %rd<16>;\n    .reg .u64  %a<4>;\n    .reg .u64  %b<4>;\n    .reg .u64  %s<4>;\n    .reg .u64  %d<4>;\n    .reg .u64  %m<4>;\n",
-      "    ld.param.u64 %rd1, [param_out];\n    ld.param.u64 %rd2, [param_in_a];\n    ld.param.u64 %rd3, [param_in_b];\n    ld.param.u64 %rd4, [param_n];\n",
-      "    mov.u32      %r1, %ctaid.x;\n    mov.u32      %r2, %ntid.x;\n    mov.u32      %r3, %tid.x;\n    mul.wide.u32 %rd5, %r1, %r2;\n    cvt.u64.u32  %rd6, %r3;\n    add.u64      %rd7, %rd5, %rd6;\n",
-      s!"    setp.ge.u64  %p1, %rd7, %rd4;\n    @%p1 bra     $L_done_{fnSymbol};\n",
-      "    cvta.to.global.u64 %rd1, %rd1;\n    cvta.to.global.u64 %rd2, %rd2;\n    cvta.to.global.u64 %rd3, %rd3;\n    shl.b64      %rd8, %rd7, 5;\n    add.u64      %rd9, %rd2, %rd8;\n    add.u64      %rd10, %rd3, %rd8;\n    add.u64      %rd11, %rd1, %rd8;\n",
-      "    // Load 4 x 64-bit limbs of 256-bit operands A and B",
-      "    ld.global.u64 %a0, [%rd9+0];\n    ld.global.u64 %a1, [%rd9+8];\n    ld.global.u64 %a2, [%rd9+16];\n    ld.global.u64 %a3, [%rd9+24];",
-      "    ld.global.u64 %b0, [%rd10+0];\n    ld.global.u64 %b1, [%rd10+8];\n    ld.global.u64 %b2, [%rd10+16];\n    ld.global.u64 %b3, [%rd10+24];",
-      "    // 256-bit multi-precision addition carry chain & subtraction borrow chain",
-      "    add.cc.u64   %s0, %a0, %b0;\n    addc.cc.u64  %s1, %a1, %b1;\n    addc.cc.u64  %s2, %a2, %b2;\n    addc.u64     %s3, %a3, %b3;",
-      "    sub.cc.u64   %d0, %s0, %b0;\n    subc.cc.u64  %d1, %s1, %b1;\n    subc.cc.u64  %d2, %s2, %b2;\n    subc.u64     %d3, %s3, %b3;",
-      "    // 256-bit multi-precision schoolbook limb multiplication",
-      "    mul.lo.u64   %m0, %d0, %b0;\n    mul.hi.u64   %m1, %d0, %b0;\n    mad.lo.cc.u64 %m1, %d0, %b1, %m1;\n    madc.hi.u64  %m2, %d0, %b1, 0;",
-      "    mad.lo.cc.u64 %m1, %d1, %b0, %m1;\n    madc.hi.cc.u64 %m2, %d1, %b0, %m2;\n    madc.lo.u64  %m3, %d1, %b1, 0;",
-      "    mad.lo.cc.u64 %m2, %d0, %b2, %m2;\n    madc.hi.u64  %m3, %d0, %b2, %m3;\n    mad.lo.u64   %m3, %d3, %b0, %m3;",
-      "    // 256-bit clz.b64 cascade across limbs 3..0",
-      "    clz.b64      %r4, %s3;\n    clz.b64      %r5, %s2;\n    clz.b64      %r6, %s1;\n    clz.b64      %r7, %s0;",
-      "    add.u32      %r8, %r4, 64;\n    add.u32      %r9, %r5, 64;\n    add.u32      %r10, %r6, 128;\n    add.u32      %r11, %r7, 192;",
-      "    setp.eq.u64  %p2, %s3, 0;\n    setp.eq.u64  %p3, %s2, 0;\n    setp.eq.u64  %p4, %s1, 0;",
-      "    selp.u32     %r8, %r11, %r10, %p4;\n    selp.u32     %r8, %r8, %r9, %p3;\n    selp.u32     %r8, %r8, %r4, %p2;",
-      "    cvt.u64.u32  %rd12, %r8;\n    xor.b64      %s0, %s0, %m0;",
-      "    add.cc.u64   %s0, %s0, %rd12;\n    addc.cc.u64  %s1, %s1, 0;\n    addc.cc.u64  %s2, %s2, 0;\n    addc.u64     %s3, %s3, 0;",
-      "    // Store 4 x 64-bit result limbs",
-      "    st.global.u64 [%rd11+0], %s0;\n    st.global.u64 [%rd11+8], %s1;\n    st.global.u64 [%rd11+16], %s2;\n    st.global.u64 [%rd11+24], %s3;\n",
-      s!"$L_done_{fnSymbol}:\n    ret;\n}"
-    ]
-
-  let kEvmU256Batch := emitPTXEvmU256BatchKernel "lean_native_kernel_evm_u256_batch"
-
-  -- 12. Per-declaration PTX entry points
+  -- 11. Per-declaration PTX entry points
   let (declPTXKernels, emittedNames) := m.decls.foldl (fun (acc, names) d =>
     let (ok, _) := analyzeGpuCompatibility d
     if !ok then (acc, names)
     else
       let sym := s!"lean_native_decl_{d.name}"
-      let isU256Decl := d.retTy == .u256 || d.params.any (fun p => p.ty == .u256 || p.ty == .storageMap)
       let regions := extractParForRegions d.body
       match regions with
-      | [] =>
-        let kBody := if isU256Decl then emitPTXEvmU256BatchKernel sym else emitPTXDeclKernel sym (.mapScaleAdd 1 0)
-        (acc ++ [kBody], names ++ [sym])
+      | [] => (acc, names)
       | (_, _, _, _, firstK) :: rest =>
         let primary := emitPTXDeclKernel sym firstK
         let rec emitExtraRegions (idx : Nat) :
@@ -530,8 +494,7 @@ def emitPTXModule (m : LNIRModule) (smArch : String := "sm_90") : String :=
     kMatMulTiledU64,
     kSaxpyF64,
     kMapScaleAddF64,
-    kFmaF32,
-    kEvmU256Batch
+    kFmaF32
   ] ++ declPTXKernels ++ extraDotDecl ++ extraMatMulDecl) ++ "\n"
 
 /-- Emit a StableHLO function (`func.func @...`) targeting Google Cloud TPU v5e
@@ -566,10 +529,7 @@ def emitStableHLODeclFunc (fnName : String) (elemTy : LNIRType) (kernel : Parall
       s!"    %tl = stablehlo.multiply %in0, %c_wl : {tensorTy}\n    %tc = stablehlo.multiply %in0, %c_wc : {tensorTy}\n    %tr = stablehlo.multiply %in0, %c_wr : {tensorTy}",
       s!"    %tlc = stablehlo.add %tl, %tc : {tensorTy}\n    %res = stablehlo.add %tlc, %tr : {tensorTy}"
     ]
-  | .customScalar _ _ _ =>
-    mkVpu s!"%in0: {tensorTy}, %in1: {tensorTy}" "%xored" [
-      s!"    %sum = stablehlo.add %in0, %in1 : {tensorTy}\n    %diff = stablehlo.subtract %in0, %in1 : {tensorTy}\n    %xored = stablehlo.xor %sum, %diff : {tensorTy}"
-    ]
+  | .customScalar _ _ _ => "unsupported_customScalar_lowering"
 
 /-- Lower `LNIRModule` declarations and parallel regions to a Google Cloud TPU v6e (Trillium) StableHLO
     module (`module @lean_native_tpu_v6e_stablehlo`). -/
@@ -624,9 +584,9 @@ def emitStableHLOModule (m : LNIRModule) : String :=
     let (ok, _) := analyzeGpuCompatibility d
     if !ok then acc
     else
-      match extractParForRegions d.body with
-      | [] => acc ++ [emitStableHLODeclFunc s!"decl_{d.name}" .i64 (.mapScaleAdd 1 0)]
-      | (_, _, _, elemTy, firstK) :: _ => acc ++ [emitStableHLODeclFunc s!"decl_{d.name}" elemTy firstK]
+       match extractParForRegions d.body with
+       | [] => acc
+       | (_, _, _, elemTy, firstK) :: _ => acc ++ [emitStableHLODeclFunc s!"decl_{d.name}" elemTy firstK]
   ) []
   String.intercalate "\n\n" ([header] ++ builtinFuncs ++ declFuncs ++ ["}"]) ++ "\n"
 

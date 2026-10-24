@@ -63,7 +63,7 @@ def rank : SymExpr → Nat
 
 /-- Check whether `op` is commutative in `SymExpr`. -/
 def isCommutative : BinOp → Bool
-  | .add | .mul | .bitAnd | .bitOr | .bitXor | .eq | .clmul64 | .eor3 => true
+  | .add | .mul | .bitAnd | .bitOr | .bitXor | .eq | .clmul64 => true
   | _ => false
 
 end SymExpr
@@ -93,6 +93,9 @@ def normSymBinOpStep (op : BinOp) (lhs rhs : SymExpr) : SymExpr :=
   | .add, .constU64 a, .constU64 b => .constU64 (a + b)
   | .sub, .constU64 a, .constU64 b => .constU64 (a - b)
   | .mul, .constU64 a, .constU64 b => .constU64 (a * b)
+  | .clmul64, .constU64 a, .constU64 b => .constU64 (clmul64 a b)
+  | .gf2Affine, .constU64 a, .constU64 b => .constU64 (gf2Affine a b)
+  | .eor3, .constU64 a, .constU64 b => .constU64 (eor3 a b)
   | .div, .constU64 a, .constU64 b =>
     if b == 0 then .binOp .div l r else .constU64 (a / b)
   | .mod, .constU64 a, .constU64 b =>
@@ -263,13 +266,8 @@ def symEvalScalar (st : SymExecState) : ScalarExpr → SymStateVal
       | .div, .constU64 0 => true
       | .mod, .constU64 0 => true
       | _, _ => false
-    let shiftPoison :=
-      match op, sr.expr with
-      | .shl, .constU64 k => decide (k ≥ 64)
-      | .shr, .constU64 k => decide (k ≥ 64)
-      | _, _ => false
     { expr := normSymBinOpStep op sl.expr sr.expr
-      nonPoison := sl.nonPoison && sr.nonPoison && !shiftPoison
+      nonPoison := sl.nonPoison && sr.nonPoison
       noUB := sl.noUB && sr.noUB && !divZero }
   | .unaryOp op arg =>
     let sa := symEvalScalar st arg

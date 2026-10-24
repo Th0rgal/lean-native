@@ -77,7 +77,12 @@ def partitionModule (m : LNIRModule) (minGpuElements : Nat := 65536)
   let (gpuDecls, cpuOnlyDecls, schedule, diags) :=
     m.decls.foldl (fun (gAcc, cAcc, sAcc, dAcc) d =>
       let (ok, reasons) := analyzeGpuCompatibility d
-      if ok then
+      let loweringErrors := match extractParForRegions d.body with
+        | [(_, _, _, .i64, kernel)] => match kernel with
+          | .customScalar _ _ _ => ["customScalar PTX lowering is unsupported"]
+          | _ => []
+        | _ => ["hybrid dispatch requires one i64 parFor region"]
+      if ok && loweringErrors.isEmpty then
         let action : TransferAction := {
           declName             := d.name
           bufferVars           := collectBufferParams d
@@ -88,7 +93,7 @@ def partitionModule (m : LNIRModule) (minGpuElements : Nat := 65536)
         }
         (gAcc ++ [d], cAcc, sAcc ++ [action], dAcc)
       else
-        (gAcc, cAcc ++ [d], sAcc, dAcc ++ [(d.name, reasons)])
+        (gAcc, cAcc ++ [d], sAcc, dAcc ++ [(d.name, reasons ++ loweringErrors)])
     ) ([], [], [], [])
   {
     moduleName       := m.moduleName
