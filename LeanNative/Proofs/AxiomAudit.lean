@@ -55,7 +55,7 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_ne
   , ``LeanNative.Semantics.HeapState.storageLoad_after_storageStore_same
   , ``LeanNative.Semantics.HeapState.storageLoad_after_storageStore_ne
-  , ``LeanNative.Semantics.HeapState.incRefBuf_decRefBuf_cancel
+  , ``LeanNative.Semantics.HeapState.incRefObj_decRefObj_cancel
   , ``LeanNative.Proofs.evalBinOp_u256_and_self, ``LeanNative.Proofs.evalBinOp_u256_or_self
   , ``LeanNative.Proofs.evalBinOp_u256_xor_zero, ``LeanNative.Proofs.evalBinOp_u256_or_zero
   , ``LeanNative.Proofs.storageStore_load_same_sound, ``LeanNative.Proofs.storageStore_load_ne_sound
@@ -129,6 +129,8 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Spec.lazy_reduction_slice_gate_sound, ``LeanNative.Spec.non_linear_rejects_lazy_reduction_slice
   , ``LeanNative.Spec.radix4_ntt_fusion_gate_sound, ``LeanNative.Spec.misaligned_stride_rejects_radix4_ntt
   , ``LeanNative.Spec.turbo_slice_scanner_sroa_gate_sound, ``LeanNative.Spec.escaping_tuple_or_oob_rejects_slice_scanner_sroa
+  , ``LeanNative.Semantics.HeapState.decRefBuf_one_frees_buffer
+  , ``LeanNative.Semantics.HeapState.decRefBuf_none_error, ``LeanNative.Semantics.HeapState.incRefBuf_none_error
   ]
 
 /-- Per-theorem transitive axiom audit result from `Lean.collectAxioms`. -/

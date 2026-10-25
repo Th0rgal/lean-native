@@ -1,9 +1,13 @@
 import LeanNative.IR.Types
 import LeanNative.IR.AST
+import LeanSys.Posix
+import LeanSys.Codec
 
 namespace LeanNative.TurboLean
 
 open LeanNative.IR
+open LeanSys.Posix
+open LeanSys.Codec
 
 /-!
 # Capability-Probed Adapter for `Th0rgal/turbo-lean` (`LeanNative.TurboLean.Adapter`)
@@ -174,47 +178,25 @@ structure TurboLeanConfig where
 
 namespace TurboLeanConfig
 
-/-- Extract a string field `"key": "value"` from a JSON object string. -/
+/-- Extract a string field `"key": "value"` from a JSON object string via `LeanSys.Codec.JsonTape`. -/
 def extractJsonStringField (json : String) (key : String) : Option String :=
-  let pat := "\"" ++ key ++ "\""
-  match json.splitOn pat with
-  | _ :: afterKey :: _ =>
-    match afterKey.splitOn "\"" with
-    | _ :: val :: _ => if val.isEmpty then none else some val
-    | _ => none
-  | _ => none
+  (JsonTape.lookupString? (JsonTape.indexJsonObject (ByteSlice.ofString json)) key).filter (!·.isEmpty)
 
-/-- Extract a natural-number field `"key": 123` from a JSON object string. -/
+/-- Extract a natural-number field `"key": 123` from a JSON object string via `LeanSys.Codec.JsonTape`. -/
 def extractJsonNatField (json : String) (key : String) : Option Nat :=
-  let pat := "\"" ++ key ++ "\""
-  match json.splitOn pat with
-  | _ :: afterKey :: _ =>
-    let afterColon := match afterKey.splitOn ":" with
-      | _ :: rest => String.intercalate ":" rest
-      | [] => ""
-    let digits := (trimStr afterColon).takeWhile Char.isDigit
-    if digits.isEmpty then none else digits.toNat?
-  | _ => none
+  JsonTape.lookupNat? (JsonTape.indexJsonObject (ByteSlice.ofString json)) key
 
-/-- Extract `"per_file_interfaces": { "k": "v", ... }` from a JSON receipt string. -/
+/-- Extract `"per_file_interfaces": { "k": "v", ... }` from a JSON receipt string via `LeanSys.Codec.JsonTape`. -/
 def extractJsonStringMap (json : String) (key : String) : List (String × String) :=
-  let pat := "\"" ++ key ++ "\""
-  match json.splitOn pat with
-  | _ :: afterKey :: _ =>
-    match afterKey.splitOn "{" with
-    | _ :: afterBrace :: _ =>
-      match afterBrace.splitOn "}" with
-      | mapBody :: _ =>
-        let entries := mapBody.splitOn ","
-        entries.foldl (fun acc item =>
-          match item.splitOn "\"" with
-          | _ :: k :: _ :: v :: _ =>
-            if k.isEmpty then acc else acc ++ [(k, v)]
-          | _ => acc
-        ) []
-      | _ => []
-    | _ => []
-  | _ => []
+  match JsonTape.lookupSlice? (JsonTape.indexJsonObject (ByteSlice.ofString json)) key with
+  | none => []
+  | some (subSlice, _) =>
+    let subTape := JsonTape.indexJsonObject subSlice
+    let ba := subTape.root.ba
+    subTape.entries.toList.filterMap fun e =>
+      let k := String.fromUTF8! (ba.extract e.keyOff (Nat.min (e.keyOff + e.keyLen) ba.size))
+      let v := String.fromUTF8! (ba.extract e.valOff (Nat.min (e.valOff + e.valLen) ba.size))
+      if k.isEmpty then none else some (k, v)
 
 /-- Probe environment variables (`LEAN_NATIVE_NO_TURBO`, `LEAN_NATIVE_TURBO_BIN`,
     `LEAN_NATIVE_TURBO_URL`), `PATH`, and `~/.cache/turbo-lean/zygote_daemon.json`. -/
@@ -948,20 +930,7 @@ structure TelemetryConfig where
 
 namespace TelemetryConfig
 
-private def extractSimpleJsonStr (text key : String) : Option String :=
-  let pat := s!"\"{key}\""
-  match text.splitOn pat with
-  | _ :: rest :: _ =>
-    match rest.splitOn ":" with
-    | _ :: afterColon :: _ =>
-      let t := afterColon.trimAsciiStart.toString
-      if t.startsWith "\"" then
-        match (t.drop 1).toString.splitOn "\"" with
-        | val :: _ => some val
-        | [] => none
-      else none
-    | _ => none
-  | _ => none
+private abbrev extractSimpleJsonStr := TurboLeanConfig.extractJsonStringField
 
 def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let envMode ← IO.getEnv "LEAN_NATIVE_TELEMETRY"

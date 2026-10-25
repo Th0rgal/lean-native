@@ -73,6 +73,8 @@ inductive UBError where
   | nonExclusiveWrite  : Nat → UBError
   | divisionByZero     : UBError
   | arithmeticOverflow : String → UBError
+  | useAfterFree       : Nat → UBError
+  | unsupportedCall    : String → UBError
   deriving Repr, DecidableEq, Inhabited, BEq
 
 /-- SSA/ANF variable environment mapping `VarId` to optional runtime values. -/
@@ -158,68 +160,21 @@ theorem lookupSlot_writeSlot_ne (m : StorageMapBuffer) (slot1 slot2 val : UInt25
 
 end StorageMapBuffer
 
-/-- Abstract heap state tracking contiguous scalar array buffers, EVM storage maps, allocation IDs, and reference counts. -/
+/-- Abstract heap state tracking contiguous scalar array buffers, EVM storage maps, allocation IDs, and reference counts.
+    `refCounts` stores `(isObj, id, rc)` where `isObj = false` tracks `.sarrayId` buffers with `rc ≥ 3`
+    (`rc = 1` and `rc = 2` are represented canonically by `buf.exclusive = true` and `buf.exclusive = false`
+    with no entry in `refCounts`), and `isObj = true` tracks `.objPtr` heap objects in a disjoint key space. -/
 structure HeapState where
   buffers     : List ArrayBuffer
   nextId      : Nat
   storageMaps : List StorageMapBuffer := []
-  refCounts   : List (Nat × Nat) := []
+  refCounts   : List (Bool × Nat × Nat) := []
   deriving Repr, DecidableEq, Inhabited, BEq
 
 namespace HeapState
 
 def empty : HeapState :=
   { buffers := [], nextId := 0, storageMaps := [], refCounts := [] }
-
-/-- Look up the current reference count of buffer `bufId` (defaults to `1` for live unshared buffers). -/
-def getRefCount (st : HeapState) (bufId : Nat) : Nat :=
-  match st.refCounts.find? (fun (id, _) => id == bufId) with
-  | some (_, rc) => rc
-  | none => 1
-
-/-- Increment the reference count of buffer `bufId` by `count`. -/
-def incRefBuf (st : HeapState) (bufId count : Nat) : HeapState :=
-  if count == 0 then st
-  else
-    let rc' := st.getRefCount bufId + count
-    { st with refCounts := (bufId, rc') :: st.refCounts.filter (fun (id, _) => id != bufId) }
-
-/-- Decrement the reference count of buffer `bufId` by `count`, freeing the buffer if the count reaches `0`. -/
-def decRefBuf (st : HeapState) (bufId count : Nat) : HeapState :=
-  if count == 0 then st
-  else
-    let rc := st.getRefCount bufId
-    let rc' := rc - count
-    let refs' := st.refCounts.filter (fun (id, _) => id != bufId)
-    if rc' == 0 then
-      { st with buffers := st.buffers.filter (fun b => b.id != bufId), refCounts := refs' }
-    else if rc' == 1 then
-      { st with refCounts := refs' }
-    else
-      { st with refCounts := (bufId, rc') :: refs' }
-
-/-- Evaluate an `incRef` instruction on an optional runtime value. -/
-def evalIncRef (st : HeapState) (v? : Option Val) (count : Nat) : HeapState :=
-  match v? with
-  | some (.sarrayId bufId) | some (.objPtr bufId) => st.incRefBuf bufId count
-  | _ => st
-
-/-- Evaluate a `decRef` instruction on an optional runtime value. -/
-def evalDecRef (st : HeapState) (v? : Option Val) (count : Nat) : HeapState :=
-  match v? with
-  | some (.sarrayId bufId) | some (.objPtr bufId) => st.decRefBuf bufId count
-  | _ => st
-
-@[simp]
-theorem incRefBuf_decRefBuf_cancel (st : HeapState) (bufId count : Nat)
-    (h_empty : st.refCounts = []) :
-    (st.incRefBuf bufId count).decRefBuf bufId count = st := by
-  cases st; simp only at h_empty; subst h_empty
-  cases count with
-  | zero => rfl
-  | succ c =>
-    unfold incRefBuf decRefBuf getRefCount
-    simp [Nat.add_sub_cancel 1 (c + 1)]
 
 /-- Look up an `ArrayBuffer` by its buffer identifier. -/
 def findBuffer (st : HeapState) (bufId : Nat) : Option ArrayBuffer :=
@@ -229,6 +184,139 @@ def findBuffer (st : HeapState) (bufId : Nat) : Option ArrayBuffer :=
 def updateBuffer (st : HeapState) (buf : ArrayBuffer) : HeapState :=
   { st with
     buffers := st.buffers.map (fun b => if b.id == buf.id then buf else b) }
+
+/-- Look up the current reference count of a live `ArrayBuffer` (`1` when `exclusive = true`,
+    `2` when `exclusive = false` and absent from `refCounts`, or `rc ≥ 3` from `refCounts`). -/
+def getBufRefCount (st : HeapState) (buf : ArrayBuffer) : Nat :=
+  if buf.exclusive then 1
+  else
+    match st.refCounts.find? (fun (isObj, id, _) => !isObj && id == buf.id) with
+    | some (_, _, rc) => Nat.max 2 rc
+    | none => 2
+
+/-- Set the `exclusive` flag on buffer `bufId` inside `bs`. -/
+def setBufferExclusive (bs : List ArrayBuffer) (bufId : Nat) (excl : Bool) : List ArrayBuffer :=
+  bs.map (fun b => if b.id == bufId then { b with exclusive := excl } else b)
+
+/-- Increment the reference count of `.sarrayId bufId` by `count`, failing with `useAfterFree` if `bufId` is not live. -/
+def incRefBuf (st : HeapState) (bufId count : Nat) : Except UBError HeapState :=
+  match st.findBuffer bufId with
+  | none => .error (.useAfterFree bufId)
+  | some buf =>
+    if count == 0 then .ok st
+    else
+      let rc' := st.getBufRefCount buf + count
+      let refs' := st.refCounts.filter (fun (isObj, id, _) => isObj || id != bufId)
+      let newRefs := if rc' <= 2 then refs' else (false, bufId, rc') :: refs'
+      .ok { st with
+        buffers := setBufferExclusive st.buffers bufId false
+        refCounts := newRefs }
+
+/-- Decrement the reference count of `.sarrayId bufId` by `count`, freeing the buffer at `rc = 0`,
+    restoring `exclusive = true` at `rc = 1`, or failing with `useAfterFree` on freed/underflowed buffers. -/
+def decRefBuf (st : HeapState) (bufId count : Nat) : Except UBError HeapState :=
+  match st.findBuffer bufId with
+  | none => .error (.useAfterFree bufId)
+  | some buf =>
+    if count == 0 then .ok st
+    else
+      let rc := st.getBufRefCount buf
+      if count > rc then .error (.useAfterFree bufId)
+      else
+        let rc' := rc - count
+        let refs' := st.refCounts.filter (fun (isObj, id, _) => isObj || id != bufId)
+        if rc' == 0 then
+          .ok { st with
+            buffers := st.buffers.filter (fun b => b.id != bufId)
+            refCounts := refs' }
+        else if rc' == 1 then
+          .ok { st with
+            buffers := setBufferExclusive st.buffers bufId true
+            refCounts := refs' }
+        else if rc' == 2 then
+          .ok { st with
+            buffers := setBufferExclusive st.buffers bufId false
+            refCounts := refs' }
+        else
+          .ok { st with
+            buffers := setBufferExclusive st.buffers bufId false
+            refCounts := (false, bufId, rc') :: refs' }
+
+/-- Look up the current reference count of `.objPtr objId` in the object key space (defaults to `1`). -/
+def getObjRefCount (st : HeapState) (objId : Nat) : Nat :=
+  match st.refCounts.find? (fun (isObj, id, _) => isObj && id == objId) with
+  | some (_, _, rc) => rc
+  | none => 1
+
+/-- Increment the reference count of `.objPtr objId` by `count`, failing with `useAfterFree` if already freed (`rc = 0`). -/
+def incRefObj (st : HeapState) (objId count : Nat) : Except UBError HeapState :=
+  let rc := st.getObjRefCount objId
+  if rc == 0 then .error (.useAfterFree objId)
+  else if count == 0 then .ok st
+  else
+    let rc' := rc + count
+    let refs' := st.refCounts.filter (fun (isObj, id, _) => !isObj || id != objId)
+    .ok { st with refCounts := (true, objId, rc') :: refs' }
+
+/-- Decrement the reference count of `.objPtr objId` by `count`, recording `(true, objId, 0)` when freed. -/
+def decRefObj (st : HeapState) (objId count : Nat) : Except UBError HeapState :=
+  let rc := st.getObjRefCount objId
+  if rc == 0 || count > rc then .error (.useAfterFree objId)
+  else if count == 0 then .ok st
+  else
+    let rc' := rc - count
+    let refs' := st.refCounts.filter (fun (isObj, id, _) => !isObj || id != objId)
+    if rc' == 1 then
+      .ok { st with refCounts := refs' }
+    else
+      .ok { st with refCounts := (true, objId, rc') :: refs' }
+
+/-- Evaluate an `incRef` instruction on variable `objVar` in `env`. -/
+def evalIncRef (st : HeapState) (env : VarEnv) (objVar : VarId) (count : Nat) : Except UBError HeapState :=
+  match env objVar with
+  | none => .error (.unboundVar objVar)
+  | some (.sarrayId bufId) => st.incRefBuf bufId count
+  | some (.objPtr objId) => st.incRefObj objId count
+  | some _ => .ok st
+
+/-- Evaluate a `decRef` instruction on variable `objVar` in `env`. -/
+def evalDecRef (st : HeapState) (env : VarEnv) (objVar : VarId) (count : Nat) : Except UBError HeapState :=
+  match env objVar with
+  | none => .error (.unboundVar objVar)
+  | some (.sarrayId bufId) => st.decRefBuf bufId count
+  | some (.objPtr objId) => st.decRefObj objId count
+  | some _ => .ok st
+
+@[simp]
+theorem incRefObj_decRefObj_cancel (st : HeapState) (objId count : Nat)
+    (h_empty : st.refCounts = []) :
+    (match st.incRefObj objId count with
+     | .ok st1 => st1.decRefObj objId count
+     | .error e => .error e) = .ok st := by
+  cases st; simp only at h_empty; subst h_empty
+  cases count with
+  | zero => rfl
+  | succ c =>
+    unfold incRefObj decRefObj getObjRefCount
+    simp [Nat.add_sub_cancel 1 (c + 1)]
+
+@[simp]
+theorem decRefBuf_one_frees_buffer (bufId nextId : Nat) (data : Array UInt64) :
+    let st : HeapState := { buffers := [{ id := bufId, exclusive := true, data := data }], nextId := nextId }
+    st.decRefBuf bufId 1 = .ok { buffers := [], nextId := nextId } := by
+  simp [decRefBuf, findBuffer, getBufRefCount]
+
+@[simp]
+theorem decRefBuf_none_error (st : HeapState) (bufId count : Nat)
+    (h_none : st.findBuffer bufId = none) :
+    st.decRefBuf bufId count = .error (.useAfterFree bufId) := by
+  unfold decRefBuf; rw [h_none]
+
+@[simp]
+theorem incRefBuf_none_error (st : HeapState) (bufId count : Nat)
+    (h_none : st.findBuffer bufId = none) :
+    st.incRefBuf bufId count = .error (.useAfterFree bufId) := by
+  unfold incRefBuf; rw [h_none]
 
 /-- Ensure that buffer `bufId` is marked exclusive (`m_rc == 1` / copy-on-write). -/
 def ensureExclusive (st : HeapState) (bufId : Nat) : Except UBError HeapState :=

@@ -8,7 +8,7 @@
    "rev": "11fb6d9ce8052c767a6e67ae71d5052cc1befc66",
    "name": "«lean-sys»",
    "manifestFile": "lake-manifest.json",
-   "inputRev": "main",
+   "inputRev": "11fb6d9ce8052c767a6e67ae71d5052cc1befc66",
    "inherited": false,
    "configFile": "lakefile.lean"}],
  "name": "«lean-native»",

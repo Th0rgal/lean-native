@@ -51,7 +51,7 @@ if command -v turbo-lean >/dev/null 2>&1; then
   echo "  -> turbo-lean audit-spec: 106/106 tight in Spec.lean (0 vacuous specs)!"
 fi
 
-echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (196 theorems) & Self-Tests..."
+echo "[3/5] Running Gate 2: In-Kernel Transitive Axiom Audit (199 theorems) & Self-Tests..."
 $CORE_BIN self-test
 $FULL_BIN self-test
 $CORE_BIN emit-cabi-bindings --lean LeanNative/Spec.lean --emit-header /tmp/ln_ci_spec_cabi.h --emit-rust /tmp/ln_ci_spec_cabi.rs --emit-fixtures /tmp/ln_ci_spec_fixtures.json
@@ -61,7 +61,7 @@ grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_cabi.rs
 grep -q "leannative_verify_cabi_slice_io" /tmp/ln_ci_spec_fixtures.json
 $CORE_BIN compile --c-abi -o /tmp/ln_ci_fastcheck_cabi.c
 $FULL_BIN audit-axioms > /tmp/ln_ci_axioms.txt
-grep -q "Theorems Audited: 196" /tmp/ln_ci_axioms.txt
+grep -q "Theorems Audited: 199" /tmp/ln_ci_axioms.txt
 grep -q "Status: PASSED" /tmp/ln_ci_axioms.txt
 
 echo "[4/5] Running Gate 4: Cross-Backend Codegen Verification (LLVM 18, Apple Metal 3.0, PTX 8.0)..."
