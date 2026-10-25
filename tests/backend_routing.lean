@@ -37,7 +37,8 @@ instance [BEq ε] [BEq α] : BEq (Except ε α) where
 def testSt0 : HeapState :=
   { buffers := [{ id := 0, exclusive := true, data := #[10, 20, 30, 40] },
                 { id := 1, exclusive := true, data := #[1, 2, 3, 4] }],
-    nextId := 1 }
+    nextId := 1,
+    refCounts := [(true, 1, 1)] }
 def testEnv0 : VarEnv :=
   (((VarEnv.empty.bind 0 (.sarrayId 0)).bind 1 (.sarrayId 1)).bind 2 (.u64 4)).bind 3 (.objPtr 1)
 
@@ -50,8 +51,11 @@ def testEnv0 : VarEnv :=
 #guard (do let s1 ← testSt0.decRefBuf 1 1; s1.incRefBuf 1 1) == .error (.useAfterFree 1)
 #guard (testSt0.decRefBuf 1 2) == .error (.useAfterFree 1)
 #guard (testSt0.decRefBuf 99 1) == .error (.useAfterFree 99)
+#guard (testSt0.incRefObj 99 1) == .error (.useAfterFree 99)
+#guard (testSt0.decRefObj 99 1) == .error (.useAfterFree 99)
 #guard (evalCode 64 testEnv0 testSt0 (.incRef 99 1 (.ret 2))) == .error (.unboundVar 99)
-#guard (do let s1 ← testSt0.evalDecRef testEnv0 3 1; pure (s1.findBuffer 1).isSome) == .ok true
+#guard (do let s1 ← testSt0.evalDecRef testEnv0 3 1; pure ((s1.findBuffer 1).isSome, s1.getObjRefCount 1)) == .ok (true, 0)
+#guard (do let s1 ← testSt0.evalDecRef testEnv0 3 1; s1.evalIncRef testEnv0 3 1) == .error (.useAfterFree 1)
 #guard (do let s1 ← testSt0.evalDecRef testEnv0 3 1; s1.evalDecRef testEnv0 3 1) == .error (.useAfterFree 1)
 
 -- 2. All 7 parFor variants, fresh buffer allocation (preserving buffer 0), boundary stencil, empty len=0, OOB trap

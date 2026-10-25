@@ -242,13 +242,18 @@ def decRefBuf (st : HeapState) (bufId count : Nat) : Except UBError HeapState :=
             buffers := setBufferExclusive st.buffers bufId false
             refCounts := (false, bufId, rc') :: refs' }
 
-/-- Look up the current reference count of `.objPtr objId` in the object key space (defaults to `1`). -/
+/-- Look up the current reference count of `.objPtr objId` in the object key space (`0` if unknown or freed). -/
 def getObjRefCount (st : HeapState) (objId : Nat) : Nat :=
   match st.refCounts.find? (fun (isObj, id, _) => isObj && id == objId) with
   | some (_, _, rc) => rc
-  | none => 1
+  | none => 0
 
-/-- Increment the reference count of `.objPtr objId` by `count`, failing with `useAfterFree` if already freed (`rc = 0`). -/
+/-- Allocate/register a live `.objPtr objId` with initial reference count `1`. -/
+def allocObj (st : HeapState) (objId : Nat) : HeapState :=
+  let refs' := st.refCounts.filter (fun (isObj, id, _) => !isObj || id != objId)
+  { st with refCounts := (true, objId, 1) :: refs' }
+
+/-- Increment the reference count of `.objPtr objId` by `count`, failing with `useAfterFree` if unknown or freed (`rc = 0`). -/
 def incRefObj (st : HeapState) (objId count : Nat) : Except UBError HeapState :=
   let rc := st.getObjRefCount objId
   if rc == 0 then .error (.useAfterFree objId)
@@ -258,7 +263,7 @@ def incRefObj (st : HeapState) (objId count : Nat) : Except UBError HeapState :=
     let refs' := st.refCounts.filter (fun (isObj, id, _) => !isObj || id != objId)
     .ok { st with refCounts := (true, objId, rc') :: refs' }
 
-/-- Decrement the reference count of `.objPtr objId` by `count`, recording `(true, objId, 0)` when freed. -/
+/-- Decrement the reference count of `.objPtr objId` by `count`, removing the entry when freed (`rc' = 0`). -/
 def decRefObj (st : HeapState) (objId count : Nat) : Except UBError HeapState :=
   let rc := st.getObjRefCount objId
   if rc == 0 || count > rc then .error (.useAfterFree objId)
@@ -266,7 +271,7 @@ def decRefObj (st : HeapState) (objId count : Nat) : Except UBError HeapState :=
   else
     let rc' := rc - count
     let refs' := st.refCounts.filter (fun (isObj, id, _) => !isObj || id != objId)
-    if rc' == 1 then
+    if rc' == 0 then
       .ok { st with refCounts := refs' }
     else
       .ok { st with refCounts := (true, objId, rc') :: refs' }
@@ -288,17 +293,15 @@ def evalDecRef (st : HeapState) (env : VarEnv) (objVar : VarId) (count : Nat) : 
   | some _ => .ok st
 
 @[simp]
-theorem incRefObj_decRefObj_cancel (st : HeapState) (objId count : Nat)
-    (h_empty : st.refCounts = []) :
+theorem incRefObj_decRefObj_cancel (bufs : List ArrayBuffer) (nid objId count : Nat) :
+    let st : HeapState := { buffers := bufs, nextId := nid, refCounts := [(true, objId, 1)] }
     (match st.incRefObj objId count with
      | .ok st1 => st1.decRefObj objId count
      | .error e => .error e) = .ok st := by
-  cases st; simp only at h_empty; subst h_empty
   cases count with
-  | zero => rfl
+  | zero => simp [incRefObj, decRefObj, getObjRefCount]
   | succ c =>
-    unfold incRefObj decRefObj getObjRefCount
-    simp [Nat.add_sub_cancel 1 (c + 1)]
+    simp [incRefObj, decRefObj, getObjRefCount, Nat.add_sub_cancel 1 (c + 1)]
 
 @[simp]
 theorem decRefBuf_one_frees_buffer (bufId nextId : Nat) (data : Array UInt64) :
