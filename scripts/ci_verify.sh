@@ -50,8 +50,15 @@ if command -v turbo-lean >/dev/null 2>&1; then
   grep -q '"tight_specs": 106' /tmp/ln_ci_audit_spec.json
   echo "  -> turbo-lean audit-spec: 106/106 tight in Spec.lean (0 vacuous specs)!"
 fi
-if git grep -niE "maxwell|certified-research|research-governor" -- ':!scripts/ci_verify.sh'; then
-  echo "ERROR: Forbidden internal project reference found in public repository"
+FORBIDDEN_RE="max""well|certified-""research|research-""governor"
+if git grep -niE "$FORBIDDEN_RE" >/dev/null 2>&1; then
+  echo "ERROR: Forbidden internal project reference found in public repository" >&2
+  git grep -niE "$FORBIDDEN_RE" >&2
+  exit 1
+fi
+DUP_EXPORTS="$(grep -rhoE 'export[[:space:]]+[A-Za-z0-9_]+' LeanNative/ LeanNative.lean .lake/packages/lean-sys/LeanSys/ 2>/dev/null | awk '{print $2}' | sort | uniq -d)"
+if [ -n "$DUP_EXPORTS" ]; then
+  echo "ERROR: Duplicate C-ABI @[export] symbols found across LeanNative/LeanSys: $DUP_EXPORTS" >&2
   exit 1
 fi
 

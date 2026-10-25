@@ -759,7 +759,7 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
       else (3, "CandidateBug")
     let consistent := LeanNative.Spec.verifyCounterexampleTriageC 1
       (if hasMissingHyp then 1 else 0) (if !hasMissingHyp && refDisagrees then 1 else 0) tCode == 1
-    let triageJson := s!"\{\"classification\":\"{tName}\",\"classification_code\":{tCode},\"classification_consistent\":{consistent}}"
+    let triageJson := s!"\{\"classification\":\"{tName}\",\"classification_code\":{tCode},\"classification_consistent\":{consistent},\"has_missing_hyp\":{hasMissingHyp},\"ref_disagrees\":{refDisagrees}}"
     let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"counterexample_triage\":{triageJson},\"elapsed_ms\":{dt}}"
     return {
       ok := false, status := "counterexample_found", lhsExpr, rhsExpr
