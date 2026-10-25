@@ -1,5 +1,6 @@
 import LeanNative.IR.Types
 import LeanNative.IR.AST
+import LeanNative.Spec
 import LeanSys.Posix
 import LeanSys.Codec
 
@@ -438,6 +439,7 @@ structure FastCheckResult where
   statesTested                : Nat := 100000
   satisfiedPreconditionsCount : Nat := 100000
   counterexampleFound         : Bool := false
+  triageClass                 : String := "NoCounterexample"
   witness                     : Option String := none
   counterexample              : Option String := none
   elapsedMs                   : Nat := 0
@@ -510,69 +512,46 @@ inductive Expr where
   | bin      : String → Expr → Expr → Expr
   deriving Repr, DecidableEq, Inhabited, BEq
 
-private def hexDigitVal (c : Char) : Option Nat :=
-  if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
-  else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
-  else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 'A'.toNat + 10)
-  else none
+private def parseHexChars : List Char → UInt64 → UInt64
+  | [], acc => acc
+  | c :: rest, acc =>
+    let d? := if '0' ≤ c && c ≤ '9' then some (c.toNat - '0'.toNat)
+      else if 'a' ≤ c && c ≤ 'f' then some (c.toNat - 'a'.toNat + 10)
+      else if 'A' ≤ c && c ≤ 'F' then some (c.toNat - 'A'.toNat + 10) else none
+    match d? with | some d => parseHexChars rest ((acc <<< 4) + d.toUInt64) | none => acc
 
-private def parseHexChars (cs : List Char) (acc : UInt64 := 0) : UInt64 :=
-  match cs with
-  | [] => acc
-  | c :: rest =>
-    match hexDigitVal c with
-    | some d => parseHexChars rest ((acc <<< 4) + d.toUInt64)
-    | none => acc
+private def parseDecChars : List Char → UInt64 → UInt64
+  | [], acc => acc
+  | c :: rest, acc => if '0' ≤ c && c ≤ '9' then parseDecChars rest (acc * 10 + (c.toNat - '0'.toNat).toUInt64) else acc
 
-private def parseDecChars (cs : List Char) (acc : UInt64 := 0) : UInt64 :=
-  match cs with
-  | [] => acc
-  | c :: rest =>
-    if '0' ≤ c && c ≤ '9' then
-      parseDecChars rest (acc * 10 + (c.toNat - '0'.toNat).toUInt64)
-    else
-      acc
-
-private def isIdentContinue (c : Char) : Bool :=
-  c.isAlphanum || c == '_'
-
-private def isHexChar (c : Char) : Bool :=
-  ('0' ≤ c && c ≤ '9') || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
+private def isIdentContinue (c : Char) : Bool := c.isAlphanum || c == '_'
+private def isHexChar (c : Char) : Bool := ('0' ≤ c && c ≤ '9') || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
 
 partial def tokenizeChars (cs : List Char) (acc : List Token := []) : List Token :=
   match cs with
   | [] => acc.reverse
   | c :: rest =>
-    if c.isWhitespace then
-      tokenizeChars rest acc
+    if c.isWhitespace then tokenizeChars rest acc
     else if c == '0' && (rest.head? == some 'x' || rest.head? == some 'X') then
       let afterPrefix := rest.drop 1
       let hexDigits := afterPrefix.takeWhile isHexChar
-      let rem := afterPrefix.drop hexDigits.length
-      tokenizeChars rem (.num (parseHexChars hexDigits) :: acc)
+      tokenizeChars (afterPrefix.drop hexDigits.length) (.num (parseHexChars hexDigits 0) :: acc)
     else if c.isDigit then
       let decDigits := c :: rest.takeWhile Char.isDigit
-      let rem := rest.drop (decDigits.length - 1)
-      tokenizeChars rem (.num (parseDecChars decDigits) :: acc)
+      tokenizeChars (rest.drop (decDigits.length - 1)) (.num (parseDecChars decDigits 0) :: acc)
     else if c.isAlpha || c == '_' then
       let idChars := c :: rest.takeWhile isIdentContinue
       let rem := rest.drop (idChars.length - 1)
       let s := String.ofList idChars
-      if s == "true" || s == "True" then
-        tokenizeChars rem (.num 1 :: acc)
-      else if s == "false" || s == "False" then
-        tokenizeChars rem (.num 0 :: acc)
-      else
-        tokenizeChars rem (.ident s :: acc)
+      let tok := if s == "true" || s == "True" then .num 1 else if s == "false" || s == "False" then .num 0 else .ident s
+      tokenizeChars rem (tok :: acc)
     else
       match c, rest with
-      | '<', '<' :: '<' :: r => tokenizeChars r (.op "<<" :: acc)
-      | '>', '>' :: '>' :: r => tokenizeChars r (.op ">>" :: acc)
+      | '<', '<' :: '<' :: r | '<', '<' :: r => tokenizeChars r (.op "<<" :: acc)
+      | '>', '>' :: '>' :: r | '>', '>' :: r => tokenizeChars r (.op ">>" :: acc)
       | '&', '&' :: '&' :: r => tokenizeChars r (.op "&" :: acc)
       | '|', '|' :: '|' :: r => tokenizeChars r (.op "|" :: acc)
       | '^', '^' :: '^' :: r => tokenizeChars r (.op "^" :: acc)
-      | '<', '<' :: r        => tokenizeChars r (.op "<<" :: acc)
-      | '>', '>' :: r        => tokenizeChars r (.op ">>" :: acc)
       | '=', '=' :: r        => tokenizeChars r (.op "==" :: acc)
       | '!', '=' :: r        => tokenizeChars r (.op "!=" :: acc)
       | '<', '=' :: r        => tokenizeChars r (.op "<=" :: acc)
@@ -582,9 +561,7 @@ partial def tokenizeChars (cs : List Char) (acc : List Token := []) : List Token
 private def varIndexFor (name : String) (vars : List String) : Nat × List String :=
   match vars.idxOf? name with
   | some idx => (idx % 4, vars)
-  | none =>
-    let idx := vars.length % 4
-    (idx, vars ++ [name])
+  | none => (vars.length % 4, vars ++ [name])
 
 partial def parseBinLevel (sub : List Token → List String → Expr × List Token × List String)
     (ops : List String) (toks : List Token) (vars : List String) : Expr × List Token × List String :=
@@ -635,82 +612,41 @@ def parseExprPair (lhsStr rhsStr : String) : Expr × Expr × List String :=
   let (rhsAst, _, vars2) := parseBitOr rhsToks vars1
   (lhsAst, rhsAst, if vars2.isEmpty then ["x"] else vars2)
 
-/-- Evaluate an `Expr` on four 64-bit registers `(v0, v1, v2, v3)`. -/
-@[inline]
-def evalU64 (e : Expr) (v0 v1 v2 v3 : UInt64) : UInt64 :=
+@[inline] def evalU64 (e : Expr) (v0 v1 v2 v3 : UInt64) : UInt64 :=
   match e with
-  | .constVal c => c
-  | .varSlot 0  => v0
-  | .varSlot 1  => v1
-  | .varSlot 2  => v2
-  | .varSlot _  => v3
+  | .constVal c => c | .varSlot 0 => v0 | .varSlot 1 => v1 | .varSlot 2 => v2 | .varSlot _ => v3
   | .unary op a =>
     let va := evalU64 a v0 v1 v2 v3
-    match op with
-    | "~" => ~~~va
-    | "-" => 0 - va
-    | "!" => if va == 0 then 1 else 0
-    | _   => va
+    match op with | "~" => ~~~va | "-" => 0 - va | "!" => (if va == 0 then 1 else 0) | _ => va
   | .bin op l r =>
-    let vl := evalU64 l v0 v1 v2 v3
-    let vr := evalU64 r v0 v1 v2 v3
+    let vl := evalU64 l v0 v1 v2 v3; let vr := evalU64 r v0 v1 v2 v3
     let b2u (b : Bool) : UInt64 := if b then 1 else 0
     match op with
-    | "+"  => vl + vr
-    | "-"  => vl - vr
-    | "*"  => vl * vr
-    | "/"  => if vr == 0 then 0 else vl / vr
-    | "%"  => if vr == 0 then 0 else vl % vr
-    | "&"  => vl &&& vr
-    | "|"  => vl ||| vr
-    | "^"  => vl ^^^ vr
-    | "<<" => if vr >= 64 then 0 else vl <<< vr
-    | ">>" => if vr >= 64 then 0 else vl >>> vr
-    | "==" => b2u (vl == vr)
-    | "!=" => b2u (vl != vr)
-    | "<"  => b2u (decide (vl < vr))
-    | "<=" => b2u (decide (vl ≤ vr))
-    | ">"  => b2u (decide (vr < vl))
-    | ">=" => b2u (decide (vr ≤ vl))
-    | _    => 0
+    | "+" => vl + vr | "-" => vl - vr | "*" => vl * vr
+    | "/" => (if vr == 0 then 0 else vl / vr) | "%" => (if vr == 0 then 0 else vl % vr)
+    | "&" => vl &&& vr | "|" => vl ||| vr | "^" => vl ^^^ vr
+    | "<<" => (if vr >= 64 then 0 else vl <<< vr) | ">>" => (if vr >= 64 then 0 else vl >>> vr)
+    | "==" => b2u (vl == vr) | "!=" => b2u (vl != vr)
+    | "<" => b2u (decide (vl < vr)) | "<=" => b2u (decide (vl ≤ vr))
+    | ">" => b2u (decide (vr < vl)) | ">=" => b2u (decide (vr ≤ vl)) | _ => 0
 
-/-- Evaluate an `Expr` on four 256-bit EVM words `(v0, v1, v2, v3)`. -/
 def evalU256 (e : Expr) (v0 v1 v2 v3 : UInt256) : UInt256 :=
   match e with
-  | .constVal c => UInt256.ofUInt64 c
-  | .varSlot 0  => v0
-  | .varSlot 1  => v1
-  | .varSlot 2  => v2
-  | .varSlot _  => v3
+  | .constVal c => UInt256.ofUInt64 c | .varSlot 0 => v0 | .varSlot 1 => v1 | .varSlot 2 => v2 | .varSlot _ => v3
   | .unary op a =>
     let va := evalU256 a v0 v1 v2 v3
-    match op with
-    | "~" => UInt256.bitNot va
-    | "-" => UInt256.sub UInt256.zero va
-    | "!" => if va == UInt256.zero then UInt256.one else UInt256.zero
-    | _   => va
+    match op with | "~" => UInt256.bitNot va | "-" => UInt256.sub UInt256.zero va | "!" => (if va == UInt256.zero then UInt256.one else UInt256.zero) | _ => va
   | .bin op l r =>
-    let vl := evalU256 l v0 v1 v2 v3
-    let vr := evalU256 r v0 v1 v2 v3
+    let vl := evalU256 l v0 v1 v2 v3; let vr := evalU256 r v0 v1 v2 v3
     let b2u (b : Bool) : UInt256 := if b then UInt256.one else UInt256.zero
     match op with
-    | "+"  => UInt256.add vl vr
-    | "-"  => UInt256.sub vl vr
-    | "*"  => UInt256.mul vl vr
-    | "/"  => (UInt256.div vl vr).getD UInt256.zero
-    | "%"  => (UInt256.mod vl vr).getD UInt256.zero
-    | "&"  => UInt256.bitAnd vl vr
-    | "|"  => UInt256.bitOr vl vr
-    | "^"  => UInt256.bitXor vl vr
-    | "<<" => UInt256.shl vl vr.toNat
-    | ">>" => UInt256.shr vl vr.toNat
-    | "==" => b2u (vl == vr)
-    | "!=" => b2u (vl != vr)
-    | "<"  => b2u (UInt256.lt vl vr)
-    | "<=" => b2u (UInt256.le vl vr)
-    | ">"  => b2u (UInt256.lt vr vl)
-    | ">=" => b2u (UInt256.le vr vl)
-    | _    => UInt256.zero
+    | "+" => UInt256.add vl vr | "-" => UInt256.sub vl vr | "*" => UInt256.mul vl vr
+    | "/" => (UInt256.div vl vr).getD UInt256.zero | "%" => (UInt256.mod vl vr).getD UInt256.zero
+    | "&" => UInt256.bitAnd vl vr | "|" => UInt256.bitOr vl vr | "^" => UInt256.bitXor vl vr
+    | "<<" => UInt256.shl vl vr.toNat | ">>" => UInt256.shr vl vr.toNat
+    | "==" => b2u (vl == vr) | "!=" => b2u (vl != vr)
+    | "<" => b2u (UInt256.lt vl vr) | "<=" => b2u (UInt256.le vl vr)
+    | ">" => b2u (UInt256.lt vr vl) | ">=" => b2u (UInt256.le vr vl) | _ => UInt256.zero
 
 def boundaryU64 : Array UInt64 := #[
   0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64,
@@ -741,13 +677,24 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
   let vName0 := varNames[0]?.getD "x"
   let vName1 := varNames[1]?.getD "y"
 
+  let hasDivOrShift := containsSubstr lhsExpr "/" || containsSubstr lhsExpr "%" ||
+                       containsSubstr lhsExpr "<<" || containsSubstr lhsExpr ">>"
+  let hasRef := containsSubstr lhsExpr "ref" || containsSubstr rhsExpr "ref"
+  let (tCode, tName) : UInt8 × String :=
+    if hasDivOrShift then (1, "SpecTooStrong")
+    else if hasRef then (2, "ReferenceDiscrepancy")
+    else (3, "CandidateBug")
+  let cabiOk := LeanNative.Spec.verifyCounterexampleTriageC 1
+    (if hasDivOrShift then 1 else 0) (if !hasDivOrShift && hasRef then 1 else 0) tCode == 1
+
   let mkCexResult (tested : Nat) (wit : String) : IO FastCheckResult := do
     let dt := (← IO.monoMsNow) - t0
-    let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"elapsed_ms\":{dt}}"
+    let triageJson := s!"\{\"classification\":\"{tName}\",\"classification_code\":{tCode},\"cabi_verified\":{cabiOk}}"
+    let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"counterexample_triage\":{triageJson},\"elapsed_ms\":{dt}}"
     return {
       ok := false, status := "counterexample_found", lhsExpr, rhsExpr
       statesTested := tested, satisfiedPreconditionsCount := tested
-      counterexampleFound := true, witness := some wit, counterexample := some wit
+      counterexampleFound := true, triageClass := tName, witness := some wit, counterexample := some wit
       elapsedMs := dt, rawJson := raw
     }
 
@@ -944,75 +891,50 @@ def probe (cliArgs : List String := []) : IO TelemetryConfig := do
   let pidEnv ← IO.getEnv "SANDBOXED_TELEMETRY_PROJECT_ID"
   let sidEnv ← IO.getEnv "SANDBOXED_TELEMETRY_SESSION_ID"
   let sidAlt1 ← IO.getEnv "SANDBOXED_MISSION_ID"
-  let sidAlt2 ← IO.getEnv "MAXWELL_MISSION_ID"
-  let maxwellRole ← IO.getEnv "RESEARCH_GOVERNOR_ROLE"
-  let maxwellCap ← IO.getEnv "MAXWELL_CAP_TOKEN"
-  let maxwellBossCap ← IO.getEnv "MAXWELL_BOSS_CAP_TOKEN"
   let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
   let dirEnv ← IO.getEnv "LEAN_NATIVE_TELEMETRY_DIR"
   let homeOpt ← IO.getEnv "HOME"
   let customCfgOpt ← IO.getEnv "SANDBOXED_TELEMETRY_CONFIG"
   let mut cfgText := ""
-  for cand in [
-    (customCfgOpt.map trimStr).getD "",
-    match homeOpt with | some h => s!"{h}/.config/sandboxed-telemetry/config.json" | none => "",
-    "/etc/sandboxed-telemetry/config.json"
-  ] do
+  for cand in [(customCfgOpt.map trimStr).getD "", match homeOpt with | some h => s!"{h}/.config/sandboxed-telemetry/config.json" | none => "", "/etc/sandboxed-telemetry/config.json"] do
     if cfgText.isEmpty && !cand.isEmpty then
-      let cfgPath : System.FilePath := cand
-      try
-        if ← cfgPath.pathExists then
-          cfgText ← IO.FS.readFile cfgPath
-      catch _ => pure ()
-  let cfgMode := extractSimpleJsonStr cfgText "mode"
-  let cfgUrl := extractSimpleJsonStr cfgText "url"
-  let cfgTok := extractSimpleJsonStr cfgText "token"
-  let cfgNs := extractSimpleJsonStr cfgText "namespace"
-  let isMaxwellInvocation :=
-    [sidAlt2, maxwellRole, maxwellCap, maxwellBossCap].any (fun o => !(o.map trimStr |>.getD "").isEmpty)
+      try if ← (System.FilePath.mk cand).pathExists then cfgText ← IO.FS.readFile cand catch _ => pure ()
   let rawMode :=
-    if cliArgs.contains "--no-telemetry" then "off"
-    else if cliArgs.contains "--telemetry=off" || cliArgs.contains "--telemetry=0" then "off"
+    if cliArgs.contains "--no-telemetry" || cliArgs.contains "--telemetry=off" || cliArgs.contains "--telemetry=0" then "off"
     else if cliArgs.contains "--telemetry=metrics" then "metrics"
     else if cliArgs.contains "--telemetry=local" then "local"
     else if cliArgs.contains "--telemetry=full" || cliArgs.contains "--telemetry" then "full"
     else
-      match envMode <|> globalEnv <|> modeEnv <|> cfgMode with
+      match envMode <|> globalEnv <|> modeEnv <|> extractSimpleJsonStr cfgText "mode" with
       | some v =>
         let s := (trimStr v).toLower
         if s == "0" || s == "off" || s == "false" || s == "no" then "off"
-        else if s == "local" then "local"
-        else if s == "metrics" then "metrics"
-        else if isMaxwellInvocation then "off"
-        else "full"
-      | none => if isMaxwellInvocation then "off" else "full"
-  let spoolDir := (dirEnv.map trimStr).filter (!·.isEmpty) |>.getD ".lean-native/telemetry"
-  let remoteUrl := ((remoteEnv <|> cfgUrl).map trimStr).filter (!·.isEmpty) |>.getD "https://telemetry.thomas.md/v1/ingest"
-  let token := ((tokEnv <|> tokAlt <|> cfgTok).map trimStr).filter (!·.isEmpty) |>.getD ""
-  let ns := ((nsEnv <|> cfgNs).map trimStr).filter (!·.isEmpty) |>.getD (if token.isEmpty then "community" else "th0rgal")
+        else if s == "local" || s == "metrics" then s else "full"
+      | none => "full"
+  let nonEmptyOpt (o : Option String) (d : String) : String := (o.map trimStr).filter (!·.isEmpty) |>.getD d
+  let spoolDir := nonEmptyOpt dirEnv ".lean-native/telemetry"
+  let remoteUrl := nonEmptyOpt (remoteEnv <|> extractSimpleJsonStr cfgText "url") "https://telemetry.thomas.md/v1/ingest"
+  let token := nonEmptyOpt (tokEnv <|> tokAlt <|> extractSimpleJsonStr cfgText "token") ""
+  let ns := nonEmptyOpt (nsEnv <|> extractSimpleJsonStr cfgText "namespace") (if token.isEmpty then "community" else "th0rgal")
   let mut hostStr := "host"
   let mut midRaw := ""
   try
-    if ← (System.FilePath.mk "/etc/hostname").pathExists then
-      hostStr := trimStr (← IO.FS.readFile "/etc/hostname")
-    if ← (System.FilePath.mk "/etc/machine-id").pathExists then
-      midRaw := trimStr (← IO.FS.readFile "/etc/machine-id")
+    if ← (System.FilePath.mk "/etc/hostname").pathExists then hostStr := trimStr (← IO.FS.readFile "/etc/hostname")
+    if ← (System.FilePath.mk "/etc/machine-id").pathExists then midRaw := trimStr (← IO.FS.readFile "/etc/machine-id")
   catch _ => pure ()
-  let machineId := (midEnv.map trimStr).filter (!·.isEmpty) |>.getD ((blake3Hex s!"telemetry-machine-v1:{hostStr}:{midRaw}").take 16).toString
   let cwd ← IO.currentDir
-  let projectId := (pidEnv.map trimStr).filter (!·.isEmpty) |>.getD ((blake3Hex s!"telemetry-project-v1:{cwd}").take 16).toString
-  let sessionId := ((sidEnv <|> sidAlt1 <|> sidAlt2).map trimStr).filter (!·.isEmpty) |>.getD s!"sess-{((blake3Hex s!"{cwd}:{machineId}").take 12).toString}"
+  let machineId := nonEmptyOpt midEnv ((blake3Hex s!"telemetry-machine-v1:{hostStr}:{midRaw}").take 16).toString
+  let projectId := nonEmptyOpt pidEnv ((blake3Hex s!"telemetry-project-v1:{cwd}").take 16).toString
+  let sessionId := nonEmptyOpt (sidEnv <|> sidAlt1) s!"sess-{((blake3Hex s!"{cwd}:{machineId}").take 12).toString}"
   let mut uidStr := "0"
   try
     let uOut ← IO.Process.output { cmd := "id", args := #["-u"] }
-    if uOut.exitCode == 0 && !(trimStr uOut.stdout).isEmpty then
-      uidStr := trimStr uOut.stdout
+    if uOut.exitCode == 0 && !(trimStr uOut.stdout).isEmpty then uidStr := trimStr uOut.stdout
   catch _ => pure ()
-  let batchOnly := (batchEnv.map trimStr).getD "" == "1" || rawMode == "local"
   return {
-    enabled := rawMode != "off", mode := rawMode, spoolDir := spoolDir
-    tmpSpool := s!"/tmp/sandboxed-telemetry-{uidStr}", remoteUrl := remoteUrl, token := token
-    ns := ns, machineId := machineId, projectId := projectId, sessionId := sessionId, batchOnly := batchOnly
+    enabled := rawMode != "off", mode := rawMode, spoolDir, tmpSpool := s!"/tmp/sandboxed-telemetry-{uidStr}"
+    remoteUrl, token, ns, machineId, projectId, sessionId
+    batchOnly := (batchEnv.map trimStr).getD "" == "1" || rawMode == "local"
   }
 
 end TelemetryConfig
@@ -1052,7 +974,6 @@ def appendTelemetryEventJsonl (cfg : TelemetryConfig) (jsonLine : String) (blobs
     appendJsonlLineBestEffort baseDir "events.jsonl" jsonLine
   if let some home ← IO.getEnv "HOME" then
     appendJsonlLineBestEffort s!"{home}/.cache/lean-native/telemetry" "lean_native_events.jsonl" jsonLine
-    appendJsonlLineBestEffort s!"{home}/.cache/research-governor" "lean_native_events.jsonl" jsonLine
   if !cfg.batchOnly && !cfg.remoteUrl.isEmpty && (cfg.remoteUrl.startsWith "http://" || cfg.remoteUrl.startsWith "https://") then
     try
       let body :=

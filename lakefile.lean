@@ -5,7 +5,7 @@ package «lean-native» where
   version := v!"0.1.0"
 
 require «lean-sys» from git
-  "https://github.com/Th0rgal/lean-sys.git" @ "11fb6d9ce8052c767a6e67ae71d5052cc1befc66"
+  "https://github.com/Th0rgal/lean-sys.git" @ "846dd85cd7e2677825bfe160b4a6cc17fcb38c0f"
 
 lean_lib «LeanNative» where
   roots := #[`LeanNative]

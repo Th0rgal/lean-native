@@ -1093,12 +1093,53 @@ def verifyTurboSliceScannerSROAC (sliceInBounds tupleAliasEscapes undefSyms outL
     ⟨sliceInBounds != 0, tupleAliasEscapes != 0, undefSyms.toNat, outLen.toNat, outCap.toNat⟩
   if canLowerTurboSliceScannerSROA inp then 1 else 0
 
+/-- Wave 3 Counterexample Triage Gate (`1 = SpecTooStrong`, `2 = ReferenceDiscrepancy`, `3 = CandidateBug`). -/
+structure CounterexampleTriageInput where
+  (hasViolation hasMissingHypHint refDisagreesWithCandidate : Bool) (triageClass : Nat)
+  deriving Repr, DecidableEq, BEq
+def verifyCounterexampleTriage (inp : CounterexampleTriageInput) : Bool :=
+  inp.hasViolation &&
+  ((inp.hasMissingHypHint && decide (inp.triageClass = 1)) ||
+   (!inp.hasMissingHypHint && inp.refDisagreesWithCandidate && decide (inp.triageClass = 2)) ||
+   (!inp.hasMissingHypHint && !inp.refDisagreesWithCandidate && decide (inp.triageClass = 3)))
+theorem counterexample_triage_gate_sound (inp : CounterexampleTriageInput) :
+    verifyCounterexampleTriage inp = true ↔
+      (inp.hasViolation = true ∧
+        ((inp.hasMissingHypHint = true ∧ inp.triageClass = 1) ∨
+         (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = true ∧ inp.triageClass = 2) ∨
+         (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = false ∧ inp.triageClass = 3))) := by
+  simp [verifyCounterexampleTriage, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, and_assoc, or_assoc]
+def counterexampleTriageMetaSpec : MetaGateSpec CounterexampleTriageInput
+    (fun inp => inp.hasViolation = true ∧
+      ((inp.hasMissingHypHint = true ∧ inp.triageClass = 1) ∨
+       (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = true ∧ inp.triageClass = 2) ∨
+       (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = false ∧ inp.triageClass = 3))) :=
+  ⟨verifyCounterexampleTriage, fun inp => (counterexample_triage_gate_sound inp).mp,
+   fun inp => (counterexample_triage_gate_sound inp).mpr, ⟨true, true, false, 1⟩, ⟨true, true, false, 3⟩, rfl, rfl⟩
+theorem counterexample_triage_rejects_inconsistent (inp : CounterexampleTriageInput)
+    (h_bad : inp.hasViolation = false ∨ inp.triageClass = 0 ∨ 3 < inp.triageClass) :
+    verifyCounterexampleTriage inp = false :=
+  counterexampleTriageMetaSpec.rejects_unsafe inp (by
+    rcases h_bad with h | h | h
+    · simp [h]
+    · omega
+    · omega)
+
+@[inline, export leannative_verify_counterexample_triage]
+def verifyCounterexampleTriageC (hasViolation hasMissingHypHint refDisagrees : UInt8) (triageClass : UInt8) : UInt8 :=
+  if verifyCounterexampleTriage ⟨hasViolation == 1, hasMissingHypHint == 1, refDisagrees == 1, triageClass.toNat⟩ then 1 else 0
+
 #guard verifyLazyReductionSliceC 64 256 1 1 == 1
 #guard verifyLazyReductionSliceC 64 256 0 1 == 0
 #guard verifyRadix4NttFusionC 8 4 64 1 == 1
 #guard verifyRadix4NttFusionC 8 3 64 1 == 0
 #guard verifyTurboSliceScannerSROAC 1 0 0 16 64 == 1
 #guard verifyTurboSliceScannerSROAC 1 1 0 16 64 == 0
+#guard verifyCounterexampleTriageC 1 1 0 1 == 1
+#guard verifyCounterexampleTriageC 1 0 1 2 == 1
+#guard verifyCounterexampleTriageC 1 0 0 3 == 1
+#guard verifyCounterexampleTriageC 1 1 0 3 == 0
+#guard verifyCounterexampleTriageC 0 0 0 3 == 0
 
 end LeanNative.Spec
 
