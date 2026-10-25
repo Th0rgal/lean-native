@@ -64,7 +64,7 @@ In Lean 4.31.0, the compiler pipeline is unified into `Lean.Compiler.LCNF`, inde
 - **Cryptographic Verification Receipts (`pr_verify.rs`)**:
   - Domain-separated `BLAKE3` commitment (`turbo-lean-verification-receipt-v1`) over `schema_version`, `mode`, `interface_hash`, `action_key`, `files_audited`, `theorem_shards`, `forbidden_constructs_found`, and `per_file_interfaces`.
 
-`lean-native` integrates with `turbo-lean` through a **capability-probed, zero-hard-dependency adapter (`LeanNative.TurboLean.Adapter`)**:
+`lean-native` is unified directly inside `Th0rgal/turbo-lean` (`lean/LeanNative/`) and integrates via **in-process C-ABI linking (`LeanNative/Spec.lean`) and unified FastCheck (`LeanNative/Backend/FastCheck.lean`)**:
 - When `turbo-lean` (CLI or warm Zygote HTTP daemon) is present, `lean-native` accelerates proof shard checking, counterexample rejection, and `.tlpack` cache synchronization.
 - When `turbo-lean` is absent, `lean-native` natively computes and verifies the exact `theorem-shard-v1:` and `turbo-lean-verification-receipt-v1` schemas, performs in-kernel transitive axiom audits via `Lean.collectAxioms`, and runs CPU/CUDA counterexample search directly.
 

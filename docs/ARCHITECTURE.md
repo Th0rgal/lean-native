@@ -96,7 +96,7 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 ### 5.3 Certified FastCheck Fuzzing Kernel Generator (`LeanNative/Backend/FastCheck.lean`)
 - **Equality Constraint Propagation (`propagatePreconditionEqualities`)**: Rewrites guard preconditions `x_i == expr` into direct generator assignments `x_i := expr`, eliminating vacuous passes on sparse equality-constrained theorems (`0 -> 4,193` satisfied preconditions on `evm_constrained_buggy_prop`).
 - **Certified Counterexample Validator (`certifyCounterexample`)**: Re-evaluates every candidate counterexample through `LeanNative.Semantics.Eval.evalCode`, backed by `certifyCounterexample_no_false_positive` (`0` false positives).
-- **Native RFC-Compliant BLAKE3 (`LeanNative/TurboLean/Adapter.lean`)**: Pure-Lean BLAKE3 implementation (`blake3Hex`, `blake3SelfTest = true`) with zero `python3` subprocess calls.
+- **Native RFC-Compliant BLAKE3 & Rewrite FastCheck (`LeanNative/Backend/FastCheck.lean`)**: Pure-Lean BLAKE3 implementation (`blake3Hex`, `blake3SelfTest = true`), unified `Word256`/`UInt256` FastCheck engine (`fastCheckRewrite`), and in-process C-ABI evaluator exports (`LeanNative/Spec.lean`) with zero subprocess calls.
 
 ---
 
@@ -157,5 +157,3 @@ Every optimization pass in `LeanNative.Transform` implements the `VerifiedPass` 
 - **Wave 13 (`W13-TROPICAL-HECKE`)**: Formalizes 0-Hecke/Coxeter braid commutation (`coxeterBraidStep`, `coxeter_braid_len`) and tropical `(min, +)` scan preservation (`tropicalMinPlusScan`, `tropical_scan_head`).
 - **Wave 14 (`W14-MINCUT-LNIR`)**: Formalizes max-flow min-cut register-pressure feasibility (`regCutFeasibleGate`, `reg_cut_feasible_sound`, `reg_cut_cost_monotone`).
 - **Waves 15–18 (`W15-COLLATZ-SELECT`, `W16-SPECTRAL-SCALAR`, `W17-NBODY-UNROLL`, `W18-SCALEBIAS-TAIL`)**: Adds join-point branchless `uint64_t` select peephole (`Peephole G`), 1D `_scalar` inner-loop hoisting in `Sub-pass 2A`, hoisted single-entry bounds guard for full loop unrolling in `Sub-pass 2B`, and provably dead tail-loop elision (`wave15_to_18_structural_gate_sound`, `unguarded_entry_rejects_wave15_to_18_opt`), bringing the formal audit to **187/187 in-kernel theorems** (`0 sorryAx`) and **98/98 non-vacuous tight specs** (`turbo-lean audit-spec`), with **19/20 min (18/20 median) wins/ties** and **1.22x geomean speedup** vs `rustc -O3` (`Pass 2C = 0`).
-
-
