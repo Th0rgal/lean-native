@@ -267,8 +267,10 @@ def add64CarrySpec (x y : UInt64) : UInt64 :=
   ((x >>> 32) + (y >>> 32) + (((x &&& 0xffffffff) + (y &&& 0xffffffff)) >>> 32)) >>> 32
 
 def mul64HiSpec (x y : UInt64) : UInt64 :=
-  let x_lo := x &&& 0xffffffff; let x_hi := x >>> 32; let y_lo := y &&& 0xffffffff; let y_hi := y >>> 32
-  let p0 := x_lo * y_lo; let p1 := x_lo * y_hi; let p2 := x_hi * y_lo; let p3 := x_hi * y_hi
+  let x_lo := x &&& 0xffffffff; let x_hi := x >>> 32
+  let y_lo := y &&& 0xffffffff; let y_hi := y >>> 32
+  let p0 := x_lo * y_lo; let p1 := x_lo * y_hi
+  let p2 := x_hi * y_lo; let p3 := x_hi * y_hi
   p3 + (p1 >>> 32) + (p2 >>> 32) + (((p0 >>> 32) + (p1 &&& 0xffffffff) + (p2 &&& 0xffffffff)) >>> 32)
 
 def evalLimbMul256Lo (a b : UInt256) : UInt256 :=
@@ -422,11 +424,14 @@ def weightedColVec (weights : List Nat) (matrix : List (List Nat)) : Nat → Nat
 
 private theorem weightedColVec_zero_weights (matrix : List (List Nat)) (len colIdx : Nat) (x : List Nat) :
     dotNat (weightedColVec [] matrix len colIdx) x = 0 := by
-  induction len generalizing colIdx x <;> cases x <;> simp [weightedColVec, weightedColSum, dotNat_nil_left, dotNat_nil_right, dotNat_cons, *]
+  induction len generalizing colIdx x <;> cases x <;>
+    simp [weightedColVec, weightedColSum, dotNat_nil_left, dotNat_nil_right, dotNat_cons, *]
 
 private theorem weightedColVec_zero_matrix (weights : List Nat) (len colIdx : Nat) (x : List Nat) :
     dotNat (weightedColVec weights [] len colIdx) x = 0 := by
-  induction len generalizing colIdx x <;> cases x <;> cases weights <;> simp [weightedColVec, weightedColSum, dotNat_nil_left, dotNat_nil_right, dotNat_cons, *]
+  induction len generalizing colIdx x <;>
+    cases x <;> cases weights <;>
+    simp [weightedColVec, weightedColSum, dotNat_nil_left, dotNat_nil_right, dotNat_cons, *]
 
 private theorem weightedColVec_dot_split (w : Nat) (ws : List Nat) (row : List Nat) (rows : List (List Nat))
     (colIdx : Nat) (x : List Nat) :
@@ -534,7 +539,9 @@ def checkMonotoneOffsets4 (lo o0 o1 o2 o3 totalLen : Nat) : Bool :=
 
 /-- Project raw draws `(d0, d1, d2, d3)` into the monotone polytope `lo ≤ o0 ≤ o1 ≤ o2 ≤ o3 ≤ lo + d0 + d1 + d2 + d3`. -/
 def sampleMonotoneOffsets4 (lo d0 d1 d2 d3 : Nat) : Nat × Nat × Nat × Nat :=
-  let o0 := lo + d0; let o1 := o0 + d1; let o2 := o1 + d2; let o3 := o2 + d3; (o0, o1, o2, o3)
+  let o0 := lo + d0; let o1 := o0 + d1
+  let o2 := o1 + d2; let o3 := o2 + d3
+  (o0, o1, o2, o3)
 theorem sampleMonotoneOffsets4_valid (lo d0 d1 d2 d3 extra : Nat) :
     let (o0, o1, o2, o3) := sampleMonotoneOffsets4 lo d0 d1 d2 d3
     checkMonotoneOffsets4 lo o0 o1 o2 o3 (o3 + extra) = true := by
@@ -938,7 +945,8 @@ theorem mathlib_cert_lowering_gate_sound (inp : MathlibCertLoweringInput) :
       (inp.hasExternalImports = false ∧ inp.usesNativeDecide = false ∧ inp.usesSorryAx = false ∧ inp.cofactorsVerified = true) := by
   simp [canEmitZeroDepMathlibCert, Bool.and_eq_true, and_assoc]
 def mathlibCertLoweringMetaSpec : MetaGateSpec MathlibCertLoweringInput
-    (fun inp => inp.hasExternalImports = false ∧ inp.usesNativeDecide = false ∧ inp.usesSorryAx = false ∧ inp.cofactorsVerified = true) :=
+    (fun inp => inp.hasExternalImports = false ∧ inp.usesNativeDecide = false ∧
+      inp.usesSorryAx = false ∧ inp.cofactorsVerified = true) :=
   ⟨canEmitZeroDepMathlibCert, fun inp => (mathlib_cert_lowering_gate_sound inp).mp,
    fun inp => (mathlib_cert_lowering_gate_sound inp).mpr, ⟨false, false, false, true⟩, ⟨false, true, false, true⟩, rfl, rfl⟩
 theorem native_decide_rejects_mathlib_cert_lowering (inp : MathlibCertLoweringInput)
@@ -1012,7 +1020,8 @@ theorem wave15_to_18_structural_gate_sound (inp : Wave15To18StructuralGateInput)
       (inp.jpBranchesPure = true ∧ inp.innerStopHoisted = true ∧ inp.entryBoundsGuarded = true ∧ inp.tailLimitLeCap = true) := by
   simp [canApplyWave15To18StructuralOpt, Bool.and_eq_true, and_assoc]
 def wave15To18StructuralMetaSpec : MetaGateSpec Wave15To18StructuralGateInput
-    (fun inp => inp.jpBranchesPure = true ∧ inp.innerStopHoisted = true ∧ inp.entryBoundsGuarded = true ∧ inp.tailLimitLeCap = true) :=
+    (fun inp => inp.jpBranchesPure = true ∧ inp.innerStopHoisted = true ∧
+      inp.entryBoundsGuarded = true ∧ inp.tailLimitLeCap = true) :=
   ⟨canApplyWave15To18StructuralOpt, fun inp => (wave15_to_18_structural_gate_sound inp).mp,
    fun inp => (wave15_to_18_structural_gate_sound inp).mpr, ⟨true, true, true, true⟩, ⟨true, true, false, true⟩, rfl, rfl⟩
 theorem unguarded_entry_rejects_wave15_to_18_opt (inp : Wave15To18StructuralGateInput)
@@ -1046,13 +1055,16 @@ structure Radix4NttFusionInput where
   (half0 half1 blockLen : Nat) (inPlaceDisjoint : Bool)
   deriving Repr, DecidableEq, BEq
 def canFuseRadix4NttLayers (inp : Radix4NttFusionInput) : Bool :=
-  decide (0 < inp.half1) && decide (inp.half0 = 2 * inp.half1) && decide (inp.blockLen % (4 * inp.half1) = 0) && inp.inPlaceDisjoint
+  decide (0 < inp.half1) && decide (inp.half0 = 2 * inp.half1) &&
+    decide (inp.blockLen % (4 * inp.half1) = 0) && inp.inPlaceDisjoint
 theorem radix4_ntt_fusion_gate_sound (inp : Radix4NttFusionInput) :
     canFuseRadix4NttLayers inp = true ↔
-      (0 < inp.half1 ∧ inp.half0 = 2 * inp.half1 ∧ inp.blockLen % (4 * inp.half1) = 0 ∧ inp.inPlaceDisjoint = true) := by
+      (0 < inp.half1 ∧ inp.half0 = 2 * inp.half1 ∧
+        inp.blockLen % (4 * inp.half1) = 0 ∧ inp.inPlaceDisjoint = true) := by
   simp [canFuseRadix4NttLayers, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
 def radix4NttFusionMetaSpec : MetaGateSpec Radix4NttFusionInput
-    (fun inp => 0 < inp.half1 ∧ inp.half0 = 2 * inp.half1 ∧ inp.blockLen % (4 * inp.half1) = 0 ∧ inp.inPlaceDisjoint = true) :=
+    (fun inp => 0 < inp.half1 ∧ inp.half0 = 2 * inp.half1 ∧
+      inp.blockLen % (4 * inp.half1) = 0 ∧ inp.inPlaceDisjoint = true) :=
   ⟨canFuseRadix4NttLayers, fun inp => (radix4_ntt_fusion_gate_sound inp).mp,
    fun inp => (radix4_ntt_fusion_gate_sound inp).mpr, ⟨8, 4, 64, true⟩, ⟨8, 3, 64, true⟩, rfl, rfl⟩
 theorem misaligned_stride_rejects_radix4_ntt (inp : Radix4NttFusionInput)
@@ -1063,10 +1075,46 @@ theorem misaligned_stride_rejects_radix4_ntt (inp : Radix4NttFusionInput)
 def verifyRadix4NttFusionC (half0 half1 blockLen : UInt64) (inPlaceDisjoint : UInt8) : UInt64 :=
   if canFuseRadix4NttLayers ⟨half0.toNat, half1.toNat, blockLen.toNat, inPlaceDisjoint == 1⟩ then 1 else 0
 
+/-- Pure-Lean `turbo-lean` migration gate: zero-copy `ByteSlice` scanner + tuple SROA + `SliceOut` zero-runtime gate. -/
+structure TurboSliceScannerSROAInput where
+  (sliceInBounds tupleAliasEscapes : Bool) (undefRuntimeSyms outLen outCap : Nat)
+  deriving Repr, DecidableEq, BEq
+def canLowerTurboSliceScannerSROA (inp : TurboSliceScannerSROAInput) : Bool :=
+  inp.sliceInBounds && !inp.tupleAliasEscapes &&
+    decide (inp.undefRuntimeSyms = 0) && decide (inp.outLen ≤ inp.outCap)
+theorem turbo_slice_scanner_sroa_gate_sound (inp : TurboSliceScannerSROAInput) :
+    canLowerTurboSliceScannerSROA inp = true ↔
+      (inp.sliceInBounds = true ∧ inp.tupleAliasEscapes = false ∧
+        inp.undefRuntimeSyms = 0 ∧ inp.outLen ≤ inp.outCap) := by
+  simp [canLowerTurboSliceScannerSROA, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def turboSliceScannerSROAMetaSpec : MetaGateSpec TurboSliceScannerSROAInput
+    (fun inp => inp.sliceInBounds = true ∧ inp.tupleAliasEscapes = false ∧
+      inp.undefRuntimeSyms = 0 ∧ inp.outLen ≤ inp.outCap) :=
+  ⟨canLowerTurboSliceScannerSROA, fun inp => (turbo_slice_scanner_sroa_gate_sound inp).mp,
+   fun inp => (turbo_slice_scanner_sroa_gate_sound inp).mpr, ⟨true, false, 0, 16, 64⟩, ⟨true, true, 0, 16, 64⟩, rfl, rfl⟩
+theorem escaping_tuple_or_oob_rejects_slice_scanner_sroa (inp : TurboSliceScannerSROAInput)
+    (h_bad : inp.sliceInBounds = false ∨ inp.tupleAliasEscapes = true ∨
+      0 < inp.undefRuntimeSyms ∨ inp.outCap < inp.outLen) :
+    canLowerTurboSliceScannerSROA inp = false :=
+  turboSliceScannerSROAMetaSpec.rejects_unsafe inp (by
+    rcases h_bad with h | h | h | h
+    · simp [h]
+    · simp [h]
+    · omega
+    · omega)
+
+@[inline, export leannative_verify_turbo_slice_scanner_sroa]
+def verifyTurboSliceScannerSROAC (sliceInBounds tupleAliasEscapes undefSyms outLen outCap : UInt64) : UInt64 :=
+  let inp : TurboSliceScannerSROAInput :=
+    ⟨sliceInBounds != 0, tupleAliasEscapes != 0, undefSyms.toNat, outLen.toNat, outCap.toNat⟩
+  if canLowerTurboSliceScannerSROA inp then 1 else 0
+
 #guard verifyLazyReductionSliceC 64 256 1 1 == 1
 #guard verifyLazyReductionSliceC 64 256 0 1 == 0
 #guard verifyRadix4NttFusionC 8 4 64 1 == 1
 #guard verifyRadix4NttFusionC 8 3 64 1 == 0
+#guard verifyTurboSliceScannerSROAC 1 0 0 16 64 == 1
+#guard verifyTurboSliceScannerSROAC 1 1 0 16 64 == 0
 
 end LeanNative.Spec
 
