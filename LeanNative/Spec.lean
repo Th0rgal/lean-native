@@ -1101,7 +1101,7 @@ abbrev counterexample_triage_gate_sound := @LeanSys.Contracts.checkCounterexampl
 abbrev counterexampleTriageMetaSpec := LeanSys.Contracts.counterexampleTriageContractMetaSpec
 abbrev verifyCounterexampleTriageC := LeanSys.Spec.verifyCounterexampleTriage
 
-/-- Zero-runtime C-ABI 64-bit FastCheck binary operator evaluator (`0=add, 1=sub, 2=mul, 3=div, 4=mod, 5=bitAnd, 6=bitOr, 7=bitXor, 8=shl, 9=shr`). -/
+/-- Zero-runtime C-ABI 64-bit FastCheck binary operator evaluator (`0=add, 1=sub, 2=mul, 3=div, 4=mod, 5=bitAnd, 6=bitOr, 7=bitXor, 8=shl, 9=shr, 10=eq, 11=lt, 12=le`). -/
 @[inline, export leannative_eval_u64_binop]
 def evalU64BinopC (op : UInt8) (lhs rhs : UInt64) : UInt64 :=
   if op == 0 then lhs + rhs
@@ -1112,8 +1112,11 @@ def evalU64BinopC (op : UInt8) (lhs rhs : UInt64) : UInt64 :=
   else if op == 5 then lhs &&& rhs
   else if op == 6 then lhs ||| rhs
   else if op == 7 then lhs ^^^ rhs
-  else if op == 8 then lhs <<< (rhs &&& 63)
-  else if op == 9 then lhs >>> (rhs &&& 63)
+  else if op == 8 then if rhs >= 64 then 0 else lhs <<< rhs
+  else if op == 9 then if rhs >= 64 then 0 else lhs >>> rhs
+  else if op == 10 then if lhs == rhs then 1 else 0
+  else if op == 11 then if lhs < rhs then 1 else 0
+  else if op == 12 then if lhs <= rhs then 1 else 0
   else 0
 
 /-- Zero-runtime C-ABI 64-bit FastCheck domain-hazard detector (`div/mod` by `0`, `shl/shr >= 64`, `add` wrapping overflow, `sub` wrapping underflow, `mul` overflow). -/
