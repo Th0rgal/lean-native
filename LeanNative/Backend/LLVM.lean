@@ -1052,6 +1052,10 @@ def emitRuntimeAndCAbiHelpers (optimized : Bool) (target : TargetArch := .x86_64
     mkCpuLoopFn "lean_native_cpu_zip_add_u64(ptr noalias %out, ptr noalias %in0, ptr noalias %in1, i64 %n)" [
       "  %p0 = getelementptr inbounds i64, ptr %in0, i64 %i\n  %p1 = getelementptr inbounds i64, ptr %in1, i64 %i\n  %po = getelementptr inbounds i64, ptr %out, i64 %i",
       "  %v0 = load i64, ptr %p0, align 8\n  %v1 = load i64, ptr %p1, align 8\n  %res = add i64 %v0, %v1\n  store i64 %res, ptr %po, align 8"
+    ],
+    mkCpuLoopFn "lean_native_cpu_xor_assign_u64(ptr noalias %dst, ptr noalias %src, i64 %n)" [
+      "  %pd = getelementptr inbounds i64, ptr %dst, i64 %i\n  %ps = getelementptr inbounds i64, ptr %src, i64 %i",
+      "  %vd = load i64, ptr %pd, align 8\n  %vs = load i64, ptr %ps, align 8\n  %vx = xor i64 %vd, %vs\n  store i64 %vx, ptr %pd, align 8"
     ]
   ]
 

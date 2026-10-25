@@ -1019,5 +1019,54 @@ theorem unguarded_entry_rejects_wave15_to_18_opt (inp : Wave15To18StructuralGate
     (h_un : inp.entryBoundsGuarded = false) : canApplyWave15To18StructuralOpt inp = false :=
   wave15To18StructuralMetaSpec.rejects_unsafe inp (by simp [h_un])
 
+/-- Lazy 256-bit carryless accumulation & single-end-reduction slice pass gate (`lean_native_f128_*_slice`). -/
+structure LazyReductionSliceInput where
+  (chunkLen unreducedBits : Nat) (reductionLinear slicesDisjoint : Bool)
+  deriving Repr, DecidableEq, BEq
+def canEmitLazyReductionSlice (inp : LazyReductionSliceInput) : Bool :=
+  decide (0 < inp.chunkLen) && decide (inp.unreducedBits = 256) && inp.reductionLinear && inp.slicesDisjoint
+theorem lazy_reduction_slice_gate_sound (inp : LazyReductionSliceInput) :
+    canEmitLazyReductionSlice inp = true ↔
+      (0 < inp.chunkLen ∧ inp.unreducedBits = 256 ∧ inp.reductionLinear = true ∧ inp.slicesDisjoint = true) := by
+  simp [canEmitLazyReductionSlice, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def lazyReductionSliceMetaSpec : MetaGateSpec LazyReductionSliceInput
+    (fun inp => 0 < inp.chunkLen ∧ inp.unreducedBits = 256 ∧ inp.reductionLinear = true ∧ inp.slicesDisjoint = true) :=
+  ⟨canEmitLazyReductionSlice, fun inp => (lazy_reduction_slice_gate_sound inp).mp,
+   fun inp => (lazy_reduction_slice_gate_sound inp).mpr, ⟨64, 256, true, true⟩, ⟨64, 256, false, true⟩, rfl, rfl⟩
+theorem non_linear_rejects_lazy_reduction_slice (inp : LazyReductionSliceInput)
+    (h_nl : inp.reductionLinear = false) : canEmitLazyReductionSlice inp = false :=
+  lazyReductionSliceMetaSpec.rejects_unsafe inp (by simp [h_nl])
+
+@[inline, export leannative_verify_lazy_reduction_slice]
+def verifyLazyReductionSliceC (chunkLen unreducedBits : UInt64) (reductionLinear slicesDisjoint : UInt8) : UInt64 :=
+  if canEmitLazyReductionSlice ⟨chunkLen.toNat, unreducedBits.toNat, reductionLinear == 1, slicesDisjoint == 1⟩ then 1 else 0
+
+/-- 2-layer Radix-4 LCH Additive NTT butterfly fusion gate (`lean_native_ntt_butterfly_fused_2layer_slice`). -/
+structure Radix4NttFusionInput where
+  (half0 half1 blockLen : Nat) (inPlaceDisjoint : Bool)
+  deriving Repr, DecidableEq, BEq
+def canFuseRadix4NttLayers (inp : Radix4NttFusionInput) : Bool :=
+  decide (0 < inp.half1) && decide (inp.half0 = 2 * inp.half1) && decide (inp.blockLen % (4 * inp.half1) = 0) && inp.inPlaceDisjoint
+theorem radix4_ntt_fusion_gate_sound (inp : Radix4NttFusionInput) :
+    canFuseRadix4NttLayers inp = true ↔
+      (0 < inp.half1 ∧ inp.half0 = 2 * inp.half1 ∧ inp.blockLen % (4 * inp.half1) = 0 ∧ inp.inPlaceDisjoint = true) := by
+  simp [canFuseRadix4NttLayers, Bool.and_eq_true, decide_eq_true_eq, and_assoc]
+def radix4NttFusionMetaSpec : MetaGateSpec Radix4NttFusionInput
+    (fun inp => 0 < inp.half1 ∧ inp.half0 = 2 * inp.half1 ∧ inp.blockLen % (4 * inp.half1) = 0 ∧ inp.inPlaceDisjoint = true) :=
+  ⟨canFuseRadix4NttLayers, fun inp => (radix4_ntt_fusion_gate_sound inp).mp,
+   fun inp => (radix4_ntt_fusion_gate_sound inp).mpr, ⟨8, 4, 64, true⟩, ⟨8, 3, 64, true⟩, rfl, rfl⟩
+theorem misaligned_stride_rejects_radix4_ntt (inp : Radix4NttFusionInput)
+    (h_mis : inp.half0 ≠ 2 * inp.half1) : canFuseRadix4NttLayers inp = false :=
+  radix4NttFusionMetaSpec.rejects_unsafe inp (by simp [h_mis])
+
+@[inline, export leannative_verify_radix4_ntt_fusion]
+def verifyRadix4NttFusionC (half0 half1 blockLen : UInt64) (inPlaceDisjoint : UInt8) : UInt64 :=
+  if canFuseRadix4NttLayers ⟨half0.toNat, half1.toNat, blockLen.toNat, inPlaceDisjoint == 1⟩ then 1 else 0
+
+#guard verifyLazyReductionSliceC 64 256 1 1 == 1
+#guard verifyLazyReductionSliceC 64 256 0 1 == 0
+#guard verifyRadix4NttFusionC 8 4 64 1 == 1
+#guard verifyRadix4NttFusionC 8 3 64 1 == 0
+
 end LeanNative.Spec
 
