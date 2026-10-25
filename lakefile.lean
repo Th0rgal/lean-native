@@ -4,6 +4,9 @@ open Lake DSL
 package «lean-native» where
   version := v!"0.1.0"
 
+require «lean-sys» from git
+  "https://github.com/Th0rgal/lean-sys.git" @ "main"
+
 lean_lib «LeanNative» where
   roots := #[`LeanNative]
 

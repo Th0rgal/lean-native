@@ -10,6 +10,7 @@
                governing FastCheck non-vacuity, C-ABI scalar tagging, PR spec-pinning,
                256-bit 4-limb GPU carry homomorphisms, 4-target hardware routing, and RISC-V step budgets.
 -/
+import LeanSys.Gate
 import LeanNative.IR.Types
 import LeanNative.IR.AST
 import LeanNative.Semantics.Value
@@ -18,55 +19,38 @@ import LeanNative.Semantics.Refinement
 import LeanNative.Backend.Hybrid
 
 namespace LeanNative.Spec
-open LeanNative.IR LeanNative.Semantics LeanNative.Backend.Hybrid
+open LeanSys.Contracts LeanNative.IR LeanNative.Semantics LeanNative.Backend.Hybrid
 
 /-! ============================================================================
-    LAYER I: META-SPECIFICATIONS (`MetaGateSpec`, `SpeculativeGate`, `VerifiedTransformContract`, `ClockedStepBudget`)
+    LAYER I: META-SPECIFICATIONS (`LeanSys.Gate`, `VerifiedTransformContract`, `ClockedStepBudget`)
     ============================================================================ -/
 
-structure MetaGateSpec (Input : Type) (Safe : Input → Prop) where
-  gate : Input → Bool
-  sound : ∀ x, gate x = true → Safe x
-  complete : ∀ x, Safe x → gate x = true
-  posWitness : Input
-  negWitness : Input
-  nonVacuous : gate posWitness = true
-  tight : gate negWitness = false
+abbrev MetaGateSpec := @LeanSys.Contracts.MetaGateSpec
+abbrev evalWithUntrustedOptPlugin := @LeanSys.Contracts.evalWithUntrustedOptPlugin
 
 theorem MetaGateSpec.rejects_unsafe {Input : Type} {Safe : Input → Prop}
     (M : MetaGateSpec Input Safe) (x : Input) (h_unsafe : ¬ Safe x) :
     M.gate x = false :=
-  Bool.eq_false_iff.mpr (fun h_ok => h_unsafe (M.sound x h_ok))
-
-def evalWithUntrustedOptPlugin {Decl Cert : Type}
-    (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool) (d : Decl) : Decl :=
-  match plugin d with
-  | some (cand, cert) => if verifyGate d cand cert then cand else d
-  | none => d
+  LeanSys.Contracts.MetaGateSpec.rejects_unsafe M x h_unsafe
 
 theorem untrusted_opt_plugin_tv_gate_sound {Decl Cert : Type}
     (Refines : Decl → Decl → Prop) (h_refl : ∀ d, Refines d d)
     (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool)
     (h_gate_sound : ∀ d cand cert, verifyGate d cand cert = true → Refines d cand) (d : Decl) :
-    Refines d (evalWithUntrustedOptPlugin plugin verifyGate d) := by
-  unfold evalWithUntrustedOptPlugin
-  split
-  · split
-    · exact h_gate_sound d _ _ ‹_›
-    · exact h_refl d
-  · exact h_refl d
+    Refines d (evalWithUntrustedOptPlugin plugin verifyGate d) :=
+  LeanSys.Contracts.untrusted_opt_plugin_tv_gate_sound Refines h_refl plugin verifyGate h_gate_sound d
 
 theorem untrusted_opt_plugin_timeout_fallback {Decl Cert : Type}
     (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool)
     (d : Decl) (h_timeout : plugin d = none) :
-    evalWithUntrustedOptPlugin plugin verifyGate d = d := by
-  simp [evalWithUntrustedOptPlugin, h_timeout]
+    evalWithUntrustedOptPlugin plugin verifyGate d = d :=
+  LeanSys.Contracts.untrusted_opt_plugin_timeout_fallback plugin verifyGate d h_timeout
 
 theorem untrusted_opt_plugin_reject_fallback {Decl Cert : Type}
     (plugin : Decl → Option (Decl × Cert)) (verifyGate : Decl → Decl → Cert → Bool)
     (d cand : Decl) (cert : Cert) (h_prop : plugin d = some (cand, cert)) (h_rej : verifyGate d cand cert = false) :
-    evalWithUntrustedOptPlugin plugin verifyGate d = d := by
-  simp [evalWithUntrustedOptPlugin, h_prop, h_rej]
+    evalWithUntrustedOptPlugin plugin verifyGate d = d :=
+  LeanSys.Contracts.untrusted_opt_plugin_reject_fallback plugin verifyGate d cand cert h_prop h_rej
 
 /-- First-class proof-carrying transformation contract tying `run` to its refinement proof `is_sound`. -/
 structure VerifiedTransformContract (Decl : Type) (Refines : Decl → Decl → Prop) where

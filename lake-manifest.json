@@ -1,6 +1,16 @@
 {"version": "1.2.0",
  "packagesDir": ".lake/packages",
- "packages": [],
+ "packages":
+ [{"url": "https://github.com/Th0rgal/lean-sys.git",
+   "type": "git",
+   "subDir": null,
+   "scope": "",
+   "rev": "11fb6d9ce8052c767a6e67ae71d5052cc1befc66",
+   "name": "«lean-sys»",
+   "manifestFile": "lake-manifest.json",
+   "inputRev": "main",
+   "inherited": false,
+   "configFile": "lakefile.lean"}],
  "name": "«lean-native»",
  "lakeDir": ".lake",
  "fixedToolchain": false}

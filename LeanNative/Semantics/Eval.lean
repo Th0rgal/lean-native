@@ -372,10 +372,87 @@ def evalExpr (env : VarEnv) (st : HeapState) (e : LNIRExpr) : Except UBError (Va
     match env boxVar with
     | some v => .ok (v, st)
     | none => .error (.unboundVar boxVar)
-  | .call _fnName args _retTy _isExtern =>
+  | .call fnName args retTy _isExtern =>
     match evalVarList env args with
-    | .ok _ => .ok (.unit, st)
+    | .ok vals =>
+      if fnName == "lean_native_box_u64" || fnName == "lean_native_unbox_u64" then
+        .ok (vals.headD .unit, st)
+      else if fnName == "lean_native_ensure_exclusive" then
+        match vals.headD .unit with
+        | .sarrayId bufId =>
+          match st.ensureExclusive bufId with
+          | .ok st' => .ok (.sarrayId bufId, st')
+          | .error err => .error err
+        | v => .ok (v, st)
+      else if fnName == "lean_native_sarray_len" then
+        match vals.headD .unit with
+        | .sarrayId bufId =>
+          match st.findBuffer bufId with
+          | some buf => .ok (.u64 buf.data.size.toUInt64, st)
+          | none => .error (.typeError s!"unknown sarray buffer {bufId}")
+        | _ => .error (.typeError "lean_native_sarray_len expects sarrayId")
+      else
+        let seed := fnName.toUTF8.foldl (fun acc b => (acc ^^^ b.toUInt64) * 1099511628211) 14695981039346656037
+        let acc := vals.foldl (fun h v => match v with | .u64 x => h + x | .bool true => h + 1 | _ => h) seed
+        let retVal : Val := match retTy with
+          | .i1 => .bool (acc % 2 == 1)
+          | .u256 | .i256 => .u256 (UInt256.ofUInt64 acc)
+          | .objPtr => match vals.head? with | some (.objPtr id) => .objPtr id | _ => .objPtr 0
+          | .sarray _ => match vals.head? with | some (.sarrayId id) => .sarrayId id | _ => .sarrayId 0
+          | .rawPtr _ => match vals.head? with | some (.rawPtrId id) => .rawPtrId id | _ => .rawPtrId 0
+          | .storageMap => match vals.head? with | some (.storageMapId id) => .storageMapId id | _ => .storageMapId 0
+          | .tuple fs => .tuple (fs.map (fun _ => .u64 acc))
+          | .unit => .unit
+          | _ => .u64 acc
+        .ok (retVal, st)
     | .error err => .error err
+
+/-- Read element `elemIdx` from the `argIdx`-th input buffer/scalar of a `parFor` kernel. -/
+def readParInput (env : VarEnv) (st : HeapState) (inputs : List VarId) (argIdx elemIdx : Nat) : UInt64 :=
+  match inputs[argIdx]? with
+  | some v =>
+    match env v with
+    | some (.sarrayId bid) | some (.rawPtrId bid) =>
+      match st.readElem bid elemIdx with
+      | .ok x => x
+      | .error _ => 0
+    | some (.u64 x) => x
+    | _ => 0
+  | none => 0
+
+/-- Evaluate element `i` of a data-parallel `ParallelKernelKind` over `inputs`. -/
+def evalParKernelElem (env : VarEnv) (st : HeapState) (inputs : List VarId) (len : Nat)
+    (kernel : ParallelKernelKind) (i : Nat) : UInt64 :=
+  match kernel with
+  | .mapScaleAdd scale bias => readParInput env st inputs 0 i * scale + bias
+  | .zipAdd => readParInput env st inputs 0 i + readParInput env st inputs 1 i
+  | .zipMul | .dotProduct => readParInput env st inputs 0 i * readParInput env st inputs 1 i
+  | .saxpy alpha => alpha * readParInput env st inputs 0 i + readParInput env st inputs 1 i
+  | .stencil1D3Pt wL wC wR =>
+    let l := readParInput env st inputs 0 (if i > 0 then i - 1 else 0)
+    let c := readParInput env st inputs 0 i
+    let r := readParInput env st inputs 0 (if i + 1 < len then i + 1 else i)
+    wL * l + wC * c + wR * r
+  | .customScalar idxVar inVars body =>
+    let kEnv0 := env.bind idxVar (.u64 i.toUInt64)
+    let (kEnv, _) := inVars.foldl (fun (e, aIdx) iv =>
+      (e.bind iv (.u64 (readParInput env st inputs aIdx i)), aIdx + 1)) (kEnv0, 0)
+    match evalScalarExpr kEnv body with
+    | .ok (.u64 v) => v
+    | _ => 0
+
+/-- Deterministic parallel loop evaluator writing the output `ArrayBuffer` (id `0`) into `HeapState`. -/
+def evalParFor (env : VarEnv) (st : HeapState) (lenVar : VarId) (inputs : List VarId)
+    (kernel : ParallelKernelKind) : HeapState :=
+  let len := match env lenVar with
+    | some (.u64 n) => Nat.min n.toNat 64
+    | _ => 0
+  let elems := (List.range len).map (evalParKernelElem env st inputs len kernel)
+  let outData := match kernel with
+    | .dotProduct => #[elems.foldl (· + ·) 0]
+    | _ => elems.toArray
+  let outBuf : ArrayBuffer := { id := 0, exclusive := true, data := outData }
+  { st with buffers := outBuf :: st.buffers.filter (fun b => b.id != 0) }
 
 /-- Bounded sequential loop evaluation helper for `seqFor`. -/
 def evalSeqLoop (count : Nat) (curIdx : Nat) (idxVar accVar : VarId)
@@ -413,10 +490,10 @@ def evalCode (fuel : Nat) : VarEnv → HeapState → LNIRCode → Except UBError
     | _, none, _ => .error (.unboundVar idxVar)
     | _, _, none => .error (.unboundVar valVar)
     | _, _, _ => .error (.typeError "rawStore requires rawPtrId/sarrayId and u64 index/value")
-  | env, st, .incRef _objVar _count k =>
-    evalCode fuel env st k
-  | env, st, .decRef _objVar _count k =>
-    evalCode fuel env st k
+  | env, st, .incRef objVar count k =>
+    evalCode fuel env (st.evalIncRef (env objVar) count) k
+  | env, st, .decRef objVar count k =>
+    evalCode fuel env (st.evalDecRef (env objVar) count) k
   | env, st, .ite condVar thenBranch elseBranch =>
     match env condVar with
     | some (.bool true) => evalCode fuel env st thenBranch
@@ -441,8 +518,8 @@ def evalCode (fuel : Nat) : VarEnv → HeapState → LNIRCode → Except UBError
     | _, none, _ => .error (.unboundVar hiVar)
     | _, _, none => .error (.unboundVar accInit)
     | _, _, _ => .error (.typeError "seqFor bounds must be u64")
-  | env, st, .parFor outVar _lenVar _inputs _elemTy _kernel k =>
-    evalCode fuel (env.bind outVar (.sarrayId 0)) st k
+  | env, st, .parFor outVar lenVar inputs _elemTy kernel k =>
+    evalCode fuel (env.bind outVar (.sarrayId 0)) (evalParFor env st lenVar inputs kernel) k
   | env, st, .ret v =>
     match env v with
     | some val => .ok (val, st)

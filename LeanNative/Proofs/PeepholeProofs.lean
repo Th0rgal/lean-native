@@ -297,9 +297,11 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
           cases pval <;> cases ival <;> cases vval <;> try rfl
           all_goals (simp only; cases st.writeElemExclusive _ _ _ with | error _ => rfl | ok st1 => exact ih fuel env st1)
   | incRef objVar count k ih =>
-    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel env st
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
+    exact ih fuel env (st.evalIncRef (env objVar) count)
   | decRef objVar count k ih =>
-    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel env st
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
+    exact ih fuel env (st.evalDecRef (env objVar) count)
   | ite condVar thenBranch elseBranch iht ihe =>
     intro fuel env st
     simp only [rewriteCodePeephole, evalCode, iht fuel env st, ihe fuel env st]
@@ -316,7 +318,8 @@ theorem evalCode_rewriteCodePeephole_eq (c : LNIRCode) :
           simp only; cases evalSeqLoop _ _ idxVar accVar initVal env st _ with
           | error _ => rfl | ok pair => exact ihk fuel (env.bind accVar pair.1) pair.2
   | parFor outVar lenVar inputs elemTy kernel k ih =>
-    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]; exact ih fuel (env.bind outVar (.sarrayId 0)) st
+    intro fuel env st; rw [rewriteCodePeephole, evalCode, evalCode]
+    exact ih fuel (env.bind outVar (.sarrayId 0)) (evalParFor env st lenVar inputs kernel)
   | ret _ => intro _ _ _; rfl
   | unreachable => intro _ _ _; rfl
 

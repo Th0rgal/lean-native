@@ -194,7 +194,7 @@ def emitMetalDeclKernel (d : LNIRDecl) : Option String :=
     | [(_, _, _, .i64, .zipMul)] =>
       some (emitMetal1DKernel fnName ["device const ulong* in0", "device const ulong* in1", "device ulong* out", "constant ulong& n"] "out[gid] = in0[gid] * in1[gid];")
     | _ =>
-      if d.retTy == .i64 && d.params.all (fun p => p.ty == .i64) && !(d.name.endsWith "___boxed") then
+      if d.retTy == .i64 && !d.params.isEmpty && d.params.all (fun p => p.ty == .i64) && !(d.name.endsWith "___boxed") then
         match emitMetalCodeBody d.body "    " with
         | some bodyStr =>
           let paramSig := String.intercalate ", " (d.params.map fun p => s!"ulong v{p.id}")

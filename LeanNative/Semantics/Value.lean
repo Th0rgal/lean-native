@@ -158,17 +158,68 @@ theorem lookupSlot_writeSlot_ne (m : StorageMapBuffer) (slot1 slot2 val : UInt25
 
 end StorageMapBuffer
 
-/-- Abstract heap state tracking contiguous scalar array buffers, EVM storage maps, and allocation IDs. -/
+/-- Abstract heap state tracking contiguous scalar array buffers, EVM storage maps, allocation IDs, and reference counts. -/
 structure HeapState where
   buffers     : List ArrayBuffer
   nextId      : Nat
   storageMaps : List StorageMapBuffer := []
+  refCounts   : List (Nat × Nat) := []
   deriving Repr, DecidableEq, Inhabited, BEq
 
 namespace HeapState
 
 def empty : HeapState :=
-  { buffers := [], nextId := 0, storageMaps := [] }
+  { buffers := [], nextId := 0, storageMaps := [], refCounts := [] }
+
+/-- Look up the current reference count of buffer `bufId` (defaults to `1` for live unshared buffers). -/
+def getRefCount (st : HeapState) (bufId : Nat) : Nat :=
+  match st.refCounts.find? (fun (id, _) => id == bufId) with
+  | some (_, rc) => rc
+  | none => 1
+
+/-- Increment the reference count of buffer `bufId` by `count`. -/
+def incRefBuf (st : HeapState) (bufId count : Nat) : HeapState :=
+  if count == 0 then st
+  else
+    let rc' := st.getRefCount bufId + count
+    { st with refCounts := (bufId, rc') :: st.refCounts.filter (fun (id, _) => id != bufId) }
+
+/-- Decrement the reference count of buffer `bufId` by `count`, freeing the buffer if the count reaches `0`. -/
+def decRefBuf (st : HeapState) (bufId count : Nat) : HeapState :=
+  if count == 0 then st
+  else
+    let rc := st.getRefCount bufId
+    let rc' := rc - count
+    let refs' := st.refCounts.filter (fun (id, _) => id != bufId)
+    if rc' == 0 then
+      { st with buffers := st.buffers.filter (fun b => b.id != bufId), refCounts := refs' }
+    else if rc' == 1 then
+      { st with refCounts := refs' }
+    else
+      { st with refCounts := (bufId, rc') :: refs' }
+
+/-- Evaluate an `incRef` instruction on an optional runtime value. -/
+def evalIncRef (st : HeapState) (v? : Option Val) (count : Nat) : HeapState :=
+  match v? with
+  | some (.sarrayId bufId) | some (.objPtr bufId) => st.incRefBuf bufId count
+  | _ => st
+
+/-- Evaluate a `decRef` instruction on an optional runtime value. -/
+def evalDecRef (st : HeapState) (v? : Option Val) (count : Nat) : HeapState :=
+  match v? with
+  | some (.sarrayId bufId) | some (.objPtr bufId) => st.decRefBuf bufId count
+  | _ => st
+
+@[simp]
+theorem incRefBuf_decRefBuf_cancel (st : HeapState) (bufId count : Nat)
+    (h_empty : st.refCounts = []) :
+    (st.incRefBuf bufId count).decRefBuf bufId count = st := by
+  cases st; simp only at h_empty; subst h_empty
+  cases count with
+  | zero => rfl
+  | succ c =>
+    unfold incRefBuf decRefBuf getRefCount
+    simp [Nat.add_sub_cancel 1 (c + 1)]
 
 /-- Look up an `ArrayBuffer` by its buffer identifier. -/
 def findBuffer (st : HeapState) (bufId : Nat) : Option ArrayBuffer :=

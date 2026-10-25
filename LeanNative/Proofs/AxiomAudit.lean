@@ -55,6 +55,7 @@ def auditedTheoremNames : List Name :=
   , ``LeanNative.Semantics.StorageMapBuffer.lookupSlot_writeSlot_ne
   , ``LeanNative.Semantics.HeapState.storageLoad_after_storageStore_same
   , ``LeanNative.Semantics.HeapState.storageLoad_after_storageStore_ne
+  , ``LeanNative.Semantics.HeapState.incRefBuf_decRefBuf_cancel
   , ``LeanNative.Proofs.evalBinOp_u256_and_self, ``LeanNative.Proofs.evalBinOp_u256_or_self
   , ``LeanNative.Proofs.evalBinOp_u256_xor_zero, ``LeanNative.Proofs.evalBinOp_u256_or_zero
   , ``LeanNative.Proofs.storageStore_load_same_sound, ``LeanNative.Proofs.storageStore_load_ne_sound

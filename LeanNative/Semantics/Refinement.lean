@@ -133,14 +133,14 @@ theorem incRef_congr {objVar : VarId} {count : Nat} {k1 k2 : LNIRCode}
     CodeRefines (.incRef objVar count k1) (.incRef objVar count k2) := by
   intro fuel env st v st' hsrc
   rw [evalCode] at hsrc ⊢
-  exact hk fuel env st v st' hsrc
+  exact hk fuel env (st.evalIncRef (env objVar) count) v st' hsrc
 
 theorem decRef_congr {objVar : VarId} {count : Nat} {k1 k2 : LNIRCode}
     (hk : CodeRefines k1 k2) :
     CodeRefines (.decRef objVar count k1) (.decRef objVar count k2) := by
   intro fuel env st v st' hsrc
   rw [evalCode] at hsrc ⊢
-  exact hk fuel env st v st' hsrc
+  exact hk fuel env (st.evalDecRef (env objVar) count) v st' hsrc
 
 theorem ite_congr {condVar : VarId} {t1 t2 e1 e2 : LNIRCode}
     (ht : CodeRefines t1 t2) (he : CodeRefines e1 e2) :
@@ -179,7 +179,7 @@ theorem parFor_congr {outVar lenVar : VarId} {inputs : List VarId} {elemTy : LNI
                 (.parFor outVar lenVar inputs elemTy kernel k2) := by
   intro fuel env st v st' hsrc
   rw [evalCode] at hsrc ⊢
-  exact hk fuel (env.bind outVar (.sarrayId 0)) st v st' hsrc
+  exact hk fuel (env.bind outVar (.sarrayId 0)) (evalParFor env st lenVar inputs kernel) v st' hsrc
 
 end CodeRefines
 
