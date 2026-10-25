@@ -1101,7 +1101,8 @@ abbrev counterexample_triage_gate_sound := @LeanSys.Contracts.checkCounterexampl
 abbrev counterexampleTriageMetaSpec := LeanSys.Contracts.counterexampleTriageContractMetaSpec
 abbrev verifyCounterexampleTriageC := LeanSys.Spec.verifyCounterexampleTriage
 
-/-- Zero-runtime C-ABI 64-bit FastCheck binary operator evaluator (`0=add, 1=sub, 2=mul, 3=div, 4=mod, 5=bitAnd, 6=bitOr, 7=bitXor, 8=shl, 9=shr, 10=eq, 11=lt, 12=le`). -/
+/-- Zero-runtime C-ABI 64-bit FastCheck binary operator evaluator
+    (`0=add, 1=sub, 2=mul, 3=div, 4=mod, 5=bitAnd, 6=bitOr, 7=bitXor, 8=shl, 9=shr, 10=eq, 11=lt, 12=le`). -/
 @[inline, export leannative_eval_u64_binop]
 def evalU64BinopC (op : UInt8) (lhs rhs : UInt64) : UInt64 :=
   if op == 0 then lhs + rhs
@@ -1119,7 +1120,8 @@ def evalU64BinopC (op : UInt8) (lhs rhs : UInt64) : UInt64 :=
   else if op == 12 then if lhs <= rhs then 1 else 0
   else 0
 
-/-- Zero-runtime C-ABI 64-bit FastCheck domain-hazard detector (`div/mod` by `0`, `shl/shr >= 64`, `add` wrapping overflow, `sub` wrapping underflow, `mul` overflow). -/
+/-- Zero-runtime C-ABI 64-bit FastCheck domain-hazard detector
+    (`div/mod` by `0`, `shl/shr >= 64`, `add` wrapping overflow, `sub` wrapping underflow, `mul` overflow). -/
 @[inline, export leannative_has_domain_hazard_u64]
 def hasDomainHazardU64C (op : UInt8) (lhs rhs : UInt64) : UInt8 :=
   let hazard : Bool :=
@@ -1136,10 +1138,12 @@ def hasDomainHazardU64C (op : UInt8) (lhs rhs : UInt64) : UInt8 :=
     `2` (`ReferenceDiscrepancy` when `refDisagrees == 1` without hazard), or `3` (`CandidateBug`),
     verified by `LeanSys.Spec.verifyCounterexampleTriage`. -/
 @[inline, export leannative_fastcheck_rewrite_step]
-def fastcheckRewriteStepC (lhsVal rhsVal : UInt64) (opLhs opRhs : UInt8) (a b : UInt64) (refDisagrees : UInt8) : UInt8 :=
+def fastcheckRewriteStepC (lhsVal rhsVal : UInt64) (opLhs opRhs : UInt8)
+    (a b : UInt64) (refDisagrees : UInt8) : UInt8 :=
   if lhsVal == rhsVal then 0
   else
-    let hasHazard : UInt8 := if hasDomainHazardU64C opLhs a b == 1 || hasDomainHazardU64C opRhs a b == 1 then 1 else 0
+    let hasHazard : UInt8 :=
+      if hasDomainHazardU64C opLhs a b == 1 || hasDomainHazardU64C opRhs a b == 1 then 1 else 0
     let effRefDis : UInt8 := if hasHazard == 0 && refDisagrees == 1 then 1 else 0
     let code : UInt8 := if hasHazard == 1 then 1 else if effRefDis == 1 then 2 else 3
     if verifyCounterexampleTriageC 1 hasHazard effRefDis code == 1 then code else 0
@@ -1151,10 +1155,12 @@ def fastcheckRewriteStepC (lhsVal rhsVal : UInt64) (opLhs opRhs : UInt8) (a b : 
 @[inline, export leannative_certify_cex_witnesses]
 def certifyCexWitnessesC (x1 dmA0 dmB0 : UInt64) : UInt8 :=
   let x0 := evalU64BinopC 0 x1 42
-  let constrainedCexOk : Bool := (x0 == x1 + 42) && !(x0 < 1000000) && (fastcheckRewriteStepC x0 999999 0 0 x1 42 0 == 3)
+  let constrainedCexOk : Bool :=
+    (x0 == x1 + 42) && !(x0 < 1000000) && (fastcheckRewriteStepC x0 999999 0 0 x1 42 0 == 3)
   let lhsDm := ~~~(evalU64BinopC 5 dmA0 dmB0)
   let rhsDm := evalU64BinopC 5 (~~~dmA0) (~~~dmB0)
-  let deMorganCexOk : Bool := (lhsDm != rhsDm) && (fastcheckRewriteStepC lhsDm rhsDm 5 5 dmA0 dmB0 0 == 3)
+  let deMorganCexOk : Bool :=
+    (lhsDm != rhsDm) && (fastcheckRewriteStepC lhsDm rhsDm 5 5 dmA0 dmB0 0 == 3)
   if constrainedCexOk && deMorganCexOk then 1 else 0
 
 #guard verifyLazyReductionSliceC 64 256 1 1 == 1
