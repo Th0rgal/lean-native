@@ -742,9 +742,16 @@ def resolveLeanSysroot : IO System.FilePath := do
         return p
     return System.FilePath.mk "/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"
 
-/-- Run `Lean.Elab.runFrontend` on `filePath` and execute `act` inside `CoreM`. -/
+/-- Run `Lean.Elab.runFrontend` on `filePath` and execute `act` inside `CoreM`.
+    Automatically includes `.lake/build/lib/lean` (populated by `turbo-lean build`'s
+    transactional module-DAG publisher) and `build/olean` in the Lean search path. -/
 def withElaboratedFrontend {α : Type} (filePath : String) (modName : Lean.Name) (act : Lean.CoreM α) : IO α := do
-  Lean.initSearchPath (← resolveLeanSysroot)
+  let mut extraPaths : Lean.SearchPath := []
+  for cand in [".lake/build/lib/lean", "build/olean"] do
+    let p := System.FilePath.mk cand
+    if ← p.pathExists then
+      extraPaths := extraPaths ++ [p]
+  Lean.initSearchPath (← resolveLeanSysroot) extraPaths
   let input ← IO.FS.readFile filePath
   let opts : Lean.Options := {}
   let some env ← Lean.Elab.runFrontend input opts filePath modName

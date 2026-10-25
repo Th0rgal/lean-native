@@ -912,6 +912,24 @@ def runTurboLeanAgentStep (cfg : TurboLeanConfig) (filePath : String)
   runTurboSubcmd cfg (match declFilter? with | some d => baseArgs ++ #["--decl", d] | none => baseArgs)
     s!"\{\"status\":\"standalone_agent_step_ok\",\"file\":\"{filePath}\"}"
 
+/-- Run `turbo-lean build --seed-shards --project-dir <projectDir>` using the Rust-owned
+    native module DAG builder (`native_module_dag`), per-module CAS (`module_unit`),
+    transactional `.olean` publisher into `.lake/build/lib/lean`, and C-ABI specification gates. -/
+def runTurboLeanBuild (cfg : TurboLeanConfig) (projectDir : String := ".")
+    (seedShards : Bool := true) : IO (Bool × String) :=
+  let baseArgs := #["build", "--project-dir", projectDir]
+  runTurboSubcmd cfg (if seedShards then baseArgs.push "--seed-shards" else baseArgs)
+    s!"\{\"status\":\"standalone_build_ok\",\"project_dir\":\"{projectDir}\"}"
+
+/-- Run `turbo-lean ci-verify --mode <mode> --seed-shards --receipt <receiptOut> --project-dir <projectDir>`
+    to execute the full hygiene/axiom gate, native module DAG compilation, and cryptographic BLAKE3 receipt emission. -/
+def runTurboLeanCIVerify (cfg : TurboLeanConfig) (projectDir : String := ".")
+    (mode : String := "trusted") (seedShards : Bool := true)
+    (receiptOut : String := "/tmp/lean_native_ci_receipt.json") : IO (Bool × String) :=
+  let baseArgs := #["ci-verify", "--mode", mode, "--receipt", receiptOut, "--project-dir", projectDir]
+  runTurboSubcmd cfg (if seedShards then baseArgs.push "--seed-shards" else baseArgs)
+    s!"\{\"status\":\"standalone_ci_verify_ok\",\"mode\":\"{mode}\"}"
+
 /-! ## 6. Unified Content-Addressed Telemetry Spooler (`lean-native.telemetry.v1`) -/
 
 structure TelemetryConfig where
