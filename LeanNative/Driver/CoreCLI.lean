@@ -249,9 +249,36 @@ def extractLeanSourceCAbiAndGuards (raw : String) : List CAbiBindingSig × List 
 def moduleToCAbiSigs (m : LNIRModule) : List CAbiBindingSig :=
   m.decls.map fun d => {
     cSymbol := d.name, leanName := d.name,
-    params := d.params.map (fun p => (p.name, lnirTypeToCType p.ty, lnirTypeToRustType p.ty)),
+    params := d.params.map (fun p => (p.name.replace "'" "_prime", lnirTypeToCType p.ty, lnirTypeToRustType p.ty)),
     retCType := lnirTypeToCType d.retTy, retRustType := lnirTypeToRustType d.retTy
   }
+
+def readLeanSourceExpandingUmbrella (filePath : String) : IO String := do
+  let raw ← try IO.FS.readFile filePath catch _ => pure ""
+  if !filePath.endsWith ".lean" then return raw
+  let subDir := System.FilePath.mk ((filePath.dropEnd 5).toString)
+  if !(← subDir.pathExists) then return raw
+  let stem := subDir.fileName.getD ""
+  let mut outLines : Array String := #[]
+  for line in raw.splitOn "\n" do
+    let trimmed := line.trimAscii.toString
+    if trimmed.startsWith "import " then
+      let modPath := (trimmed.drop 7).trimAscii.toString
+      let parts := modPath.splitOn "."
+      match parts.reverse with
+      | leaf :: parent :: _ =>
+        let candPath := subDir / s!"{leaf}.lean"
+        if parent == stem && (← candPath.pathExists) then
+          let subRaw ← IO.FS.readFile candPath
+          for subLine in subRaw.splitOn "\n" do
+            if !subLine.trimAscii.toString.startsWith "import " then
+              outLines := outLines.push subLine
+        else
+          outLines := outLines.push line
+      | _ => outLines := outLines.push line
+    else
+      outLines := outLines.push line
+  return String.intercalate "\n" outLines.toList
 
 def emitCAbiHeaderFromSigs (sigs : List CAbiBindingSig) : String :=
   let declProtos := sigs.map fun s =>
@@ -962,7 +989,7 @@ def runEmitCAbiBindings (tag : String) (elaborateHook? : Option (String → IO L
   let jsonFlag := hasFlag args "--json"
   let (sigs, guards, srcLabel) ←
     if !leanPath.isEmpty && (← System.FilePath.pathExists leanPath) && leanPath.endsWith ".lean" then
-      let raw ← IO.FS.readFile leanPath
+      let raw ← readLeanSourceExpandingUmbrella leanPath
       let (s, g) := extractLeanSourceCAbiAndGuards raw
       if !s.isEmpty then pure (s, g, leanPath)
       else
@@ -1023,7 +1050,7 @@ def runCompileStaticLib (tag : String) (elaborateHook? : Option (String → IO L
   let (optMod, _) := runDefaultPipeline baseMod
   let (sigs, guards) ←
     if posPath.endsWith ".lean" then
-      let src ← try IO.FS.readFile posPath catch _ => pure ""
+      let src ← readLeanSourceExpandingUmbrella posPath
       let (srcSigs, srcGuards) := extractLeanSourceCAbiAndGuards src
       pure (if srcSigs.isEmpty then moduleToCAbiSigs optMod else srcSigs, srcGuards)
     else
