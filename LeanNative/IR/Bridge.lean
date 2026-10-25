@@ -822,8 +822,8 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
     | .arm64 => .arm64
     | _ => .x86_64
   let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
-  let isMaxwellBatch := (batchEnv.map (fun s => s.trimAscii.toString) |>.getD "") == "1"
-  if !isMaxwellBatch then
+  let isBatchOnly := (batchEnv.map (fun s => s.trimAscii.toString) |>.getD "") == "1"
+  if !isBatchOnly then
     let telCfg ← LeanNative.TurboLean.TelemetryConfig.probe cliArgs
     if telCfg.enabled then
       let _ ← LeanNative.Transform.emitModuleTelemetryEvents telCfg superoptTgt false rawMod

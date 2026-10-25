@@ -11,6 +11,7 @@
                256-bit 4-limb GPU carry homomorphisms, 4-target hardware routing, and RISC-V step budgets.
 -/
 import LeanSys.Gate
+import LeanSys.Spec
 import LeanNative.IR.Types
 import LeanNative.IR.AST
 import LeanNative.Semantics.Value
@@ -1093,41 +1094,12 @@ def verifyTurboSliceScannerSROAC (sliceInBounds tupleAliasEscapes undefSyms outL
     ⟨sliceInBounds != 0, tupleAliasEscapes != 0, undefSyms.toNat, outLen.toNat, outCap.toNat⟩
   if canLowerTurboSliceScannerSROA inp then 1 else 0
 
-/-- Wave 3 Counterexample Triage Gate (`1 = SpecTooStrong`, `2 = ReferenceDiscrepancy`, `3 = CandidateBug`). -/
-structure CounterexampleTriageInput where
-  (hasViolation hasMissingHypHint refDisagreesWithCandidate : Bool) (triageClass : Nat)
-  deriving Repr, DecidableEq, BEq
-def verifyCounterexampleTriage (inp : CounterexampleTriageInput) : Bool :=
-  inp.hasViolation &&
-  ((inp.hasMissingHypHint && decide (inp.triageClass = 1)) ||
-   (!inp.hasMissingHypHint && inp.refDisagreesWithCandidate && decide (inp.triageClass = 2)) ||
-   (!inp.hasMissingHypHint && !inp.refDisagreesWithCandidate && decide (inp.triageClass = 3)))
-theorem counterexample_triage_gate_sound (inp : CounterexampleTriageInput) :
-    verifyCounterexampleTriage inp = true ↔
-      (inp.hasViolation = true ∧
-        ((inp.hasMissingHypHint = true ∧ inp.triageClass = 1) ∨
-         (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = true ∧ inp.triageClass = 2) ∨
-         (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = false ∧ inp.triageClass = 3))) := by
-  simp [verifyCounterexampleTriage, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, and_assoc, or_assoc]
-def counterexampleTriageMetaSpec : MetaGateSpec CounterexampleTriageInput
-    (fun inp => inp.hasViolation = true ∧
-      ((inp.hasMissingHypHint = true ∧ inp.triageClass = 1) ∨
-       (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = true ∧ inp.triageClass = 2) ∨
-       (inp.hasMissingHypHint = false ∧ inp.refDisagreesWithCandidate = false ∧ inp.triageClass = 3))) :=
-  ⟨verifyCounterexampleTriage, fun inp => (counterexample_triage_gate_sound inp).mp,
-   fun inp => (counterexample_triage_gate_sound inp).mpr, ⟨true, true, false, 1⟩, ⟨true, true, false, 3⟩, rfl, rfl⟩
-theorem counterexample_triage_rejects_inconsistent (inp : CounterexampleTriageInput)
-    (h_bad : inp.hasViolation = false ∨ inp.triageClass = 0 ∨ 3 < inp.triageClass) :
-    verifyCounterexampleTriage inp = false :=
-  counterexampleTriageMetaSpec.rejects_unsafe inp (by
-    rcases h_bad with h | h | h
-    · simp [h]
-    · omega
-    · omega)
-
-@[inline, export leannative_verify_counterexample_triage]
-def verifyCounterexampleTriageC (hasViolation hasMissingHypHint refDisagrees : UInt8) (triageClass : UInt8) : UInt8 :=
-  if verifyCounterexampleTriage ⟨hasViolation == 1, hasMissingHypHint == 1, refDisagrees == 1, triageClass.toNat⟩ then 1 else 0
+/-- Canonical Layer-0 Counterexample Triage Gate re-exported from `LeanSys.Gate` & `LeanSys.Spec`. -/
+abbrev CounterexampleTriageInput := LeanSys.Contracts.CounterexampleTriageInput
+abbrev verifyCounterexampleTriage := LeanSys.Contracts.checkCounterexampleTriage
+abbrev counterexample_triage_gate_sound := @LeanSys.Contracts.checkCounterexampleTriage_sound
+abbrev counterexampleTriageMetaSpec := LeanSys.Contracts.counterexampleTriageContractMetaSpec
+abbrev verifyCounterexampleTriageC := LeanSys.Spec.verifyCounterexampleTriage
 
 #guard verifyLazyReductionSliceC 64 256 1 1 == 1
 #guard verifyLazyReductionSliceC 64 256 0 1 == 0

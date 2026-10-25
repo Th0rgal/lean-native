@@ -612,41 +612,115 @@ def parseExprPair (lhsStr rhsStr : String) : Expr × Expr × List String :=
   let (rhsAst, _, vars2) := parseBitOr rhsToks vars1
   (lhsAst, rhsAst, if vars2.isEmpty then ["x"] else vars2)
 
-@[inline] def evalU64 (e : Expr) (v0 v1 v2 v3 : UInt64) : UInt64 :=
+/-- Evaluate an `Expr` on four 64-bit registers `(v0, v1, v2, v3)`. -/
+@[inline]
+def evalU64 (e : Expr) (v0 v1 v2 v3 : UInt64) : UInt64 :=
   match e with
-  | .constVal c => c | .varSlot 0 => v0 | .varSlot 1 => v1 | .varSlot 2 => v2 | .varSlot _ => v3
+  | .constVal c => c
+  | .varSlot 0  => v0
+  | .varSlot 1  => v1
+  | .varSlot 2  => v2
+  | .varSlot _  => v3
   | .unary op a =>
     let va := evalU64 a v0 v1 v2 v3
-    match op with | "~" => ~~~va | "-" => 0 - va | "!" => (if va == 0 then 1 else 0) | _ => va
+    match op with
+    | "~" => ~~~va
+    | "-" => 0 - va
+    | "!" => if va == 0 then 1 else 0
+    | _   => va
   | .bin op l r =>
-    let vl := evalU64 l v0 v1 v2 v3; let vr := evalU64 r v0 v1 v2 v3
+    let vl := evalU64 l v0 v1 v2 v3
+    let vr := evalU64 r v0 v1 v2 v3
     let b2u (b : Bool) : UInt64 := if b then 1 else 0
     match op with
-    | "+" => vl + vr | "-" => vl - vr | "*" => vl * vr
-    | "/" => (if vr == 0 then 0 else vl / vr) | "%" => (if vr == 0 then 0 else vl % vr)
-    | "&" => vl &&& vr | "|" => vl ||| vr | "^" => vl ^^^ vr
-    | "<<" => (if vr >= 64 then 0 else vl <<< vr) | ">>" => (if vr >= 64 then 0 else vl >>> vr)
-    | "==" => b2u (vl == vr) | "!=" => b2u (vl != vr)
-    | "<" => b2u (decide (vl < vr)) | "<=" => b2u (decide (vl ≤ vr))
-    | ">" => b2u (decide (vr < vl)) | ">=" => b2u (decide (vr ≤ vl)) | _ => 0
+    | "+"  => vl + vr
+    | "-"  => vl - vr
+    | "*"  => vl * vr
+    | "/"  => if vr == 0 then 0 else vl / vr
+    | "%"  => if vr == 0 then 0 else vl % vr
+    | "&"  => vl &&& vr
+    | "|"  => vl ||| vr
+    | "^"  => vl ^^^ vr
+    | "<<" => if vr >= 64 then 0 else vl <<< vr
+    | ">>" => if vr >= 64 then 0 else vl >>> vr
+    | "==" => b2u (vl == vr)
+    | "!=" => b2u (vl != vr)
+    | "<"  => b2u (decide (vl < vr))
+    | "<=" => b2u (decide (vl ≤ vr))
+    | ">"  => b2u (decide (vr < vl))
+    | ">=" => b2u (decide (vr ≤ vl))
+    | _    => 0
 
+/-- Evaluate an `Expr` on four 256-bit EVM words `(v0, v1, v2, v3)`. -/
 def evalU256 (e : Expr) (v0 v1 v2 v3 : UInt256) : UInt256 :=
   match e with
-  | .constVal c => UInt256.ofUInt64 c | .varSlot 0 => v0 | .varSlot 1 => v1 | .varSlot 2 => v2 | .varSlot _ => v3
+  | .constVal c => UInt256.ofUInt64 c
+  | .varSlot 0  => v0
+  | .varSlot 1  => v1
+  | .varSlot 2  => v2
+  | .varSlot _  => v3
   | .unary op a =>
     let va := evalU256 a v0 v1 v2 v3
-    match op with | "~" => UInt256.bitNot va | "-" => UInt256.sub UInt256.zero va | "!" => (if va == UInt256.zero then UInt256.one else UInt256.zero) | _ => va
+    match op with
+    | "~" => UInt256.bitNot va
+    | "-" => UInt256.sub UInt256.zero va
+    | "!" => if va == UInt256.zero then UInt256.one else UInt256.zero
+    | _   => va
   | .bin op l r =>
-    let vl := evalU256 l v0 v1 v2 v3; let vr := evalU256 r v0 v1 v2 v3
+    let vl := evalU256 l v0 v1 v2 v3
+    let vr := evalU256 r v0 v1 v2 v3
     let b2u (b : Bool) : UInt256 := if b then UInt256.one else UInt256.zero
     match op with
-    | "+" => UInt256.add vl vr | "-" => UInt256.sub vl vr | "*" => UInt256.mul vl vr
-    | "/" => (UInt256.div vl vr).getD UInt256.zero | "%" => (UInt256.mod vl vr).getD UInt256.zero
-    | "&" => UInt256.bitAnd vl vr | "|" => UInt256.bitOr vl vr | "^" => UInt256.bitXor vl vr
-    | "<<" => UInt256.shl vl vr.toNat | ">>" => UInt256.shr vl vr.toNat
-    | "==" => b2u (vl == vr) | "!=" => b2u (vl != vr)
-    | "<" => b2u (UInt256.lt vl vr) | "<=" => b2u (UInt256.le vl vr)
-    | ">" => b2u (UInt256.lt vr vl) | ">=" => b2u (UInt256.le vr vl) | _ => UInt256.zero
+    | "+"  => UInt256.add vl vr
+    | "-"  => UInt256.sub vl vr
+    | "*"  => UInt256.mul vl vr
+    | "/"  => (UInt256.div vl vr).getD UInt256.zero
+    | "%"  => (UInt256.mod vl vr).getD UInt256.zero
+    | "&"  => UInt256.bitAnd vl vr
+    | "|"  => UInt256.bitOr vl vr
+    | "^"  => UInt256.bitXor vl vr
+    | "<<" => UInt256.shl vl vr.toNat
+    | ">>" => UInt256.shr vl vr.toNat
+    | "==" => b2u (vl == vr)
+    | "!=" => b2u (vl != vr)
+    | "<"  => b2u (UInt256.lt vl vr)
+    | "<=" => b2u (UInt256.le vl vr)
+    | ">"  => b2u (UInt256.lt vr vl)
+    | ">=" => b2u (UInt256.le vr vl)
+    | _    => UInt256.zero
+
+/-- Check whether evaluating `e` on `(v0, v1, v2, v3)` hits a domain/boundary hazard
+    (division/modulo by zero, shift >= 64, or unsigned subtraction underflow). -/
+def hasDomainHazardU64 (e : Expr) (v0 v1 v2 v3 : UInt64) : Bool :=
+  match e with
+  | .constVal _ | .varSlot _ => false
+  | .unary _ a => hasDomainHazardU64 a v0 v1 v2 v3
+  | .bin op l r =>
+    let vl := evalU64 l v0 v1 v2 v3
+    let vr := evalU64 r v0 v1 v2 v3
+    let here :=
+      match op with
+      | "/" | "%"   => vr == 0
+      | "<<" | ">>" => vr >= 64
+      | "-"         => vl < vr
+      | _           => false
+    here || hasDomainHazardU64 l v0 v1 v2 v3 || hasDomainHazardU64 r v0 v1 v2 v3
+
+/-- Check whether evaluating `e` on 256-bit words `(w0, w1, w2, w3)` hits a domain/boundary hazard. -/
+def hasDomainHazardU256 (e : Expr) (w0 w1 w2 w3 : UInt256) : Bool :=
+  match e with
+  | .constVal _ | .varSlot _ => false
+  | .unary _ a => hasDomainHazardU256 a w0 w1 w2 w3
+  | .bin op l r =>
+    let vl := evalU256 l w0 w1 w2 w3
+    let vr := evalU256 r w0 w1 w2 w3
+    let here :=
+      match op with
+      | "/" | "%"   => vr == UInt256.zero
+      | "<<" | ">>" => vr.toNat >= 256
+      | "-"         => UInt256.lt vl vr
+      | _           => false
+    here || hasDomainHazardU256 l w0 w1 w2 w3 || hasDomainHazardU256 r w0 w1 w2 w3
 
 def boundaryU64 : Array UInt64 := #[
   0, 1, 2, 3, 4, 7, 8, 15, 16, 31, 32, 63, 64,
@@ -677,19 +751,15 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
   let vName0 := varNames[0]?.getD "x"
   let vName1 := varNames[1]?.getD "y"
 
-  let hasDivOrShift := containsSubstr lhsExpr "/" || containsSubstr lhsExpr "%" ||
-                       containsSubstr lhsExpr "<<" || containsSubstr lhsExpr ">>"
-  let hasRef := containsSubstr lhsExpr "ref" || containsSubstr rhsExpr "ref"
-  let (tCode, tName) : UInt8 × String :=
-    if hasDivOrShift then (1, "SpecTooStrong")
-    else if hasRef then (2, "ReferenceDiscrepancy")
-    else (3, "CandidateBug")
-  let cabiOk := LeanNative.Spec.verifyCounterexampleTriageC 1
-    (if hasDivOrShift then 1 else 0) (if !hasDivOrShift && hasRef then 1 else 0) tCode == 1
-
-  let mkCexResult (tested : Nat) (wit : String) : IO FastCheckResult := do
+  let mkCexResult (tested : Nat) (wit : String) (hasMissingHyp refDisagrees : Bool) : IO FastCheckResult := do
     let dt := (← IO.monoMsNow) - t0
-    let triageJson := s!"\{\"classification\":\"{tName}\",\"classification_code\":{tCode},\"cabi_verified\":{cabiOk}}"
+    let (tCode, tName) : UInt8 × String :=
+      if hasMissingHyp then (1, "SpecTooStrong")
+      else if refDisagrees then (2, "ReferenceDiscrepancy")
+      else (3, "CandidateBug")
+    let consistent := LeanNative.Spec.verifyCounterexampleTriageC 1
+      (if hasMissingHyp then 1 else 0) (if !hasMissingHyp && refDisagrees then 1 else 0) tCode == 1
+    let triageJson := s!"\{\"classification\":\"{tName}\",\"classification_code\":{tCode},\"classification_consistent\":{consistent}}"
     let raw := s!"\{\"ok\":false,\"status\":\"counterexample_found\",\"states_tested\":{tested},\"witness\":{wit},\"counterexample_triage\":{triageJson},\"elapsed_ms\":{dt}}"
     return {
       ok := false, status := "counterexample_found", lhsExpr, rhsExpr
@@ -710,7 +780,11 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
       let rv := FastExpr.evalU64 rhsAst v0 v1 v2 v3
       tested := tested + 1
       if lv != rv then
-        return (← mkCexResult tested s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}")
+        let hasHazard := FastExpr.hasDomainHazardU64 lhsAst v0 v1 v2 v3 || FastExpr.hasDomainHazardU64 rhsAst v0 v1 v2 v3
+        let w0 := UInt256.ofUInt64 v0; let w1 := UInt256.ofUInt64 v1
+        let w2 := UInt256.ofUInt64 v2; let w3 := UInt256.ofUInt64 v3
+        let refEq := FastExpr.evalU256 lhsAst w0 w1 w2 w3 == FastExpr.evalU256 rhsAst w0 w1 w2 w3
+        return (← mkCexResult tested s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}" hasHazard refEq)
 
   -- 2. Check all 36 pairs of 256-bit EVM boundary values (`UInt256`)
   for i in [:FastExpr.boundaryU256.size] do
@@ -723,7 +797,8 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
       let rv := FastExpr.evalU256 rhsAst w0 w1 w2 w3
       tested := tested + 1
       if lv != rv then
-        return (← mkCexResult tested s!"\{\"{vName0}\":\"{w0.toDecimalString}\",\"{vName1}\":\"{w1.toDecimalString}\",\"lhs_val\":\"{lv.toDecimalString}\",\"rhs_val\":\"{rv.toDecimalString}\"}")
+        let hasHazard := FastExpr.hasDomainHazardU256 lhsAst w0 w1 w2 w3 || FastExpr.hasDomainHazardU256 rhsAst w0 w1 w2 w3
+        return (← mkCexResult tested s!"\{\"{vName0}\":\"{w0.toDecimalString}\",\"{vName1}\":\"{w1.toDecimalString}\",\"lhs_val\":\"{lv.toDecimalString}\",\"rhs_val\":\"{rv.toDecimalString}\"}" hasHazard true)
 
   -- 3. Native SplitMix64 random state sweep
   let randomBudget := if lhsAst == rhsAst then 128 else Nat.min numStates 708
@@ -738,7 +813,11 @@ def fastCheckRewrite (cfg : TurboLeanConfig) (lhsInput : String) (rhsInput : Str
     let rv := FastExpr.evalU64 rhsAst v0 v1 v2 v3
     tested := tested + 1
     if lv != rv then
-      return (← mkCexResult tested s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}")
+      let hasHazard := FastExpr.hasDomainHazardU64 lhsAst v0 v1 v2 v3 || FastExpr.hasDomainHazardU64 rhsAst v0 v1 v2 v3
+      let w0 := UInt256.ofUInt64 v0; let w1 := UInt256.ofUInt64 v1
+      let w2 := UInt256.ofUInt64 v2; let w3 := UInt256.ofUInt64 v3
+      let refEq := FastExpr.evalU256 lhsAst w0 w1 w2 w3 == FastExpr.evalU256 rhsAst w0 w1 w2 w3
+      return (← mkCexResult tested s!"\{\"{vName0}\":{v0},\"{vName1}\":{v1},\"lhs_val\":{lv},\"rhs_val\":{rv}}" hasHazard refEq)
 
   let totalStates := Nat.max numStates tested
   let dt := (← IO.monoMsNow) - t0
@@ -805,7 +884,9 @@ def runAdapterSelfTest (receiptPath : System.FilePath := "/tmp/lean_native_test_
   let validCheck ← fastCheckRewrite cfg "x * 2" "x << 1" 100000
   if !validCheck.ok || validCheck.counterexampleFound then return false
   let buggyCheck ← fastCheckRewrite cfg "x * 2" "x + 1" 100000
-  if buggyCheck.ok || !buggyCheck.counterexampleFound || buggyCheck.witness.isNone then return false
+  if buggyCheck.ok || !buggyCheck.counterexampleFound || buggyCheck.witness.isNone || buggyCheck.triageClass != "CandidateBug" then return false
+  let specCheck ← fastCheckRewrite cfg "x / y" "1" 100000
+  if specCheck.ok || !specCheck.counterexampleFound || specCheck.triageClass != "SpecTooStrong" then return false
   let receipt := VerificationReceipt.create
     (mode := cfg.mode.toString) (interfaceHash := "4444444444444444") (actionKey := shard.shardKey)
     (filesAudited := 1) (theoremShards := 1) (forbiddenConstructsFound := 0)
