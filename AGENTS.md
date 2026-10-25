@@ -8,7 +8,7 @@
   Lowers Lean/LNIR into verified zero-boxing C-ABI SIMD (`--c-abi`), LLVM IR, NVIDIA CUDA PTX, Apple Metal MSL, and Cloud TPU XLA/StableHLO kernels (including 512-bit `mulDivDown`/`mulDivUp` and 256-bit bit-scan primitives). Certifies counterexamples (`0` false positives) and specification non-vacuity via executable operational semantics (`evalCode`) and Alive2-style symbolic translation validation (`CodeRefines`).
 - **`turbo-lean` (Incremental Verification, Zygote Elaboration & Federated Orchestration)**:
   Partitions Lean modules into dependency cones and `have` sub-proof cuts, invokes `lean-native` as its Stage-1 counterexample and C-ABI fast-check engine, races tactic accelerators inside warm `ZygoteWorker` snapshots, and enforces an in-kernel soundness gate (`0 sorryAx`, `0 native_decide`, `0 trustCompiler`).
-- **Shared Canonical 10-Term Glossary**: Follows the 10-term Certified Research glossary defined in `Th0rgal/maxwell` (`AGENTS.md` §2: *Certified Research*, *Raw Inference*, *`[Conjecture -> Specification -> Certification]`*, *Recursive Decomposition (`effort_p50 <= 6000`)*, *Zero-Trust Oracle*, *The Maxwell Gate*, *`MetaGateSpec` & `SpeculativeGate`*, *Verified Knowledge*, *Burned Paths*, *Self-Refining Loop*).
+- **Two-Layer Verification & Lowering Discipline**: Separates Layer I universal meta-specifications (`MetaGateSpec`, `SpeculativeGate`, `VerifiedTransformContract`, `CodeRefines`) from Layer II concrete pass corollaries and hardware kernel contracts.
 
 ```
 Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lean-native` SIMD/GPU/TPU)
@@ -54,6 +54,7 @@ Lean / LNIR Source ──► Stage 1: Certified Fast-Check & Vacuity Audit (`lea
 - **Formal Specifications**: [`LeanNative/Spec.lean`](LeanNative/Spec.lean) & [`TurboLean/Spec.lean`](../turbo-lean/lean/TurboLean/Spec.lean)
 - **Operational Semantics & Proofs**: [`LeanNative/Semantics/`](LeanNative/Semantics/), [`LeanNative/Proofs/AxiomAudit.lean`](LeanNative/Proofs/AxiomAudit.lean)
 - **Multi-Target Backends**: [`LeanNative/Backend/FastCheck.lean`](LeanNative/Backend/FastCheck.lean), [`LeanNative/Backend/Hybrid.lean`](LeanNative/Backend/Hybrid.lean), [`LeanNative/Backend/MLIRGPU.lean`](LeanNative/Backend/MLIRGPU.lean)
+- **Kernel & SIMD Optimization Handbook**: [`docs/OPTIMIZATION_HANDBOOK.md`](docs/OPTIMIZATION_HANDBOOK.md)
 - **CI & Federated Worker Entrypoints**: [`scripts/ci_verify.sh`](scripts/ci_verify.sh), [`scripts/accelerator_worker.py`](scripts/accelerator_worker.py) (and compatibility wrapper [`scripts/colab_gpu_worker.py`](scripts/colab_gpu_worker.py))
 
 ---
