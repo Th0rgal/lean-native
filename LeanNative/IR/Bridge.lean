@@ -742,6 +742,36 @@ def resolveLeanSysroot : IO System.FilePath := do
         return p
     return System.FilePath.mk "/var/lib/sandboxed-node/caches/elan/toolchains/leanprover--lean4---v4.35.0"
 
+/-- When `filePath` (e.g., `SnarkFast/Kernels.lean`) is an umbrella module that re-exports
+    domain submodules in `<filePath_without_.lean>/<Sub>.lean` (`Field`, `Ntt`, `Hashes`, `Pcs`),
+    inline those local submodule sources (stripping their `import ` headers) so `Lean.Elab.runFrontend`
+    elaborates all `@[export]` kernels in a single local LCNF unit. -/
+private def expandUmbrellaSubmodules (filePath : String) (raw : String) : IO String := do
+  if !filePath.endsWith ".lean" then return raw
+  let subDir := System.FilePath.mk ((filePath.dropEnd 5).toString)
+  if !(← subDir.pathExists) then return raw
+  let stem := subDir.fileName.getD ""
+  let mut outLines : Array String := #[]
+  for line in raw.splitOn "\n" do
+    let trimmed := line.trimAscii.toString
+    if trimmed.startsWith "import " then
+      let modPath := (trimmed.drop 7).trimAscii.toString
+      let parts := modPath.splitOn "."
+      match parts.reverse with
+      | leaf :: parent :: _ =>
+        let candPath := subDir / s!"{leaf}.lean"
+        if parent == stem && (← candPath.pathExists) then
+          let subRaw ← IO.FS.readFile candPath
+          for subLine in subRaw.splitOn "\n" do
+            if !subLine.trimAscii.toString.startsWith "import " then
+              outLines := outLines.push subLine
+        else
+          outLines := outLines.push line
+      | _ => outLines := outLines.push line
+    else
+      outLines := outLines.push line
+  return String.intercalate "\n" outLines.toList
+
 /-- Run `Lean.Elab.runFrontend` on `filePath` and execute `act` inside `CoreM`.
     Automatically includes `.lake/build/lib/lean` (populated by `turbo-lean build`'s
     transactional module-DAG publisher) and `build/olean` in the Lean search path. -/
@@ -752,7 +782,8 @@ def withElaboratedFrontend {α : Type} (filePath : String) (modName : Lean.Name)
     if ← p.pathExists then
       extraPaths := extraPaths ++ [p]
   Lean.initSearchPath (← resolveLeanSysroot) extraPaths
-  let input ← IO.FS.readFile filePath
+  let rawInput ← IO.FS.readFile filePath
+  let input ← expandUmbrellaSubmodules filePath rawInput
   let opts : Lean.Options := {}
   let some env ← Lean.Elab.runFrontend input opts filePath modName
     | throw <| IO.userError s!"Elaboration failed for {filePath}"
