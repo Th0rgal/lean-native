@@ -14,7 +14,7 @@ import LeanNative.IR.Codec
 import LeanNative.Transform.LoopVectorizeOpt
 import LeanNative.Transform.Plugins
 import LeanNative.Backend.LLVM
-import LeanNative.TurboLean.Adapter
+import LeanNative.Backend.FastCheck
 
 namespace LeanNative.IR
 
@@ -824,7 +824,7 @@ def buildNativeExecutable (filePath : String) (outBin : String) (optLevel : Stri
   let batchEnv ← IO.getEnv "SANDBOXED_TELEMETRY_BATCH_ONLY"
   let isBatchOnly := (batchEnv.map (fun s => s.trimAscii.toString) |>.getD "") == "1"
   if !isBatchOnly then
-    let telCfg ← LeanNative.TurboLean.TelemetryConfig.probe cliArgs
+    let telCfg ← LeanNative.Backend.FastCheck.TelemetryConfig.probe cliArgs
     if telCfg.enabled then
       let _ ← LeanNative.Transform.emitModuleTelemetryEvents telCfg superoptTgt false rawMod
   let lnirLlPath := s!"{outBin}.lnir.ll"

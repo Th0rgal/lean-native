@@ -36,7 +36,6 @@ import LeanNative.Transform.HoistExclusivity
 import LeanNative.Transform.LoopVectorizeOpt
 import LeanNative.Transform.Superopt
 import LeanNative.Backend.FastCheck
-import LeanNative.TurboLean.Adapter
 
 namespace LeanNative.Transform
 
@@ -45,7 +44,6 @@ open LeanNative.Spec
 open LeanNative.Semantics
 open LeanNative.Proofs
 open LeanNative.Backend
-open LeanNative.TurboLean
 
 /-! ## 1. Hardware Cycle Cost & Plugin Certificate Types -/
 

@@ -23,7 +23,6 @@ import LeanNative.Backend.MLIRGPU
 import LeanNative.Backend.Metal
 import LeanNative.Backend.Hybrid
 import LeanNative.Backend.FastCheck
-import LeanNative.TurboLean.Adapter
 import LeanNative.Driver.CoreCLI
 
 namespace LeanNative.Core

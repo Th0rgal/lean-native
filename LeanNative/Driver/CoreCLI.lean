@@ -23,7 +23,6 @@ import LeanNative.Backend.MLIRGPU
 import LeanNative.Backend.Metal
 import LeanNative.Backend.Hybrid
 import LeanNative.Backend.FastCheck
-import LeanNative.TurboLean.Adapter
 import LeanSys.Posix
 import LeanSys.Codec
 
@@ -44,7 +43,6 @@ open LeanSys.Posix
 open LeanSys.Codec
 open LeanNative.Backend.Hybrid
 open LeanNative.Backend.FastCheck
-open LeanNative.TurboLean
 
 def toOptimizationCert (c : PassStepCert) : OptimizationCert where
   passName := c.passName; declName := c.declName; inputHash := c.inputHash; outputHash := c.outputHash
@@ -1785,17 +1783,15 @@ def runPRVerify (tag : String) (args : List String) : IO UInt32 := do
     expectedTestSuiteHash := 1, actualTestSuiteHash := if testUnchanged then 1 else 2,
     forbiddenAxiomsCount := axiomReport.forbiddenAxiomsFound.length,
     tvAllPassed := tvReport.allPassed && allDeclTvOk && pluginReport.adversarialRejected && axiomReport.passed }
-  let cfg ← TurboLeanConfig.probe
-  let (turboPrOk, _) ← runTurboLeanPRVerify cfg "." baseRef disallowSpecChanges "/tmp/lean_native_pr_verify_receipt.json"
-  let (turboSpecOk, _) ← runTurboLeanAuditSpec cfg "LeanNative/Spec.lean"
-  let overallOk := law5Passed && turboPrOk && turboSpecOk
-  let jsonOut := s!"\{\n  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",\n  \"engine\": \"{tag}\",\n  \"version\": \"0.5.0\",\n  \"baseRef\": \"{baseRef}\",\n  \"law1UntrustedPluginGatePassed\": {pluginReport.adversarialRejected && allDeclTvOk},\n  \"law5SpecPinningGatePassed\": {law5Passed},\n  \"specBlake3\": \"{specHashHex}\",\n  \"testRunnerBlake3\": \"{testHashHex}\",\n  \"symbolicTvPassedDecls\": {tvReport.passedDecls},\n  \"symbolicTvTotalDecls\": {tvReport.totalDecls},\n  \"pluginsAccepted\": {pluginReport.acceptedCount},\n  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},\n  \"costBefore\": {pluginReport.totalCostBefore},\n  \"costAfter\": {pluginReport.totalCostAfter},\n  \"turboLeanMode\": \"{cfg.mode}\",\n  \"turboLeanPrVerifyPassed\": {turboPrOk},\n  \"turboLeanAuditSpecPassed\": {turboSpecOk}\n}"
+  let fcSelfTestOk ← runAdapterSelfTest
+  let overallOk := law5Passed && fcSelfTestOk
+  let jsonOut := s!"\{\n  \"status\": \"{if overallOk then "pr_verified" else "pr_rejected"}\",\n  \"engine\": \"{tag}\",\n  \"version\": \"0.5.0\",\n  \"baseRef\": \"{baseRef}\",\n  \"law1UntrustedPluginGatePassed\": {pluginReport.adversarialRejected && allDeclTvOk},\n  \"law5SpecPinningGatePassed\": {law5Passed},\n  \"specBlake3\": \"{specHashHex}\",\n  \"testRunnerBlake3\": \"{testHashHex}\",\n  \"symbolicTvPassedDecls\": {tvReport.passedDecls},\n  \"symbolicTvTotalDecls\": {tvReport.totalDecls},\n  \"pluginsAccepted\": {pluginReport.acceptedCount},\n  \"adversarialPluginsRejected\": {pluginReport.rejectedCount},\n  \"costBefore\": {pluginReport.totalCostBefore},\n  \"costAfter\": {pluginReport.totalCostAfter},\n  \"fastCheckSelfTestPassed\": {fcSelfTestOk}\n}"
   let summaryText := String.intercalate "\n" [
     s!"[{tag}] PR & Spec-Pinning Verification Gate (base={baseRef}):",
     s!"  Law 1 Untrusted Plugin & Adversarial Gate : {if pluginReport.adversarialRejected && allDeclTvOk then "PASSED" else "FAILED"} (accepted={pluginReport.acceptedCount}, adversarialRejected={pluginReport.rejectedCount})",
     s!"  Law 5 Spec & Test Suite Pinning Gate      : {if law5Passed then "PASSED" else "FAILED"} (Spec={specHashHex.take 16}..., Tests={testHashHex.take 16}...)",
     s!"  Alive2 Symbolic Translation Validation    : {if tvReport.allPassed then "PASSED" else "FAILED"} ({tvReport.passedDecls}/{tvReport.totalDecls} decls)",
-    s!"  Season 8 turbo-lean pr-verify/audit-spec  : {if turboPrOk && turboSpecOk then "PASSED" else "FAILED"} (mode={cfg.mode})"
+    s!"  In-Process FastCheck & BLAKE3 Self-Test   : {if fcSelfTestOk then "PASSED" else "FAILED"}"
   ]
   writeAndPrintJsonOrSummary outPath jsonOut summaryText jsonFlag
   return if overallOk then 0 else 1

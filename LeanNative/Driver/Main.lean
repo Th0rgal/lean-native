@@ -11,7 +11,7 @@ open LeanNative.Backend.GPUIR
 open LeanNative.Backend.MLIRGPU
 open LeanNative.Backend.Metal
 open LeanNative.Backend.Hybrid
-open LeanNative.TurboLean
+open LeanNative.Backend.FastCheck
 open LeanNative.Driver.CoreCLI
 
 def frontendHook : Option (String → IO LNIRModule) :=
@@ -40,11 +40,8 @@ def runAuditAxioms (args : List String) : IO UInt32 := do
   return if report.passed then 0 else 1
 
 def runTurboStatus : IO UInt32 := do
-  let cfg ← TurboLeanConfig.probe
   let ok ← runAdapterSelfTest "/tmp/lean_native_driver_receipt.json"
-  IO.println s!"[lean-native] Turbo Lean Operating Mode : {cfg.mode}"
-  IO.println s!"[lean-native] Daemon Metadata Path      : {cfg.daemonJsonPath}"
-  IO.println s!"[lean-native] Adapter Self-Test & BLAKE3: {if ok then "PASSED" else "FAILED"}"
+  IO.println s!"[lean-native] In-Process FastCheck & BLAKE3: {if ok then "PASSED" else "FAILED"}"
   return if ok then 0 else 1
 
 def runFullSelfTest : IO UInt32 := do
